@@ -1,0 +1,110 @@
+cmake_minimum_required(VERSION 3.27)
+set(CMAKE_CXX_STANDARD 20) 
+project(mfem_sweep)
+
+# --- default value for build type --- 
+if (NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
+endif()
+message(STATUS "CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
+
+# find MFEM 
+find_package(mfem REQUIRED NAMES MFEM)
+message(STATUS "found MFEM v${MFEM_VERSION}")
+if (NOT ${MFEM_USE_MPI})
+	message(FATAL_ERROR "mfem must be built with MPI")
+endif()
+if (NOT ${MFEM_USE_HYPRE})
+	message(FATAL_ERROR "hypre is required")
+endif()
+
+# find igraph 
+find_package(igraph REQUIRED)
+message(STATUS "found igraph v${IGRAPH_VERSION}")
+
+# find kokkos' mdspan 
+find_package(mdspan REQUIRED)
+message(STATUS "found mdspan v${mdspan_VERSION}")
+
+# find yaml 
+find_package(yaml-cpp REQUIRED)
+message(STATUS "found yaml-cpp v${yaml-cpp_VERSION}")
+
+# find lua 
+find_package(Lua REQUIRED QUIET)
+message(STATUS "found lua v${LUA_VERSION_STRING}")
+
+# find sol2 
+find_package(sol2 REQUIRED)
+message(STATUS "found sol2 v${sol2_VERSION}")
+
+# set location of quadrature files 
+set(LS_QUADRATURE_DIR "${CMAKE_SOURCE_DIR}/data/lsquad")
+message(STATUS "angular quadrature dir: ${LS_QUADRATURE_DIR}")
+
+# define transport vector layout 
+# LEFT: stride fastest in group, then angle, then space 
+# RIGHT: stride fastest in space, then angle, then group 
+option(TRANSPORT_VECTOR_LAYOUT "mdspan layout")
+if (NOT TRANSPORT_VECTOR_LAYOUT) 
+	set(TRANSPORT_VECTOR_LAYOUT RIGHT)
+endif()
+string(TOUPPER ${TRANSPORT_VECTOR_LAYOUT} TRANSPORT_VECTOR_LAYOUT_UPPER)
+if(${TRANSPORT_VECTOR_LAYOUT_UPPER} STREQUAL "LEFT") 
+message(STATUS "transport vector layout: LEFT (stride in group, then angle, then space)")
+set(TRANSPORT_VECTOR_LAYOUT_LEFT 1)
+elseif(${TRANSPORT_VECTOR_LAYOUT_UPPER} STREQUAL "RIGHT") 
+message(STATUS "transport vector layout: RIGHT (stride in space, then angle, then group)")
+set(TRANSPORT_VECTOR_LAYOUT_RIGHT 1)
+else()
+message(FATAL_ERROR "TRANSPORT_VECTOR_LAYOUT = ${TRANSPORT_VECTOR_LAYOUT_UPPER} not supported")
+endif()
+
+# create config file 
+set(CONFIG_LOCATION "${CMAKE_BINARY_DIR}/config")
+configure_file(data/config.hpp.in ${CONFIG_LOCATION}/config.hpp)
+message(STATUS "configure file generated in ${CONFIG_LOCATION}")
+
+# add files from src directory 
+set(SOURCES "")
+set(HEADERS "") 
+add_subdirectory(src) 
+
+# create a library 
+# includes all third party libraries 
+add_library(sweep_lib ${SOURCES} ${HEADERS})
+target_link_libraries(sweep_lib PUBLIC mfem igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2)
+target_include_directories(sweep_lib PUBLIC ${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
+
+# add executables in exe directory 
+LIST(APPEND EXE
+	exe/sweep.cpp
+	exe/parsweep.cpp
+	exe/scratch.cpp
+)
+
+foreach(exe ${EXE})
+	get_filename_component(name ${exe} NAME) 
+	string (REPLACE ".cpp" "" exename ${name})
+	add_executable(${exename} ${exe})
+	target_link_libraries(${exename} PRIVATE sweep_lib) 
+endforeach()
+
+# --- tests --- 
+# put tests under option so GoogleTest is optional requirement
+option(ENABLE_TESTS "turn testing on, requires GoogleTest" OFF) 
+if (${ENABLE_TESTS})
+	enable_testing()
+endif()
+if (${CMAKE_TESTING_ENABLED})
+	message(STATUS "testing enabled")
+	# find GoogleTest 
+	# specify location setting GTEST_ROOT to cmake install dir of gtest 
+	find_package(GTest REQUIRED)
+	# enable GTest specific CMake commands 
+	include(GoogleTest)
+	# add tests listed in test directory
+	add_subdirectory(test)
+else()
+	message(STATUS "testing disabled")
+endif()
