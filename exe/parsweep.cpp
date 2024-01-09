@@ -481,7 +481,7 @@ int main(int argc, char *argv[]) {
 	Dform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 	// Dform.AddInteriorFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
 	// Dform.AddBdrFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
-	Dform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, 1, dsa_kappa, alpha)); 
+	Dform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha)); 
 	// Dform.AddBdrFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha)); 
 	Dform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
 	Dform.Assemble(); 
@@ -648,7 +648,7 @@ int main(int argc, char *argv[]) {
 				ms_int.AssembleElementMatrix(el, trans, Ms); 
 				mfem::Vector phi_local(dofs.Size()); 
 				phi.GetSubVector(dofs, phi_local); 
-				Ms.AddMult(phi_local, rhs, 1./4/M_PI); 
+				Ms.AddMult(phi_local, rhs, 1./quad.SumWeights()); 
 
 				// -- do face terms -- 
 				// get faces associated with mesh element e 

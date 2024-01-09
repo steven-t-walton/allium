@@ -319,14 +319,14 @@ int main(int argc, char *argv[]) {
 	mfem::ParBilinearForm Dform(&fes); 
 	mfem::RatioCoefficient diffco(1./3, total); 
 	mfem::Vector normal(dim); 
-	normal = 1.0; 
+	normal = 0.0; normal(0) = 1.0; 
 	double alpha = ComputeAlpha(quad, normal)/2;
 	mfem::ConstantCoefficient alpha_c(alpha); 
 	Dform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
 	Dform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 	// Dform.AddInteriorFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
 	// Dform.AddBdrFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
-	Dform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, 1, dsa_kappa, alpha)); 
+	Dform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha)); 
 	// Dform.AddBdrFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha)); 
 	Dform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
 	Dform.Assemble(); 
@@ -335,7 +335,7 @@ int main(int argc, char *argv[]) {
 
 	// build DSA solver 
 	mfem::CGSolver solver(MPI_COMM_WORLD); 
-	solver.SetRelTol(inner_tol); 
+	solver.SetAbsTol(inner_tol); 
 	solver.SetMaxIter(max_inner_it);
 	solver.SetPrintLevel(0);
 	mfem::HypreBoomerAMG amg(*dsa_mat); 
@@ -356,6 +356,7 @@ int main(int argc, char *argv[]) {
 
 	// allocate transport vector + views 
 	mfem::Vector psi(psi_size);
+	// psi = 1./4/M_PI;
 	psi = 0.0; 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
 	mfem::ParGridFunction phi(&fes), phi_old(&fes), delta_phi(&fes); 
