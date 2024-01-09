@@ -81,6 +81,7 @@ LIST(APPEND EXE
 	exe/sweep.cpp
 	exe/parsweep.cpp
 	exe/scratch.cpp
+	exe/transport.cpp
 )
 
 foreach(exe ${EXE})

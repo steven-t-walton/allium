@@ -13,7 +13,7 @@ LevelSymmetricQuadrature::LevelSymmetricQuadrature(int _order, int _dim) : dim(_
 	std::smatch num_dirs_match; 
 	std::regex_search(line, num_dirs_match, num_dirs_regex); 
 	int num_dirs = std::stoi(num_dirs_match[1]); 
-	if (dim==1) MFEM_WARNING("quadrature not great from 1D"); 
+	// if (dim==1) MFEM_WARNING("level symmetric quadrature not great for 1D"); 
 	if (dim==1) num_dirs /= 4; 
 	else if (dim==2) num_dirs /= 2; 
 	Omegas.resize(num_dirs, mfem::Vector(dim)); 

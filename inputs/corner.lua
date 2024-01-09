@@ -53,7 +53,7 @@ sn = {
 	max_it = 100, 
 	dsa = {
 		kappa = 4, 
-		tol = 1e-4, 
+		tol = 1e-6, 
 		max_it = 100
 	},
 }

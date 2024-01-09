@@ -1,16 +1,16 @@
 total = 1
 scattering = .99
 
-alpha = 1
-delta = 2
+alpha = 0
+delta = 0
 function solution(x,y,z)
 	return math.sin(math.pi*x)*math.sin(math.pi*y) + alpha*2/3*math.sin(2*math.pi*x)*math.sin(2*math.pi*y) + delta
 end
 
 function psi(x,y,z,mu,eta,xi)
-	x = (math.sin(math.pi*x)*math.sin(math.pi*y) + alpha*(mu^2 + eta^2)*math.sin(2*math.pi*x)*math.sin(2*math.pi*y) + delta)/4/math.pi
-	assert(x>=0)
-	return x 
+	val = (math.sin(math.pi*x)*math.sin(math.pi*y) + alpha*(mu^2 + eta^2)*math.sin(2*math.pi*x)*math.sin(2*math.pi*y) + delta)/4/math.pi
+	assert(val>=0)
+	return val
 end 
 
 function source_function(x,y,z,mu,eta,xi)
@@ -39,7 +39,7 @@ function boundary_map(x,y,z)
 	return "vacuum"
 end 
 
-Ne = 10
+Ne = 40
 mesh = {
 	num_elements = {Ne,Ne},
 	extents = {1,1} 
@@ -54,6 +54,6 @@ sn = {
 		max_it = 50
 	},
 	tol = 1e-10, 
-	max_it = 2, 
+	max_it = 100, 
 	write_graph = false
 }
