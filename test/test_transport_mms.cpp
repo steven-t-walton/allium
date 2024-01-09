@@ -88,6 +88,18 @@ TEST(MMS, LinearTransport2Dp1) {
 	EXPECT_TRUE(within_bounds); 
 }
 
+TEST(MMS, LinearTransport2DTRI) {
+	auto Ne = 10; 
+	const auto fe_order = 1; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	double E1 = LinearTransportError(mesh1, fe_order); 
+	double E2 = LinearTransportError(mesh2, fe_order); 
+	double ooa = log2(E1/E2); 
+	bool within_bounds = (fe_order+1 - ooa) < .2; 
+	EXPECT_TRUE(within_bounds); 
+}
+
 TEST(MMS, LinearTransport2Dp2) {
 	auto Ne = 10; 
 	const auto fe_order = 2; 
