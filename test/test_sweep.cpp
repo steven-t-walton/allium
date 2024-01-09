@@ -1,16 +1,6 @@
 #include "gtest/gtest.h"
 #include "sweep.hpp"
 
-class MPITestEnvironment : public ::testing::Environment
-{
-public:
-	void SetUp() {
-		mfem::Mpi::Init(); 
-	}
-	void TearDown() { }
-	~MPITestEnvironment() { }
-};
-
 // test sweeping with inflow, no source, and no collision term 
 // solution is constant and equal to the inflow source 
 bool SweepConstantSolution(mfem::Mesh &smesh, int fe_order) {
@@ -201,10 +191,4 @@ TEST(Sweep, ExponentialSolution2Dp2) {
 	double ooa = log2(E1/E2); 
 	bool within_bounds = fabs(ooa - 1.0) < .3; 
 	EXPECT_TRUE(within_bounds); 
-}
-
-int main(int argc, char *argv[]) {
-	::testing::InitGoogleTest(&argc, argv); 
-	::testing::AddGlobalTestEnvironment(new MPITestEnvironment); 
-	return RUN_ALL_TESTS(); 
 }
