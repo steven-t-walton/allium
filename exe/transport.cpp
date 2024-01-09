@@ -73,13 +73,6 @@ int main(int argc, char *argv[]) {
 		}
 	} else { MFEM_ABORT("materials not defined"); }
 
-	// print materials list to cout 
-	out << YAML::Key << "materials" << YAML::Value << YAML::BeginMap; 
-	for (auto i=0; i<attr_list.size(); i++) {
-		out << YAML::Key << i+1 << YAML::Value << attr_list[i]; 
-	}
-	out << YAML::EndMap; 
-
 	// get data from lua 
 	auto nattr = attr_list.size(); 
 	mfem::Vector total_list(nattr), scattering_list(nattr), source_list(nattr); 
@@ -89,6 +82,18 @@ int main(int argc, char *argv[]) {
 		scattering_list(i) = data["scattering"]; 
 		source_list(i) = data["source"]; 
 	}
+
+	// print materials list to cout 
+	out << YAML::Key << "materials" << YAML::Value << YAML::BeginSeq; 
+	for (auto i=0; i<attr_list.size(); i++) {
+		out << YAML::BeginMap << YAML::Key << "name" << YAML::Value << attr_list[i]; 
+		out << YAML::Key << "attribute" << YAML::Value << i+1; 
+		out << YAML::Key << "total" << YAML::Value << total_list(i); 
+		out << YAML::Key << "scattering" << YAML::Value << scattering_list(i); 
+		out << YAML::Key << "source" << YAML::Value << source_list(i); 
+		out << YAML::EndMap; 
+	}
+	out << YAML::EndSeq; 
 
 	// map string material id to integer
 	// start from 1 since MFEM expects attributes to be >0
@@ -107,14 +112,6 @@ int main(int argc, char *argv[]) {
 		}
 	} else { MFEM_ABORT("boundary conditions not defined"); }
 
-	// print list to screen 
-	out << YAML::Key << "boundary conditions" << YAML::Value << YAML::BeginMap; 
-	for (auto i=0; i<bdr_attr_list.size(); i++) {
-		out << YAML::Key << i+1;
-		out << YAML::Value << bdr_attr_list[i]; 
-	}
-	out << YAML::EndMap; 
-
 	// get values 
 	auto nbattr = bdr_attr_list.size(); 
 	mfem::Vector inflow_list(nbattr); 
@@ -122,6 +119,17 @@ int main(int argc, char *argv[]) {
 		double data = bcs[bdr_attr_list[i].c_str()]; 
 		inflow_list(i) = data; 
 	}
+
+	// print list to screen 
+	out << YAML::Key << "boundary conditions" << YAML::Value << YAML::BeginSeq; 
+	for (auto i=0; i<bdr_attr_list.size(); i++) {
+		out << YAML::BeginMap; 
+		out << YAML::Key << "name" << YAML::Value << bdr_attr_list[i]; 
+		out << YAML::Key << "bdr attribute" << YAML::Value << i+1; 
+		out << YAML::Key << "inflow" << YAML::Value << inflow_list(i); 
+		out << YAML::EndMap; 
+	}
+	out << YAML::EndSeq; 
 
 	// map string to bdr attribute integer 
 	// start from 1 since MFEM expects >0
@@ -173,7 +181,8 @@ int main(int argc, char *argv[]) {
 			smesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], mfem::Element::HEXAHEDRON, extents[1], extents[2], extents[3], false); 
 		} else { MFEM_ABORT("dim = " << num_dim << " not supported"); }
 	}
-	int dim = smesh.Dimension(); 
+	const auto dim = smesh.Dimension(); 
+
 	// print mesh characteristics 
 	double hmin, hmax, kmin, kmax; 
 	smesh.GetCharacteristics(hmin, hmax, kmin, kmax); 
@@ -232,18 +241,6 @@ int main(int argc, char *argv[]) {
 	}
 
 	// --- create parallel mesh --- 
-	mfem::Array<int> part(smesh.GetNE()); 
-	mfem::Array<int> par_off(mfem::Mpi::WorldSize()+1);
-	par_off = 0; 
-	for (int e=0; e<smesh.GetNE(); e++) {
-		par_off[mfem::Mpi::WorldSize() - e%mfem::Mpi::WorldSize()] += 1; 
-	} 
-	par_off.PartialSum(); 
-	for (int i=0; i<par_off.Size()-1; i++) {
-		for (int j=par_off[i]; j<par_off[i+1]; j++) {
-			part[j] = i; 
-		}
-	}
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
 	mesh.ExchangeFaceNbrData(); // create parallel communication data needed for sweep 
 
@@ -286,7 +283,6 @@ int main(int argc, char *argv[]) {
 
 	// --- angular quadrature rule --- 
 	LevelSymmetricQuadrature quad(sn_order, dim); 
-	const auto global_Ne = mesh.GetGlobalNE(); 
 	const auto Nomega = quad.Size(); 
 
 	// --- transport vector setup --- 
@@ -339,7 +335,7 @@ int main(int argc, char *argv[]) {
 
 	// build DSA solver 
 	mfem::CGSolver solver(MPI_COMM_WORLD); 
-	solver.SetAbsTol(inner_tol); 
+	solver.SetRelTol(inner_tol); 
 	solver.SetMaxIter(max_inner_it);
 	solver.SetPrintLevel(0);
 	mfem::HypreBoomerAMG amg(*dsa_mat); 
@@ -352,14 +348,14 @@ int main(int argc, char *argv[]) {
 	mfem::Vector scatsource(fes.GetVSize()); 
 	scatsource = 0.0; 
 
-	// global scattering operator DSA 
+	// global scattering operator 
 	mfem::BilinearForm Ms_form(&fes); 
 	Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
 	Ms_form.Assemble(); 
 	Ms_form.Finalize();
 
 	// allocate transport vector + views 
-	mfem::Vector psi(psi_size); // owned + ghost data 
+	mfem::Vector psi(psi_size);
 	psi = 0.0; 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
 	mfem::ParGridFunction phi(&fes), phi_old(&fes), delta_phi(&fes); 
@@ -367,7 +363,7 @@ int main(int argc, char *argv[]) {
 	D.Mult(psi, phi); 
 	phi_old = phi; 
 
-	// form source term 
+	// form fixed source term 
 	// allows either space/angle dependent source function 
 	sol::optional<sol::function> source_func_avail = lua["source_function"]; 
 	mfem::Vector source_vec(psi_size); 
@@ -404,6 +400,7 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
+	// build sweep operator 
 	InvAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
 	bool write_graph = lua["sn"]["write_graph"].get_or(false); 
 	if (write_graph) Linv.WriteGraphToDot("graph"); 
@@ -419,6 +416,7 @@ int main(int argc, char *argv[]) {
 		Ms_form.Mult(phi_old, scatsource); 
 		D.MultTranspose(scatsource, psi); 
 		psi += source_vec; 
+		// sweep in place 
 		Linv.Mult(psi, psi); 
 
 		// compute new phi 

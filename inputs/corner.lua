@@ -50,10 +50,10 @@ sn = {
 	fe_order = 1, 
 	sn_order = 16, 
 	tol = 1e-5, 
-	max_it = 100, 
+	max_it = 200, 
 	dsa = {
 		kappa = 4, 
-		tol = 1e-6, 
+		tol = 1e-2, 
 		max_it = 100
 	},
 }
