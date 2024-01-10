@@ -21,6 +21,9 @@ endif()
 if (NOT ${MFEM_USE_METIS})
 	message(FATAL_ERROR "metis is required")
 endif()
+if (NOT ${MFEM_USE_SUPERLU})
+	message(FATAL_ERROR "superlu is required")
+endif()
 
 # find igraph 
 find_package(igraph REQUIRED)
@@ -41,6 +44,9 @@ message(STATUS "found lua v${LUA_VERSION_STRING}")
 # find sol2 
 find_package(sol2 REQUIRED)
 message(STATUS "found sol2 v${sol2_VERSION}")
+
+# required for superlu 
+find_package(OpenMP REQUIRED)
 
 # set location of quadrature files 
 set(LS_QUADRATURE_DIR "${CMAKE_SOURCE_DIR}/data/lsquad")
@@ -77,7 +83,7 @@ add_subdirectory(src)
 # create a library 
 # includes all third party libraries 
 add_library(alium ${SOURCES} ${HEADERS})
-target_link_libraries(alium PUBLIC mfem igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2)
+target_link_libraries(alium PUBLIC mfem igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX)
 target_include_directories(alium PUBLIC ${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
 
 # add executables in exe directory 
