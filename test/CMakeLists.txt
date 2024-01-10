@@ -12,6 +12,7 @@ LIST(APPEND TESTS
 LIST(APPEND PAR_TESTS
 	test_sweep.cpp
 	test_transport_mms.cpp
+	test_diffusion_mms.cpp
 )
 
 foreach(test ${TESTS})
