@@ -3,6 +3,7 @@
 
 int main(int argc, char *argv[]) {
 	mfem::Mpi::Init(); 
+	mfem::Hypre::Init(); 
 	auto size = mfem::Mpi::WorldSize(); 
 	auto rank = mfem::Mpi::WorldRank(); 
 	::testing::InitGoogleTest(&argc, argv); 
