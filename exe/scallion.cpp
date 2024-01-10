@@ -356,7 +356,6 @@ int main(int argc, char *argv[]) {
 
 	// allocate transport vector + views 
 	mfem::Vector psi(psi_size);
-	// psi = 1./4/M_PI;
 	psi = 0.0; 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
 	mfem::ParGridFunction phi(&fes), phi_old(&fes), delta_phi(&fes); 

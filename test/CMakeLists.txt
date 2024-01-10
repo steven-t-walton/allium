@@ -5,6 +5,8 @@ LIST(APPEND TESTS
 	test_angle_quad.cpp
 	test_sweep.cpp
 	test_transport_mms.cpp
+	test_integrators.cpp
+	test_diffusion_mms.cpp
 )
 
 LIST(APPEND PAR_TESTS

@@ -11,6 +11,7 @@ message(STATUS "CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 # find MFEM 
 find_package(mfem REQUIRED NAMES MFEM)
 message(STATUS "found MFEM v${MFEM_VERSION}")
+message(STATUS "MFEM git string: ${MFEM_GIT_STRING}")
 if (NOT ${MFEM_USE_MPI})
 	message(FATAL_ERROR "mfem must be built with MPI")
 endif()
@@ -85,6 +86,7 @@ LIST(APPEND EXE
 	exe/parsweep.cpp
 	exe/scratch.cpp
 	exe/scallion.cpp
+	exe/p1.cpp
 )
 
 foreach(exe ${EXE})
