@@ -1,5 +1,5 @@
 add_library(gtest_main_mpi gtest_mpi.cpp)
-target_link_libraries(gtest_main_mpi PUBLIC alium GTest::gtest)
+target_link_libraries(gtest_main_mpi PUBLIC allium GTest::gtest)
 
 LIST(APPEND TESTS
 	test_angle_quad.cpp

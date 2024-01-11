@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.27)
 set(CMAKE_CXX_STANDARD 20) 
-project(alium)
+project(allium)
 
 # --- default value for build type --- 
 if (NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
@@ -82,9 +82,9 @@ add_subdirectory(src)
 
 # create a library 
 # includes all third party libraries 
-add_library(alium ${SOURCES} ${HEADERS})
-target_link_libraries(alium PUBLIC mfem igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX)
-target_include_directories(alium PUBLIC ${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
+add_library(allium ${SOURCES} ${HEADERS})
+target_link_libraries(allium PUBLIC mfem igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX)
+target_include_directories(allium PUBLIC ${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
 
 # add executables in exe directory 
 LIST(APPEND EXE
@@ -99,7 +99,7 @@ foreach(exe ${EXE})
 	get_filename_component(name ${exe} NAME) 
 	string (REPLACE ".cpp" "" exename ${name})
 	add_executable(${exename} ${exe})
-	target_link_libraries(${exename} PRIVATE alium) 
+	target_link_libraries(${exename} PRIVATE allium) 
 endforeach()
 
 # --- tests --- 
