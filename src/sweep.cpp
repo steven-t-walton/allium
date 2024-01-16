@@ -1,7 +1,9 @@
 #include "sweep.hpp"
 #include <deque>
 
-InvAdvectionOperator::InvAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
+// #define INFLOW_IN_SWEEP
+
+InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow)
 	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), psi_ext(_psi_ext), total(_total), inflow(_inflow)
 {
@@ -162,12 +164,12 @@ InvAdvectionOperator::InvAdvectionOperator(mfem::ParFiniteElementSpace &_fes, co
 	if (!is_dag) { MFEM_ABORT("graph is not a dag"); }
 }
 
-InvAdvectionOperator::~InvAdvectionOperator()
+InverseAdvectionOperator::~InverseAdvectionOperator()
 {
 	igraph_destroy(&graph); 
 }
 
-void InvAdvectionOperator::WriteGraphToDot(std::string prefix) const 
+void InverseAdvectionOperator::WriteGraphToDot(std::string prefix) const 
 {
 	auto rank = mesh.GetMyRank(); 
 	FILE *file = fopen(mfem::MakeParFilename(prefix + ".", rank, ".dot").c_str(), "w"); 
@@ -175,7 +177,7 @@ void InvAdvectionOperator::WriteGraphToDot(std::string prefix) const
 	fclose(file); 	
 }
 
-void InvAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) const 
+void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) const 
 {
 	assert(source.Size() == Width()); 
 	assert(psi.Size() == Height()); 
@@ -306,7 +308,9 @@ void InvAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) c
 						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(0, a, dofs2[i]); }						
 					}
 					f12.AddMult(psi2, rhs, -1.0); 									
-				} else {
+				} 
+				#ifdef INFLOW_IN_SWEEP
+				else {
 					auto be = face_to_bdr_el.at(face_trans->ElementNo); 
 					auto &bdr_face_trans = *mesh.GetBdrFaceTransformations(be); 
 					mfem::BoundaryFlowIntegrator bdr_flow(inflow, Q, alpha, beta);
@@ -314,6 +318,7 @@ void InvAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) c
 					bdr_flow.AssembleRHSElementVect(el, bdr_face_trans, elvec);  
 					rhs -= elvec; 
 				}
+				#endif
 			}  
 
 			// form local system 
@@ -419,4 +424,89 @@ void InvAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) c
 	// clean up data 
 	igraph_vector_int_destroy(&nbrs); 
 	igraph_vector_int_destroy(&nbr_nbrs); 
+}
+
+void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+	const TransportVectorExtents &psi_ext,
+	std::function<double(const mfem::Vector &x, const mfem::Vector &Omega)> source_func, 
+	std::function<double(const mfem::Vector &x, const mfem::Vector &Omega)> inflow_func, 
+	mfem::Vector &source_vec)
+{
+	const auto psi_size = TotalExtent(psi_ext); 
+	source_vec.SetSize(psi_size);
+	source_vec = 0.0;  
+	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
+	for (auto a=0; a<quad.Size(); a++) {
+		const auto &Omega = quad.GetOmega(a); 
+		auto source_for_angle = [&Omega, &source_func](const mfem::Vector &x) {
+			return source_func(x,Omega); 
+		};
+		mfem::ParLinearForm bform(&fes); 
+		mfem::FunctionCoefficient source_coef(source_for_angle); 
+		bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
+		#ifndef INFLOW_IN_SWEEP
+		auto inflow_for_angle = [&Omega, &inflow_func](const mfem::Vector &x) {
+			return inflow_func(x,Omega); 
+		};
+		mfem::FunctionCoefficient inflow_coef(inflow_for_angle); 
+		mfem::VectorConstantCoefficient Q(Omega); 
+		bform.AddBdrFaceIntegrator(new mfem::BoundaryFlowIntegrator(inflow_coef, Q, -1.0, -0.5));
+		#endif
+		bform.Assemble(); 
+		for (int i=0; i<bform.Size(); i++) {
+			source_vec_view(0,a,i) = bform[i]; 
+		}
+	}
+}
+
+void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+	const TransportVectorExtents &psi_ext,
+	std::function<double(double x, double y, double z, double mu, double eta, double xi)> source_func, 
+	std::function<double(double x, double y, double z, double mu, double eta, double xi)> inflow_func, 
+	mfem::Vector &source_vec)
+{
+	const auto dim = fes.GetMesh()->Dimension(); 
+	auto source = [&dim, &source_func](const mfem::Vector &x, const mfem::Vector &Omega) {
+		double X[3]; 
+		double O[3]; 
+		for (auto d=0; d<x.Size(); d++) { X[d] = x(d); }
+		for (auto d=0; d<Omega.Size(); d++) { O[d] = Omega(d); }			
+		return source_func(X[0], X[1], X[2], O[0], O[1], O[2]); 
+	};
+	auto inflow = [&dim, &inflow_func](const mfem::Vector &x, const mfem::Vector &Omega) {
+		double X[3]; 
+		double O[3]; 
+		for (auto d=0; d<x.Size(); d++) { X[d] = x(d); }
+		for (auto d=0; d<Omega.Size(); d++) { O[d] = Omega(d); }			
+		return inflow_func(X[0], X[1], X[2], O[0], O[1], O[2]); 
+	};
+	FormTransportSource(fes, quad, psi_ext, source, inflow, source_vec); 
+}
+
+void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+	const TransportVectorExtents &psi_ext, mfem::Coefficient &source, mfem::Coefficient &inflow, mfem::Vector &source_vec)
+{
+	const auto psi_size = TotalExtent(psi_ext); 
+	source_vec.SetSize(psi_size); 
+	source_vec = 0.0;  
+	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
+
+	mfem::ParLinearForm bform(&fes); 
+	bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source)); 
+	bform.Assemble(); 
+
+	for (auto a=0; a<quad.Size(); a++) {
+		const auto &Omega = quad.GetOmega(a); 
+		mfem::VectorConstantCoefficient Q(Omega); 
+		mfem::ParLinearForm bform2(&fes); 
+		bform2.AddBdrFaceIntegrator(new mfem::BoundaryFlowIntegrator(inflow, Q, -1.0, -0.5)); 
+		bform2.Assemble(); 
+		for (auto i=0; i<fes.GetVSize(); i++) {
+			#ifdef INFLOW_IN_SWEEP
+			source_vec_view(0,a,i) = bform[i]; 
+			#else
+			source_vec_view(0,a,i) = bform[i] + bform2[i]; 
+			#endif
+		}
+	}
 }

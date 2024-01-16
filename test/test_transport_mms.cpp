@@ -33,26 +33,17 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order) {
 			+ total_val*(sin(M_PI*x(0))*sin(M_PI*x(1)) + quadratic*sin(2*M_PI*x(0))*sin(2*M_PI*x(1)) + 2.0)/4/M_PI
 			- scattering_val*(sin(M_PI*x(0))*sin(M_PI*x(1)) + 2./3*sin(2*M_PI*x(0))*sin(2*M_PI*x(1)) + 2.0)/4/M_PI; 
 	};
-	for (auto a=0; a<quad.Size(); a++) {
-		const mfem::Vector &Omega = quad.GetOmega(a); 
-		auto qmms_omega = [&qmms,&Omega](const mfem::Vector &x) {
-			return qmms(x,Omega); 
-		}; 
-		mfem::FunctionCoefficient source_coef(qmms_omega); 
-		mfem::ParLinearForm bform(&fes); 
-		bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
-		bform.Assemble(); 
-		for (int i=0; i<bform.Size(); i++) {
-			source_view(0,a,i) = bform[i]; 
-		}
-	}
+	auto inflow_mms = [](const mfem::Vector &x, const mfem::Vector &Omega) {
+		return 2.0/4/M_PI; 
+	};
+	FormTransportSource(fes, quad, psi_ext, qmms, inflow_mms, source);
 
 	mfem::ParBilinearForm Ms_form(&fes); 
 	Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
 	Ms_form.Assemble(); 
 	Ms_form.Finalize(); 
 
-	InvAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
+	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
 
 	mfem::ParGridFunction phi(&fes), phi_old(&fes); 
 	phi_old = 0.0; 

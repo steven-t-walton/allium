@@ -17,9 +17,8 @@ bool SweepConstantSolution(mfem::Mesh &smesh, int fe_order) {
 	TransportVectorExtents psi_ext(1, quad.Size(), fes.GetVSize()); 
 	const auto psi_size = TotalExtent(psi_ext); 
 	mfem::Vector source(psi_size), psi(psi_size); 
-	source = 0.0; 
-
-	InvAdvectionOperator Linv(fes, quad, psi_ext, zero, inflow); 
+	FormTransportSource(fes, quad, psi_ext, zero, inflow, source); 
+	InverseAdvectionOperator Linv(fes, quad, psi_ext, zero, inflow); 
 	Linv.Mult(source, psi); 
 	bool all_ones = true; 
 	for (const auto &i : psi) {
@@ -91,14 +90,15 @@ double ExponentialSolution(mfem::Mesh &smesh, int fe_order, std::function<double
 
 	mfem::ConstantCoefficient total(1.0); 
 	mfem::ConstantCoefficient inflow(1.0); 
+	mfem::ConstantCoefficient zero(0.0); 
 
 	TransportVectorExtents psi_ext(1, quad.Size(), fes.GetVSize()); 
 	const auto psi_size = TotalExtent(psi_ext); 
 	mfem::Vector source(psi_size), psi(psi_size); 
-	source = 0.0; 
+	FormTransportSource(fes, quad, psi_ext, zero, inflow, source); 
 	psi = 0.0; 
 
-	InvAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
+	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
 	Linv.Mult(source, psi); 
 
 	auto exsol_per_angle = [&quad, &exsol](const mfem::Vector &x) {

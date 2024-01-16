@@ -5,7 +5,7 @@
 #include "mfem.hpp"
 #include "igraph.h"
 
-class InvAdvectionOperator : public mfem::Operator 
+class InverseAdvectionOperator : public mfem::Operator 
 {
 private:
 	mfem::ParMesh &mesh; 
@@ -31,10 +31,31 @@ private:
 	// the local graph object 
 	igraph_t graph; 
 public:
-	InvAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
+	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 		const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow); 
-	~InvAdvectionOperator(); 
+	~InverseAdvectionOperator(); 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
 
 	void WriteGraphToDot(std::string prefix) const; 
 };
+
+void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+	const TransportVectorExtents &psi_ext,
+	std::function<double(const mfem::Vector &x, const mfem::Vector &y)> source_func, 
+	std::function<double(const mfem::Vector &x, const mfem::Vector &y)> inflow_func, 
+	mfem::Vector &source_vec); 
+
+void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+	const TransportVectorExtents &psi_ext,
+	std::function<double(double x, double y, double z, double mu, double eta, double xi)> source_func, 
+	std::function<double(double x, double y, double z, double mu, double eta, double xi)> inflow_func, 
+	mfem::Vector &source_vec); 
+
+// void FormTransportSourceFromLuaFunctions(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+// 	const TransportVectorExtents &psi_ext, 
+// 	std::function<double(double x, double y, double z, double mu, double eta, double xi)> source_func, 
+// 	std::function<double(double x, double y, double z, double mu, double eta, double xi)> inflow_func, 
+// 	mfem::Vector &source_vec);
+
+void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+	const TransportVectorExtents &psi_ext, mfem::Coefficient &source, mfem::Coefficient &inflow, mfem::Vector &source_vec); 
