@@ -100,7 +100,7 @@ int main(int argc, char *argv[]) {
 	lua.open_libraries(); // allows using standard libraries (e.g. math) in input
 	lua.script_file(argv[1]); // load from first cmd line argument 
 
-	out << YAML::Key << "input file" << YAML::Value << argv[1]; 
+	out << YAML::Key << "input file" << YAML::Value << realpath(argv[1], nullptr); 
 
 	// --- extract list of materials --- 
 	std::vector<std::string> attr_list; 
@@ -510,7 +510,9 @@ int main(int argc, char *argv[]) {
 		}; 
 		mfem::FunctionCoefficient phi_coef(solution_lam); 
 		double l2 = phi.ComputeL2Error(phi_coef); 
-		par_out << "l2 error: " << std::scientific << std::setprecision(3) << l2 << std::endl; 
+		std::stringstream ss; 
+		ss << std::setprecision(3) << std::scientific << l2; 
+		out << YAML::Key << "l2 error" << YAML::Value << ss.str(); 
 	}
 
 	// --- output to paraview --- 
