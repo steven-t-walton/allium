@@ -1,8 +1,8 @@
 total = 1
 scattering = .99
 
-alpha = 0
-delta = 0
+alpha = .25
+delta = 2
 function solution(x,y,z)
 	return math.sin(math.pi*x)*math.sin(math.pi*y) + alpha*2/3*math.sin(2*math.pi*x)*math.sin(2*math.pi*y) + delta
 end
@@ -17,6 +17,10 @@ function source_function(x,y,z,mu,eta,xi)
 	dpsi_dx = math.cos(math.pi*x)*math.sin(math.pi*y)/4 + alpha*(mu^2+eta^2)*math.cos(2*math.pi*x)*math.sin(2*math.pi*y)/2
 	dpsi_dy = math.sin(math.pi*x)*math.cos(math.pi*y)/4 + alpha*(mu^2+eta^2)*math.sin(2*math.pi*x)*math.cos(2*math.pi*y)/2
 	return mu*dpsi_dx + eta*dpsi_dy + total*psi(x,y,z,mu,eta,xi) - scattering*solution(x,y,z)/4/math.pi 
+end
+
+function inflow_function(x,y,z,mu,eta,xi)
+	return psi(x,y,z,mu,eta,xi)
 end
 
 materials = {

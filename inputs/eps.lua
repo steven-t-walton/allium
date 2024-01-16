@@ -20,7 +20,7 @@ function boundary_map(x,y,z)
 	return "vacuum"
 end 
 
-Ne = 20
+Ne = 10
 mesh = {
 	-- file = "/opt/mfem/data/star-hilbert.mesh",
 	-- refinements = 3
@@ -28,15 +28,23 @@ mesh = {
 	extents = {1,1} 
 }
 
+p1sa = {
+	type = "P1SA", 
+	solver = "direct"
+}
+
+mip = {
+	type = "MIP", 
+	solver = "cg", 
+	reltol = 1e-2, 
+	max_it = 50
+}
+
 sn = {
 	fe_order = 1, 
 	sn_order = 4, 
-	dsa = {
-		kappa = 4, 
-		tol = 1e-6, 
-		max_it = 50
-	},
-	tol = 1e-5, 
+	acceleration = p1sa, 
+	tol = 1e-6, 
 	max_it = 100, 
-	write_graph = false
+	solver = "sli",
 }

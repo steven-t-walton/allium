@@ -46,14 +46,23 @@ mesh = {
 	extents = {1,1} 
 }
 
+mip = {
+	type = "MIP", 
+	reltol = 1e-2, 
+	max_it = 100,
+	solver = "cg"
+}
+
+p1sa = {
+	type = "P1SA", 
+	solver = "direct"
+}
+
 sn = {
 	fe_order = 1, 
 	sn_order = 16, 
 	tol = 1e-5, 
 	max_it = 200, 
-	dsa = {
-		kappa = 4, 
-		tol = 1e-2, 
-		max_it = 100
-	},
+	acceleration = mip,
+	solver = "gmres"
 }
