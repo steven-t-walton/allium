@@ -7,6 +7,7 @@ LIST(APPEND TESTS
 	test_transport_mms.cpp
 	test_integrators.cpp
 	test_diffusion_mms.cpp
+	test_p1.cpp
 )
 
 LIST(APPEND PAR_TESTS
