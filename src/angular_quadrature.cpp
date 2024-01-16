@@ -13,9 +13,7 @@ LevelSymmetricQuadrature::LevelSymmetricQuadrature(int _order, int _dim) : dim(_
 	std::smatch num_dirs_match; 
 	std::regex_search(line, num_dirs_match, num_dirs_regex); 
 	int num_dirs = std::stoi(num_dirs_match[1]); 
-	// if (dim==1) MFEM_WARNING("level symmetric quadrature not great for 1D"); 
-	if (dim==1) num_dirs /= 4; 
-	else if (dim==2) num_dirs /= 2; 
+	if (dim<3) num_dirs /= 2; 
 	Omegas.resize(num_dirs, mfem::Vector(dim)); 
 	weights.resize(num_dirs, 0.0); 
 	double omega[3]; 
@@ -27,8 +25,7 @@ LevelSymmetricQuadrature::LevelSymmetricQuadrature(int _order, int _dim) : dim(_
 		for (int d=0; d<dim; d++) {
 			Omegas[i](d) = omega[d]; 
 		}
-		if (dim==1) w *= 4; 
-		else if (dim==2) w *= 2;  
+		if (dim<3) w *= 2;  
 		weights[i] = w;
 	}
 	for (auto w : weights) {
@@ -39,6 +36,23 @@ LevelSymmetricQuadrature::LevelSymmetricQuadrature(int _order, int _dim) : dim(_
 		MFEM_ABORT("quadrature file " << file_name << " has weights sum to " << weights_sum); 
 	} 
 #endif 
+}
+
+GaussLegendreQuadratureRule::GaussLegendreQuadratureRule(int order, int dim)
+{
+	if (dim != 1) { MFEM_ABORT("Gauss Legendre only setup for 1D"); }
+	const auto &rule = mfem::IntRules.Get(mfem::Geometry::SEGMENT, order); 
+	const auto size = rule.GetNPoints(); 
+	Omegas.resize(size, mfem::Vector(dim)); 
+	weights.resize(size); 
+	for (auto n=0; n<size; n++) {
+		const auto &ip = rule.IntPoint(n); 
+		Omegas[n](0) = 2*ip.x - 1; 
+		weights[n] = 2*ip.weight; 
+	}
+	for (const auto &w : weights) {
+		weights_sum += w; 
+	}
 }
 
 void DiscreteToMoment::Mult(const mfem::Vector &psi, mfem::Vector &phi) const 
@@ -77,5 +91,5 @@ double ComputeAlpha(const AngularQuadrature &quad, const mfem::Vector &dir)
 		const auto &Omega = quad.GetOmega(angle); 
 		alpha += std::fabs(Omega * nor) * quad.GetWeight(angle); 
 	}
-	return alpha/4/M_PI; 
+	return alpha/quad.SumWeights(); 
 }
