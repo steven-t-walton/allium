@@ -17,6 +17,8 @@ private:
 	YAML::Emitter &out; 
 	mfem::StopWatch timer; 
 public:
+	mfem::Array<int> inner_it; 
+
 	TransportIterationMonitor(YAML::Emitter &yaml, const mfem::IterativeSolver * const inner) 
 		: out(yaml), inner_solver(inner) 
 	{
@@ -39,6 +41,7 @@ public:
 		if (inner_solver) {
 			out << YAML::Key << "inner it" << YAML::Value << inner_solver->GetNumIterations(); 
 			out << YAML::Key << "inner norm" << YAML::Value << inner_solver->GetFinalNorm(); 
+			inner_it.Append(inner_solver->GetNumIterations()); 
 		}
 		out << YAML::Key << "time" << YAML::Value << time; 
 		out << YAML::EndMap << YAML::Newline; 
@@ -59,6 +62,9 @@ int main(int argc, char *argv[]) {
 	// must call hypre init for BoomerAMG now? 
 	mfem::Hypre::Init(); 
 
+	mfem::StopWatch timer; 
+	timer.Start(); 
+
 	const auto rank = mfem::Mpi::WorldRank(); 
 	const bool root = rank == 0; 
 
@@ -74,6 +80,16 @@ int main(int argc, char *argv[]) {
 	// helps keep output yaml parse-able 
 	CommentStreamBuf comm_buf(mfem::out, '#'); 
 
+	if (root) {
+		mfem::out << "      _     _           \n"; 
+		mfem::out << "  ___| |__ (_)_   _____ \n";  
+		mfem::out << " / __| '_ \\| \\ \\ / / _ \\ \n";
+		mfem::out << "| (__| | | | |\\ V /  __/\n";
+		mfem::out << " \\___|_| |_|_| \\_/ \\___|\n"; 
+		mfem::out << "\na linear transport solver\n"; 
+		mfem::out << std::endl; 
+	}
+
 	// YAML output 
 	YAML::Emitter out(par_out);
 	out.SetDoublePrecision(3); 
@@ -83,6 +99,8 @@ int main(int argc, char *argv[]) {
 	sol::state lua; 
 	lua.open_libraries(); // allows using standard libraries (e.g. math) in input
 	lua.script_file(argv[1]); // load from first cmd line argument 
+
+	out << YAML::Key << "input file" << YAML::Value << argv[1]; 
 
 	// --- extract list of materials --- 
 	std::vector<std::string> attr_list; 
@@ -464,7 +482,14 @@ int main(int argc, char *argv[]) {
 	TransportIterationMonitor monitor(out, dynamic_cast<mfem::IterativeSolver*>(dsa_solver)); 
 	outer->SetMonitor(monitor); 
 	outer->Mult(schur_source, phi); 
-	out << YAML::Key << "iterations" << YAML::Value << outer->GetNumIterations(); 
+	out << YAML::Key << "outer iterations" << YAML::Value << outer->GetNumIterations();
+	if (monitor.inner_it.Size()) {
+		out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "min inner" << YAML::Value << monitor.inner_it.Min(); 
+		out << YAML::Key << "max inner" << YAML::Value << monitor.inner_it.Max();
+		out << YAML::Key << "avg inner" << YAML::Value << (double)monitor.inner_it.Sum()/monitor.inner_it.Size(); 		
+		out << YAML::EndMap; 
+	}
 
 	// --- clean up hanging pointers --- 
 	delete outer; 
@@ -473,9 +498,6 @@ int main(int argc, char *argv[]) {
 	if (dsa_solver) delete dsa_solver; 
 	if (slu_op) delete slu_op; 
 	if (dsa_mat) delete dsa_mat; 
-
-	// --- end yaml output --- 
-	out << YAML::EndMap << YAML::Newline; 
 
 	// --- compute error if exact solution provided --- 
 	sol::optional<sol::function> solution_func_avail = lua["solution"]; 
@@ -500,4 +522,11 @@ int main(int argc, char *argv[]) {
 	dc.RegisterField("total", &total_gf); 
 	dc.RegisterField("scattering", &scattering_gf); 
 	dc.Save(); 
+
+	timer.Stop(); 
+	double time = timer.RealTime(); 
+	out << YAML::Key << "solve time" << YAML::Value << time; 
+
+	// --- end yaml output --- 
+	out << YAML::EndMap << YAML::Newline; 
 }
