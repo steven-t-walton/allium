@@ -2,6 +2,7 @@
 #include "igraph.h"
 #include "tvector.hpp"
 #include "angular_quadrature.hpp"
+#include "transport_op.hpp"
 #include "mip.hpp"
 #include "comment_stream.hpp"
 #include "yaml-cpp/yaml.h"

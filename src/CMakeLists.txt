@@ -13,6 +13,7 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/mip.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/p1diffusion.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/transport_op.cpp
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)

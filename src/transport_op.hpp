@@ -1,5 +1,7 @@
 #pragma once 
 #include "mfem.hpp"
+#include "tvector.hpp"
+#include "angular_quadrature.hpp"
 
 // I - DL^{-1} MS 
 // applies Schur complement in phi of linear transport operator 
@@ -43,4 +45,28 @@ public:
 
 	// no op, operator assumed to be set for Dinv 
 	void SetOperator(const mfem::Operator &op) { }
+};
+
+class DiscreteToMoment : public mfem::Operator {
+private:
+	const AngularQuadrature &quad; 
+	const TransportVectorExtents &extents_psi;
+	const MomentVectorExtents &extents_phi;  
+public:
+	DiscreteToMoment(const AngularQuadrature &_quad, 
+		const TransportVectorExtents &_extents_psi, 
+		const MomentVectorExtents &_extents_phi) : quad(_quad), extents_psi(_extents_psi), extents_phi(_extents_phi) {
+		auto psi_size = TotalExtent(extents_psi); 
+		auto phi_size = TotalExtent(extents_phi); 
+		height = phi_size; 
+		width = psi_size; 
+
+		// same number of groups 
+		assert(extents_psi.extent(0) == extents_phi.extent(1)); 
+		// same number of space dofs 
+		assert(extents_psi.extent(2) == extents_phi.extent(2)); 
+	}
+
+	void Mult(const mfem::Vector &psi, mfem::Vector &phi) const; 
+	void MultTranspose(const mfem::Vector &phi, mfem::Vector &psi) const; 
 };
