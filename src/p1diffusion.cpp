@@ -273,6 +273,7 @@ void DGVectorJumpJumpIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &e
 			}
 		}
 	}
+	elmat *= beta; 
 }
 
 void BoundaryNormalFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, 
