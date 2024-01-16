@@ -91,7 +91,7 @@ LIST(APPEND EXE
 	exe/sweep.cpp
 	exe/parsweep.cpp
 	exe/scratch.cpp
-	exe/scallion.cpp
+	exe/chive.cpp
 	exe/p1.cpp
 )
 
