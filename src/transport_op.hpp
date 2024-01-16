@@ -7,12 +7,11 @@ class TransportOperator : public mfem::Operator
 {
 private:
 	const mfem::Operator &D, &Linv, &S; 
-	const mfem::Vector &source; 
 	mutable mfem::Vector psi; 
 public:
 	TransportOperator(const mfem::Operator &_D, const mfem::Operator &_Linv, const mfem::Operator &_S, 
-		const mfem::Vector &_source, mfem::Vector &_psi)
-		: D(_D), Linv(_Linv), S(_S), source(_source), mfem::Operator(_D.Height(), _S.Width())
+		mfem::Vector &_psi)
+		: D(_D), Linv(_Linv), S(_S), mfem::Operator(_D.Height(), _S.Width())
 	{
 		// get view into psi to avoid allocating psi-sized vector 
 		psi.MakeRef(_psi, 0, _psi.Size()); 

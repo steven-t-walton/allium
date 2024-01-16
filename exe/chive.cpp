@@ -384,7 +384,7 @@ int main(int argc, char *argv[]) {
 	bool write_graph = lua["sn"]["write_graph"].get_or(false); 
 	if (write_graph) Linv.WriteGraphToDot("graph"); 
 
-	TransportOperator T(D, Linv, Ms_form, source_vec, psi); 
+	TransportOperator T(D, Linv, Ms_form, psi); 
 
 	DiffusionSyntheticAccelerationOperator *prec = nullptr; 
 	mfem::HypreParMatrix *dsa_mat = nullptr; 
