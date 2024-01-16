@@ -32,11 +32,6 @@ public:
 	}
 };
 
-class GaussLegendreQuadratureRule : public AngularQuadrature {
-public:
-	GaussLegendreQuadratureRule(int order, int dim); 
-};
-
 class DiscreteToMoment : public mfem::Operator {
 private:
 	const AngularQuadrature &quad; 

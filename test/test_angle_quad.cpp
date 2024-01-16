@@ -16,7 +16,7 @@ TEST(AngularQuadrature, isotropic) {
 	}; 
 
 	std::vector<int> orders = {2,4,6,8,10,12,16}; 
-	for (auto d=2; d<4; d++) {
+	for (auto d=1; d<4; d++) {
 		for (const auto &order : orders) {
 			LevelSymmetricQuadrature quad(order,d); 
 			double val = Integrate(quad, f); 
@@ -37,5 +37,25 @@ TEST(AngularQuadrature, quadratic) {
 			double val = Integrate(quad, f); 
 			EXPECT_FLOAT_EQ(val, 4*M_PI); 		
 		}		
+	}
+}
+
+TEST(AngularQuadrature, NPoints1D) {
+	std::vector<int> orders = {2,4,6,8,10,12,14,16}; 
+	for (const auto &order : orders) {
+		LevelSymmetricQuadrature quad(order, 1); 
+		EXPECT_EQ(quad.Size(), order); 
+	}	
+}
+
+TEST(AngularQuadrature, GaussLegendre1D) {
+	auto f = [](const mfem::Vector &Omega) {
+		return Omega(0)*Omega(0)/4/M_PI; 
+	};
+	std::vector<int> orders = {2,4,6,8,10,12,14,16}; 
+	for (const auto &order : orders) {
+		LevelSymmetricQuadrature quad(order,1); 
+		double val = Integrate(quad, f); 
+		EXPECT_FLOAT_EQ(val, 1./3); 
 	}
 }
