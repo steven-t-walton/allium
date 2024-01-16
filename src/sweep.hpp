@@ -51,11 +51,5 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 	std::function<double(double x, double y, double z, double mu, double eta, double xi)> inflow_func, 
 	mfem::Vector &source_vec); 
 
-// void FormTransportSourceFromLuaFunctions(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
-// 	const TransportVectorExtents &psi_ext, 
-// 	std::function<double(double x, double y, double z, double mu, double eta, double xi)> source_func, 
-// 	std::function<double(double x, double y, double z, double mu, double eta, double xi)> inflow_func, 
-// 	mfem::Vector &source_vec);
-
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const TransportVectorExtents &psi_ext, mfem::Coefficient &source, mfem::Coefficient &inflow, mfem::Vector &source_vec); 
