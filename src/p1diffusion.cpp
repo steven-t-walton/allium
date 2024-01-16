@@ -312,3 +312,64 @@ void BoundaryNormalFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteEl
 		}
 	}
 }
+
+mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha)
+{
+	mfem::Array<int> offsets(3); 
+	offsets[0] = 0; 
+	offsets[1] = vfes.GetVSize(); 
+	offsets[2] = fes.GetVSize(); 
+	offsets.PartialSum();
+
+	mfem::ParBilinearForm Mtform(&vfes);
+	mfem::ProductCoefficient total3(3.0, total); 
+	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3));
+	Mtform.AddInteriorFaceIntegrator(new DGVectorJumpJumpIntegrator); 
+	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator); 
+	Mtform.Assemble(); 
+	Mtform.Finalize();  
+	mfem::HypreParMatrix *Mt = Mtform.ParallelAssemble(); 
+
+	mfem::ParBilinearForm Maform(&fes); 
+	mfem::ConstantCoefficient alpha_c(alpha); 
+	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
+	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha, false)); 
+	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+	Maform.Assemble(); 
+	Maform.Finalize(); 
+	mfem::HypreParMatrix *Ma = Maform.ParallelAssemble();
+
+	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
+	mfem::ConstantCoefficient neg_one(-1.0); 
+	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
+	Dform.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator); 
+	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5)); 
+	Dform.Assemble(); 
+	Dform.Finalize(); 
+	mfem::HypreParMatrix *D = Dform.ParallelAssemble(); 
+	mfem::HypreParMatrix *DT = D->Transpose(); 
+	(*DT) *= -1.0; 
+
+	auto *op = new mfem::BlockOperator(offsets); 
+	op->SetBlock(0,0, Mt); 
+	op->SetBlock(0,1, DT); 
+	op->SetBlock(1,0, D); 
+	op->SetBlock(1,1, Ma); 
+	op->owns_blocks = 1; 
+	return op; 
+}
+
+mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop) 
+{
+	mfem::Array2D<mfem::HypreParMatrix*> blocks(bop.NumRowBlocks(), bop.NumColBlocks()); 
+	for (auto row=0; row<blocks.NumRows(); row++) {
+		for (auto col=0; col<blocks.NumCols(); col++) {
+			const mfem::Operator *op = &bop.GetBlock(row,col); 
+			const auto *hypre_op = dynamic_cast<const mfem::HypreParMatrix*>(op); 
+			if (!hypre_op) MFEM_ABORT("blocks must be HypreParMatrix"); 
+			blocks(row,col) = const_cast<mfem::HypreParMatrix*>(hypre_op); 
+		}
+	}
+	return mfem::HypreParMatrixFromBlocks(blocks); 
+}

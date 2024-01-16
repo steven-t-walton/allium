@@ -5,6 +5,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/comment_stream.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/p1diffusion.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/transport_op.hpp
 )
 
 LIST(APPEND srcs 
