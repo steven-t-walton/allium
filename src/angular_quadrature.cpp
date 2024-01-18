@@ -49,7 +49,7 @@ LevelSymmetricQuadrature::LevelSymmetricQuadrature(int _order, int _dim) : dim(_
 	}
 #ifndef NDEBUG 
 	if (abs(weights_sum - 4*M_PI) > 1e-7) {
-		MFEM_ABORT("quadrature file " << file_name << " has weights sum to " << weights_sum); 
+		MFEM_ABORT("quadrature order " << _order << ", dimension " << dim << " has weights that don't sum to 4pi"); 
 	} 
 #endif 
 }
