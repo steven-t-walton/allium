@@ -8,6 +8,7 @@ LIST(APPEND TESTS
 	test_integrators.cpp
 	test_diffusion_mms.cpp
 	test_p1.cpp
+	test_mfem.cpp
 )
 
 LIST(APPEND PAR_TESTS

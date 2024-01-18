@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 #include "p1diffusion.hpp"
+#include "smm_integrators.hpp"
 
 TEST(Integrators, Penalty1D) {
 	mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D(3, 1.0); 
@@ -135,4 +136,22 @@ TEST(Integrators, VectorJumpJump2DY) {
 	double inner = v*x; 
 	double answer = (2-1)*(6-3); 
 	EXPECT_DOUBLE_EQ(inner, answer); 
+}
+
+TEST(Integrators, SMMWeakDiv) {
+	mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D(1,1, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace fes(&mesh, &fec); 
+
+	mfem::DenseMatrix T(dim); 
+	T(0,0) = 1.0; T(0,1) = T(1,0) = 0.25; T(1,1) = 2.0; 
+	mfem::MatrixConstantCoefficient Tc(T); 
+	WeakTensorDivergenceLFIntegrator wtd(Tc); 
+	mfem::Vector elvec; 
+	wtd.AssembleRHSElementVect(*fes.GetFE(0), *mesh.GetElementTransformation(0), elvec); 
+	mfem::Vector exact({-0.625, 0.375, -0.375, 0.625, -1.125, -0.875, 0.875, 1.125}); 
+	exact -= elvec; 
+	double norm = exact.Norml2(); 
+	EXPECT_DOUBLE_EQ(norm, 0.0); 
 }

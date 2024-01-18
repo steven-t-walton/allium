@@ -6,6 +6,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/p1diffusion.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/transport_op.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/smm_integrators.hpp
 )
 
 LIST(APPEND srcs 
@@ -14,6 +15,7 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/p1diffusion.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/transport_op.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/smm_integrators.cpp
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)
