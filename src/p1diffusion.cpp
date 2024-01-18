@@ -374,3 +374,39 @@ mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop)
 	}
 	return mfem::HypreParMatrixFromBlocks(blocks); 
 }
+
+mfem::HypreParMatrix *CreateLDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, mfem::Vector *beta) 
+{
+	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>; 
+	mfem::ParBilinearForm iMtform(&vfes);
+	mfem::ProductCoefficient total3(3.0, total); 
+	iMtform.AddDomainIntegrator(new mfem::InverseIntegrator(new mfem::VectorMassIntegrator(total3))); 
+	iMtform.Assemble(); 
+	iMtform.Finalize();  
+	auto iMt = HypreParMatrixPtr(iMtform.ParallelAssemble()); 
+
+	mfem::ParBilinearForm Maform(&fes); 
+	mfem::ConstantCoefficient alpha_c(alpha); 
+	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
+	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha, false)); 
+	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+	Maform.Assemble(); 
+	Maform.Finalize(); 
+	auto Ma = HypreParMatrixPtr(Maform.ParallelAssemble());
+
+	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
+	mfem::ConstantCoefficient neg_one(-1.0); 
+	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
+	Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(beta)); 
+	// Dform.AddBdrFaceIntegrator(new mfem::LDGTraceIntegrator); 
+	Dform.Assemble(); 
+	Dform.Finalize(); 
+	auto D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
+	auto DT = HypreParMatrixPtr(D->Transpose()); 
+
+	auto iMtDT = HypreParMatrixPtr(mfem::ParMult(iMt.get(), DT.get(), true)); 
+	auto DiMtDT = HypreParMatrixPtr(mfem::ParMult(D.get(), iMtDT.get(), true)); 
+	auto *S = mfem::ParAdd(DiMtDT.get(), Ma.get()); 
+	return S; 
+}

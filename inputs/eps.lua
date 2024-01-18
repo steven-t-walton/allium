@@ -40,10 +40,17 @@ mip = {
 	max_it = 50
 }
 
+ldgsa = {
+	type = "LDGSA", 
+	solver = "cg", 
+	reltol = 1e-2, 
+	max_it = 50
+}
+
 sn = {
 	fe_order = 1, 
 	sn_order = 4, 
-	acceleration = p1sa, 
+	acceleration = ldgsa, 
 	tol = 1e-6, 
 	max_it = 100, 
 	solver = "sli",

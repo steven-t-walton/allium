@@ -58,11 +58,18 @@ p1sa = {
 	solver = "direct"
 }
 
+ldgsa = {
+	type = "LDGSA", 
+	solver = "cg", 
+	reltol = 1e-2, 
+	max_it = 50
+}
+
 sn = {
 	fe_order = 1, 
 	sn_order = 16, 
 	tol = 1e-5, 
 	max_it = 200, 
-	acceleration = mip,
-	solver = "gmres"
+	acceleration = ldgsa,
+	solver = "sli"
 }

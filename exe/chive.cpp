@@ -81,12 +81,28 @@ int main(int argc, char *argv[]) {
 	CommentStreamBuf comm_buf(mfem::out, '#'); 
 
 	if (root) {
-		mfem::out << "      _     _           \n"; 
-		mfem::out << "  ___| |__ (_)_   _____ \n";  
-		mfem::out << " / __| '_ \\| \\ \\ / / _ \\ \n";
-		mfem::out << "| (__| | | | |\\ V /  __/\n";
-		mfem::out << " \\___|_| |_|_| \\_/ \\___|\n"; 
-		mfem::out << "\na linear transport solver\n"; 
+		mfem::out << "      __                            \n"; 
+		mfem::out << "     /\\ \\      __                   \n"; 
+		mfem::out << "  ___\\ \\ \\___ /\\_\\  __  __     __   \n"; 
+		mfem::out << " /'___\\ \\  _ `\\/\\ \\/\\ \\/\\ \\  /'__`\\ \n"; 
+		mfem::out << "/\\ \\__/\\ \\ \\ \\ \\ \\ \\ \\ \\_/ |/\\  __/ \n"; 
+		mfem::out << "\\ \\____\\\\ \\_\\ \\_\\ \\_\\ \\___/ \\ \\____\\ \n";
+		mfem::out << " \\/____/ \\/_/\\/_/\\/_/\\/__/   \\/____/\n"; 
+		mfem::out << "\n     a linear transport solver\n"; 
+		mfem::out << std::endl; 
+	}
+
+	std::string input_file, lua_cmds; 
+	mfem::OptionsParser args(argc, argv); 
+	args.AddOption(&input_file, "-i", "--input", "input file name", true); 
+	args.AddOption(&lua_cmds, "-l", "--lua", "lua commands to run", false); 
+	args.Parse(); 
+	if (!args.Good()) {
+		args.PrintUsage(par_out); 
+		return 1; 
+	}
+	if (root) { 
+		args.PrintOptions(mfem::out); 
 		mfem::out << std::endl; 
 	}
 
@@ -98,9 +114,13 @@ int main(int argc, char *argv[]) {
 	// --- load lua file --- 
 	sol::state lua; 
 	lua.open_libraries(); // allows using standard libraries (e.g. math) in input
-	lua.script_file(argv[1]); // load from first cmd line argument 
+	lua.script_file(input_file); // load from first cmd line argument 
 
-	out << YAML::Key << "input file" << YAML::Value << realpath(argv[1], nullptr); 
+	if (!lua_cmds.empty()) {
+		lua.script(lua_cmds); 
+	}
+
+	out << YAML::Key << "input file" << YAML::Value << realpath(input_file.c_str(), nullptr); 
 
 	// --- extract list of materials --- 
 	std::vector<std::string> attr_list; 
@@ -445,7 +465,25 @@ int main(int argc, char *argv[]) {
 			dsa_solver = new mfem::TripleProductOperator(ceo, slu, ceo_t, true, true, true); 
 		} 
 		else if (type == "LDGSA") {
-			MFEM_ABORT("not implemented yet"); 	
+			mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
+			mfem::Vector beta(dim); 
+			for (int d=0; d<dim; d++) { beta(d) = d+1; }
+			dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta); 
+			auto *itsolve = new mfem::CGSolver(MPI_COMM_WORLD); 
+			sol::optional<double> rel_avail = accel["reltol"]; 
+			sol::optional<double> abs_avail = accel["abstol"]; 
+			if (not(rel_avail or abs_avail)) MFEM_ABORT("must specify tolerance for iterative solver"); 
+			if (rel_avail) itsolve->SetRelTol(rel_avail.value()); 
+			if (abs_avail) itsolve->SetAbsTol(abs_avail.value()); 
+			itsolve->SetMaxIter(accel["max_it"].get_or(50));
+			itsolve->SetPrintLevel(0);
+			auto *amg = new mfem::HypreBoomerAMG(*dsa_mat); 
+			amg->SetPrintLevel(0); 
+			itsolve->SetOperator(*dsa_mat); 
+			itsolve->SetPreconditioner(*amg); 
+			itsolve->iterative_mode = false; 
+			dsa_solver = itsolve; 
+			dsa_prec = amg; 
 		}
 		else MFEM_ABORT("dsa type " << type << " not defined"); 
 
