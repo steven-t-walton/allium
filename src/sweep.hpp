@@ -17,6 +17,7 @@ private:
 	// this processor owns element ids in the 
 	// range [mesh_offsets[0], mesh_offsets[1]) 
 	mfem::Array<HYPRE_BigInt> mesh_offsets; 
+	mfem::Array<HYPRE_BigInt> dof_offsets; 
 	// map a ghost element id to its global id 
 	mfem::Array<HYPRE_BigInt> fnbr_to_global; 
 	// "inverse" map: global id to the ghost element id 
@@ -30,6 +31,11 @@ private:
 	std::unique_ptr<const mfem::Table> element_to_face; 
 	// the local graph object 
 	igraph_t graph; 
+	bool exchange_downwind = false; 
+	mfem::Table downwind_send_table; 
+	mfem::Table downwind_recv_table; 
+
+	mutable mfem::Vector psi_fnbr; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 		const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow); 
@@ -37,6 +43,8 @@ public:
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
 
 	void WriteGraphToDot(std::string prefix) const; 
+	const mfem::Vector &GetFaceNbrData() const { return psi_fnbr; }
+	void ExchangeDownwindFaceNbrData(bool exchange=true) { exchange_downwind = exchange; }
 };
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 

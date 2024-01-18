@@ -19,6 +19,7 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	// maps index into the ghost element id to its global element number
 	const auto dim = mesh.Dimension(); 
 	const auto Ne = mesh.GetNE(); 
+	const auto Ndof = fes.GetVSize(); 
 	const auto Nomega = quad.Size(); 
 	const auto nbr_el = mesh.GetNFaceNeighborElements(); 
 	const auto num_face_nbrs = mesh.GetNFaceNeighbors(); 
@@ -59,9 +60,11 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 
 	// --- generate local offsets --- 
 	// this processor owns elements [mesh_offsets[0], mesh_offsets[1])
-	mfem::Array<HYPRE_BigInt> *ptr = &mesh_offsets; 
-	HYPRE_BigInt Ne_hypre = Ne; 
-	mesh.GenerateOffsets(1, &Ne_hypre, &ptr); 
+	// and dofs [dof_offsets[0], dof_offsets[1])
+	mfem::Array<HYPRE_BigInt> *ptr[2] = {&mesh_offsets, &dof_offsets}; 
+	HYPRE_BigInt N_hypre[2]; 
+	N_hypre[0] = Ne; N_hypre[1] = Ndof; 
+	mesh.GenerateOffsets(2, N_hypre, ptr); 
 
 	// --- swap offsets with parallel neighbors --- 
 	// from this info can compute global element number of ghost cells 
@@ -74,7 +77,14 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	MPI_Waitall(num_face_nbrs, send_requests, statuses); 
 	MPI_Waitall(num_face_nbrs, recv_requests, statuses); 
 
-	delete[] requests; delete[] statuses; 
+	mfem::Array<HYPRE_BigInt> dof_face_nbr_offsets(num_face_nbrs); 
+	for (auto fn=0; fn<num_face_nbrs; fn++) {
+		auto nbr_rank = mesh.GetFaceNbrRank(fn); 
+		MPI_Isend(&dof_offsets[0], 1, HYPRE_MPI_BIG_INT, nbr_rank, 0, MPI_COMM_WORLD, &send_requests[fn]); 
+		MPI_Irecv(&dof_face_nbr_offsets[fn], 1, HYPRE_MPI_BIG_INT, nbr_rank, 0, MPI_COMM_WORLD, &recv_requests[fn]); 
+	}
+	MPI_Waitall(num_face_nbrs, send_requests, statuses); 
+	MPI_Waitall(num_face_nbrs, recv_requests, statuses); 
 
 	// --- build the actual map with "inverse" via unorder_map --- 
 	fnbr_to_global.SetSize(nbr_el); 
@@ -162,6 +172,75 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	igraph_bool_t is_dag; 
 	igraph_is_dag(&graph, &is_dag); 
 	if (!is_dag) { MFEM_ABORT("graph is not a dag"); }
+
+	mfem::Array<mfem::Connection> send_edges; 
+	igraph_eit_t eit; 
+	igraph_eit_create(&graph, igraph_ess_all(IGRAPH_EDGEORDER_ID), &eit); 
+	mfem::Array<int> dofs; 
+	while (!IGRAPH_EIT_END(eit)) {
+		auto eid = IGRAPH_EIT_GET(eit); 
+		auto head = IGRAPH_FROM(&graph, eid); 
+		auto tail = IGRAPH_TO(&graph, eid); 
+		if (head >= Ne*Nomega) {
+			auto e = head / Nomega; 
+			auto fn = fnbr_to_fn[e - Ne];  
+			fes.GetElementDofs(tail / Nomega, dofs);
+			const auto a = tail % Nomega; 
+			for (const auto &dof : dofs) {
+				send_edges.Append({fn, dof * Nomega + a}); 
+			} 
+		}
+		IGRAPH_EIT_NEXT(eit); 
+	}
+	igraph_eit_destroy(&eit); 
+	send_edges.Sort(); send_edges.Unique(); 
+	downwind_send_table.MakeFromList(num_face_nbrs, send_edges); 
+	downwind_recv_table.MakeI(num_face_nbrs); 
+
+	// exchange how many messages will be sent 
+	for (auto fn=0; fn<num_face_nbrs; fn++) {
+		auto nbr_rank = mesh.GetFaceNbrRank(fn); 
+		auto size = downwind_send_table.RowSize(fn); 
+		// send, wait for message to clear so buffer doesn't deallocate first 
+		MPI_Isend(&size, 1, MPI_INT, nbr_rank, 0, MPI_COMM_WORLD, &send_requests[fn]); 
+		MPI_Wait(&send_requests[fn], &statuses[fn]); 
+
+		MPI_Irecv(&downwind_recv_table.GetI()[fn], 1, MPI_INT, nbr_rank, 0, MPI_COMM_WORLD, &recv_requests[fn]); 
+	}
+	MPI_Waitall(num_face_nbrs, recv_requests, statuses);
+
+	// send actual data 
+	downwind_recv_table.MakeJ();  
+	for (auto fn=0; fn<num_face_nbrs; fn++) {
+		auto nbr_rank = mesh.GetFaceNbrRank(fn); 
+		MPI_Isend(downwind_send_table.GetRow(fn), downwind_send_table.RowSize(fn), 
+			MPI_INT, nbr_rank, 0, MPI_COMM_WORLD, &send_requests[fn]); 
+		MPI_Irecv(downwind_recv_table.GetRow(fn), downwind_recv_table.RowSize(fn), 
+			MPI_INT, nbr_rank, 0, MPI_COMM_WORLD, &recv_requests[fn]); 
+	}
+	MPI_Waitall(num_face_nbrs, send_requests, statuses);
+	MPI_Waitall(num_face_nbrs, recv_requests, statuses);
+
+	std::unordered_map<HYPRE_BigInt, int> face_nbr_local_dof_map; 
+	const auto &face_nbr_glob_dof_map = fes.face_nbr_glob_dof_map; 
+	for (auto i=0; i<face_nbr_glob_dof_map.Size(); i++) {
+		face_nbr_local_dof_map[face_nbr_glob_dof_map[i]] = i; 
+	}
+
+	// convert to ghost ids 
+	for (auto fn=0; fn<downwind_recv_table.Size(); fn++) {
+		auto *row = downwind_recv_table.GetRow(fn); 
+		for (auto i=0; i<downwind_recv_table.RowSize(fn); i++) {
+			auto dof = row[i] / Nomega; 
+			auto a = row[i] % Nomega; 
+			auto offset = dof_face_nbr_offsets[fn]; 
+			auto gdof = offset + dof; 
+			auto fnbr = face_nbr_local_dof_map.at(gdof); 
+			row[i] = fnbr*Nomega + a; 
+		}
+	}
+
+	delete[] requests; delete[] statuses; 
 }
 
 InverseAdvectionOperator::~InverseAdvectionOperator()
@@ -199,7 +278,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 	// allocate face neighbor data 
 	TransportVectorExtents psi_fnbr_ext(1, Nomega, Ndof_fnbr);
-	mfem::Vector psi_fnbr(TotalExtent(psi_fnbr_ext)); 
+	psi_fnbr.SetSize(TotalExtent(psi_fnbr_ext)); 
 	psi_fnbr = 0.0; 
 	TransportVectorView psi_fnbr_view(psi_fnbr.GetData(), psi_fnbr_ext); 
 
@@ -419,11 +498,55 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			}
 		}
 	}
-	MPI_Barrier(MPI_COMM_WORLD); 
-
 	// clean up data 
 	igraph_vector_int_destroy(&nbrs); 
 	igraph_vector_int_destroy(&nbr_nbrs); 
+
+	// use barrier to avoid tag clash? 
+	MPI_Barrier(MPI_COMM_WORLD); 
+
+	if (exchange_downwind) {
+		const auto num_face_nbrs = mesh.GetNFaceNeighbors(); 
+		MPI_Request *requests = new MPI_Request[2*num_face_nbrs];
+		MPI_Request *send_requests = requests;
+		MPI_Request *recv_requests = requests + num_face_nbrs;
+		MPI_Status  *statuses = new MPI_Status[num_face_nbrs];
+
+		mfem::Vector send_buffer(downwind_send_table.Size_of_connections()); 
+		for (auto fn=0; fn<num_face_nbrs; fn++) {
+			const auto offset = downwind_send_table.GetI()[fn]; 
+			const auto *row = downwind_send_table.GetRow(fn); 
+			for (auto i=0; i<downwind_send_table.RowSize(fn); i++) {
+				const auto dof = row[i] / Nomega; 
+				const auto a = row[i] % Nomega; 
+				send_buffer[offset+i] = psi_view(0, a, dof); 
+			}
+		}
+		mfem::Vector recv_buffer(downwind_recv_table.Size_of_connections()); 
+		for (auto fn=0; fn<downwind_send_table.Size(); fn++) {
+			const auto send_offset = downwind_send_table.GetI()[fn]; 
+			const auto recv_offset = downwind_recv_table.GetI()[fn]; 
+			const auto nbr_rank = mesh.GetFaceNbrRank(fn); 
+			MPI_Isend(send_buffer.GetData() + send_offset, downwind_send_table.RowSize(fn), 
+				MPI_DOUBLE, nbr_rank, 0, MPI_COMM_WORLD, &send_requests[fn]); 
+			MPI_Irecv(recv_buffer.GetData() + recv_offset, downwind_recv_table.RowSize(fn), 
+				MPI_DOUBLE, nbr_rank, 0, MPI_COMM_WORLD, &recv_requests[fn]); 
+		}
+		MPI_Waitall(num_face_nbrs, send_requests, statuses); 
+		MPI_Waitall(num_face_nbrs, recv_requests, statuses); 
+
+		for (auto fn=0; fn<num_face_nbrs; fn++) {
+			const auto offset = downwind_recv_table.GetI()[fn]; 
+			const auto *row = downwind_recv_table.GetRow(fn); 
+			for (auto i=0; i<downwind_recv_table.RowSize(fn); i++) {
+				const auto a = row[i] % Nomega; 
+				const auto dof = row[i] / Nomega; 
+				psi_fnbr_view(0,a,dof) = recv_buffer(offset+i); 
+			}
+		}
+
+		delete[] requests; delete[] statuses; 
+	}
 }
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
