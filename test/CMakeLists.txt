@@ -9,6 +9,7 @@ LIST(APPEND TESTS
 	test_diffusion_mms.cpp
 	test_p1.cpp
 	test_mfem.cpp
+	test_smm.cpp
 )
 
 LIST(APPEND PAR_TESTS
