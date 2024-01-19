@@ -42,20 +42,6 @@ public:
 		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat); 
 };
 
-class BoundaryNormalFaceLFIntegrator : public mfem::LinearFormIntegrator 
-{
-private:
-	mfem::Vector shape, nor; 
-	mfem::Coefficient &inflow; 
-	int oa, ob; 
-public:
-	BoundaryNormalFaceLFIntegrator(mfem::Coefficient &_inflow, int a=1, int b=1) : inflow(_inflow), oa(a), ob(b) { } 
-	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::ElementTransformation &T, mfem::Vector &elvec) {
-		MFEM_ABORT("only call for faces"); 
-	}
-	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, mfem::Vector &elvec); 
-};
-
 mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.25); 
 

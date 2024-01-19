@@ -276,44 +276,6 @@ void DGVectorJumpJumpIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &e
 	elmat *= beta; 
 }
 
-void BoundaryNormalFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, 
-	mfem::Vector &elvec) 
-{
-	const auto ndof = el.GetDof(); 
-	const auto dim = el.GetDim(); 
-	shape.SetSize(ndof); 
-	nor.SetSize(dim); 
-	elvec.SetSize(ndof*dim); 
-	elvec = 0.0; 
-
-	const mfem::IntegrationRule *ir = IntRule;
-	if (ir == NULL)
-	{
-		int intorder = oa * el.GetOrder() + ob;  
-		ir = &mfem::IntRules.Get(el.GetGeomType(), intorder);
-	}
-
-	for (auto n=0; n<ir->GetNPoints(); n++) {
-		const mfem::IntegrationPoint &ip = ir->IntPoint(n); 
-		trans.SetAllIntPoints(&ip); 
-		const mfem::IntegrationPoint &eip = trans.GetElement1IntPoint(); 
-		if (dim>1) {
-			mfem::CalcOrtho(trans.Jacobian(), nor); 
-		}
-		else {
-			nor(0) = 1.0; 
-		}
-
-		double inf = inflow.Eval(*trans.Face, ip); 
-		el.CalcShape(eip, shape); 
-		for (int d=0; d<dim; d++) {
-			for (int i=0; i<ndof; i++) {
-				elvec(i + d*ndof) += shape(i) * nor(d) * ip.weight * inf; 
-			}
-		}
-	}
-}
-
 mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha)
 {
@@ -333,7 +295,7 @@ mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace
 	mfem::HypreParMatrix *Mt = Mtform.ParallelAssemble(); 
 
 	mfem::ParBilinearForm Maform(&fes); 
-	mfem::ConstantCoefficient alpha_c(alpha); 
+	mfem::ConstantCoefficient alpha_c(alpha/2); 
 	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha, false)); 
 	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
