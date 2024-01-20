@@ -1,5 +1,6 @@
 #include "config.hpp"
 #include "angular_quadrature.hpp"
+#include "tvector.hpp"
 #include <regex>
 
 LevelSymmetricQuadrature::LevelSymmetricQuadrature(int _order, int _dim) : dim(_dim) {

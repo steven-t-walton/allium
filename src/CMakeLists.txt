@@ -10,6 +10,7 @@ LIST(APPEND hdrs
 )
 
 LIST(APPEND srcs 
+	${CMAKE_CURRENT_SOURCE_DIR}/tvector.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/angular_quadrature.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mip.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.cpp

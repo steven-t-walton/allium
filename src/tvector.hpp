@@ -2,6 +2,8 @@
 
 #include "config.hpp"
 #include "mdspan/mdspan.hpp"
+#include "mfem.hpp"
+#include "angular_quadrature.hpp"
 
 #ifdef TRANSPORT_VECTOR_LAYOUT_LEFT
 using TransportVectorLayout = Kokkos::layout_left; 
@@ -31,3 +33,6 @@ T TotalExtent(const Kokkos::extents<T,Extents...> &ext) {
 	}
 	return size; 
 }
+
+void ProjectPsi(const mfem::FiniteElementSpace &fes, const AngularQuadrature &quad, 
+	std::function<double(const mfem::Vector &x, const mfem::Vector &Omega)> f, TransportVectorView psi); 
