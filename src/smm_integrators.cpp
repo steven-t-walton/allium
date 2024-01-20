@@ -91,6 +91,9 @@ void VectorJumpTensorAverageLFIntegrator::AssembleRHSElementVect(
 	elvec.SetSize(dim*(ndof1+ndof2)); 
 	elvec = 0.0; 
 
+	mfem::Vector elvec1(elvec, 0, dim*ndof1); 
+	mfem::Vector elvec2(elvec, dim*ndof1, dim*ndof2); 
+
 	const mfem::IntegrationRule *ir = IntRule;
 	if (ir == NULL)
 	{
@@ -120,13 +123,13 @@ void VectorJumpTensorAverageLFIntegrator::AssembleRHSElementVect(
 
 		for (auto d=0; d<dim; d++) {
 			for (auto i=0; i<ndof1; i++) {
-				elvec(i + d*ndof1) -= shape1(i) * Tn1(d); 
+				elvec1(i + d*ndof1) -= shape1(i) * Tn1(d); 
 			}
 		}
 
 		for (auto d=0; d<dim; d++) {
 			for (auto i=0; i<ndof2; i++) {
-				elvec(dim*ndof1 + i * d*ndof2) += shape2(i) * Tn1(d); 
+				elvec2(i + d*ndof2) += shape2(i) * Tn1(d); 
 			}
 		}
 	}

@@ -155,3 +155,53 @@ TEST(Integrators, SMMWeakDiv) {
 	double norm = exact.Norml2(); 
 	EXPECT_DOUBLE_EQ(norm, 0.0); 
 }
+
+TEST(Integrators, SMMFaceTermInt) {
+	mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D(2,1, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace fes(&mesh, &fec); 
+	mfem::FiniteElementSpace vfes(&mesh, &fec, dim); 
+
+	mfem::DenseMatrix T(dim); 
+	T(0,0) = 1.0; T(0,1) = T(1,0) = 0.25; T(1,1) = 2.0; 
+	mfem::MatrixConstantCoefficient Tc(T); 
+
+	VectorJumpTensorAverageLFIntegrator lfint(Tc); 
+
+	mfem::FaceElementTransformations *trans; 
+	for (auto f=0; f<mesh.GetNumFaces(); f++) {
+		trans = mesh.GetInteriorFaceTransformations(f); 
+		if (trans) break; 
+	}
+
+	const auto &fe1 = *vfes.GetFE(trans->Elem1No); 
+	const auto &fe2 = *vfes.GetFE(trans->Elem2No); 
+	mfem::Vector elvec; 
+	lfint.AssembleRHSElementVect(fe1, fe2, *trans, elvec); 
+	mfem::Vector ex({0,-.5,0,-.5,0,-1./8,0,-1./8, .5,0,.5,0,1./8,0,1./8,0}); 
+	ex -= elvec; 
+	EXPECT_DOUBLE_EQ(ex.Norml2(), 0.0); 
+}
+
+TEST(Integrators, SMMFaceTermBdr) {
+	mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D(2,1, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace fes(&mesh, &fec); 
+	mfem::FiniteElementSpace vfes(&mesh, &fec, dim); 
+
+	mfem::DenseMatrix T(dim); 
+	T(0,0) = 1.0; T(0,1) = T(1,0) = 0.25; T(1,1) = 2.0; 
+	mfem::MatrixConstantCoefficient Tc(T); 
+
+	VectorJumpTensorAverageLFIntegrator lfint(Tc); 
+
+	auto &trans = *mesh.GetBdrFaceTransformations(0); 
+	const auto &fe1 = *vfes.GetFE(trans.Elem1No); 
+	mfem::Vector elvec; 
+	lfint.AssembleRHSElementVect(fe1, trans, elvec); 
+	mfem::Vector ex({1./16, 1./16, 0, 0, 0.5, 0.5, 0, 0}); 
+	ex -= elvec; 
+	EXPECT_DOUBLE_EQ(ex.Norml2(), 0.0); 
+}
