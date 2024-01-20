@@ -12,7 +12,7 @@ private:
 	mfem::DenseMatrix gshape, T; 
 	mfem::Vector T_flat, gradT; 
 public:
-	WeakTensorDivergenceLFIntegrator(mfem::MatrixCoefficient &_T, int a=2, int b=0) : Tcoef(_T), oa(a), ob(b) { }
+	WeakTensorDivergenceLFIntegrator(mfem::MatrixCoefficient &_T, int a=2, int b=1) : Tcoef(_T), oa(a), ob(b) { }
 	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::ElementTransformation &trans, mfem::Vector &elvec); 
 };
 
@@ -25,7 +25,7 @@ private:
 	mfem::Vector shape1, shape2, nor, Tn1, Tn2; 
 	mfem::DenseMatrix T; 
 public:
-	VectorJumpTensorAverageLFIntegrator(mfem::MatrixCoefficient &_T, int a=2, int b=0) : Tcoef(_T), oa(a), ob(b) { }
+	VectorJumpTensorAverageLFIntegrator(mfem::MatrixCoefficient &_T, int a=2, int b=1) : Tcoef(_T), oa(a), ob(b) { }
 	void AssembleRHSElementVect(const mfem::FiniteElement&, mfem::ElementTransformation&, mfem::Vector&) {
 		MFEM_ABORT("call on faces only"); 
 	}
@@ -42,7 +42,7 @@ private:
 	mfem::Coefficient &inflow; 
 	int oa, ob; 
 public:
-	BoundaryNormalFaceLFIntegrator(mfem::Coefficient &_inflow, int a=1, int b=1) : inflow(_inflow), oa(a), ob(b) { } 
+	BoundaryNormalFaceLFIntegrator(mfem::Coefficient &_inflow, int a=2, int b=1) : inflow(_inflow), oa(a), ob(b) { } 
 	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::ElementTransformation &T, mfem::Vector &elvec) {
 		MFEM_ABORT("only call for faces"); 
 	}
