@@ -10,6 +10,7 @@ LIST(APPEND TESTS
 	test_p1.cpp
 	test_mfem.cpp
 	test_smm.cpp
+	test_phase_coef.cpp
 )
 
 LIST(APPEND PAR_TESTS

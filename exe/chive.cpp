@@ -8,6 +8,7 @@
 #include "p1diffusion.hpp"
 #include "sweep.hpp"
 #include "transport_op.hpp"
+#include "phase_coefficient.hpp"
 #include "comment_stream.hpp"
 
 class TransportIterationMonitor : public mfem::IterativeSolverMonitor
@@ -386,18 +387,35 @@ int main(int argc, char *argv[]) {
 	// allows either space/angle dependent source function 
 	sol::optional<sol::function> source_func_avail = lua["source_function"]; 
 	sol::optional<sol::function> inflow_func_avail = lua["inflow_function"]; 
-	mfem::Vector source_vec; 
+	PhaseSpaceCoefficient *source_coef, *inflow_coef; 
 	if (source_func_avail) {
-		if (!inflow_func_avail) MFEM_ABORT("must supply both source and inflow functions"); 
 		std::function<double(double x, double y, double z, double mu, double eta, double xi)> lua_source
-			= source_func_avail.value(); 
+			= source_func_avail.value(); 		
+		auto source_func = [lua_source](const mfem::Vector &x, const mfem::Vector &Omega) {
+			return lua_source(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
+		};
+		source_coef = new FunctionGrayCoefficient(source_func); 
+	} 
+	else {
+		source_coef = new IsotropicGrayCoefficient(source); 
+	}
+
+	if (inflow_func_avail) {
 		std::function<double(double x, double y, double z, double mu, double eta, double xi)> lua_inflow
 			= inflow_func_avail.value(); 
-		FormTransportSource(fes, quad, psi_ext, lua_source, lua_inflow, source_vec); 
-	}
+		auto inflow_func = [lua_inflow](const mfem::Vector &x, const mfem::Vector &Omega) {
+			return lua_inflow(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
+		};			
+		inflow_coef = new FunctionGrayCoefficient(inflow_func); 		
+	} 
 	else {
-		FormTransportSource(fes, quad, psi_ext, source, inflow, source_vec); 
+		inflow_coef = new IsotropicGrayCoefficient(inflow); 
 	}
+
+	mfem::Vector source_vec(psi_size); 
+	source_vec = 0.0; 
+	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
+	FormTransportSource(fes, quad, *source_coef, *inflow_coef, source_vec_view); 
 
 	// build sweep operator 
 	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
@@ -536,6 +554,8 @@ int main(int argc, char *argv[]) {
 	if (dsa_solver) delete dsa_solver; 
 	if (slu_op) delete slu_op; 
 	if (dsa_mat) delete dsa_mat; 
+	delete source_coef; 
+	delete inflow_coef; 
 
 	// --- compute error if exact solution provided --- 
 	sol::optional<sol::function> solution_func_avail = lua["solution"]; 

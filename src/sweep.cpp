@@ -583,6 +583,27 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 }
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+	PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
+	TransportVectorView source_view) 
+{
+	for (auto a=0; a<quad.Size(); a++) {
+		const auto &Omega = quad.GetOmega(a); 
+		source_coef.SetState(Omega); inflow_coef.SetState(Omega); 
+
+		mfem::ParLinearForm bform(&fes); 
+		bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
+		#ifndef INFLOW_IN_SWEEP
+		mfem::VectorConstantCoefficient Q(Omega); 
+		bform.AddBdrFaceIntegrator(new mfem::BoundaryFlowIntegrator(inflow_coef, Q, -1.0, -0.5));
+		#endif
+		bform.Assemble(); 
+		for (int i=0; i<bform.Size(); i++) {
+			source_view(0,a,i) = bform[i]; 
+		}
+	}
+}
+
+void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const TransportVectorExtents &psi_ext,
 	std::function<double(double x, double y, double z, double mu, double eta, double xi)> source_func, 
 	std::function<double(double x, double y, double z, double mu, double eta, double xi)> inflow_func, 

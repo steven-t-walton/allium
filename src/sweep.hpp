@@ -4,6 +4,7 @@
 #include "angular_quadrature.hpp"
 #include "mfem.hpp"
 #include "igraph.h"
+#include "phase_coefficient.hpp"
 
 class InverseAdvectionOperator : public mfem::Operator 
 {
@@ -46,6 +47,10 @@ public:
 	const mfem::Vector &GetFaceNbrData() const { return psi_fnbr; }
 	void ExchangeDownwindFaceNbrData(bool exchange=true) { exchange_downwind = exchange; }
 };
+
+void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+	PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
+	TransportVectorView source_view); 
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const TransportVectorExtents &psi_ext,
