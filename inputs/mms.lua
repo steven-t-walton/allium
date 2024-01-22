@@ -27,7 +27,7 @@ materials = {
 	mat = {
 		total = total, 
 		scattering = scattering, 
-		source = 1 
+		source = source_function
 	}
 }
 
@@ -36,11 +36,11 @@ function material_map(x,y,z)
 end 
 
 boundary_conditions = {
-	vacuum = delta/4/math.pi
+	inflow = inflow_function
 }
 
 function boundary_map(x,y,z)
-	return "vacuum"
+	return "inflow"
 end 
 
 Ne = 40
@@ -52,12 +52,14 @@ mesh = {
 sn = {
 	fe_order = 1, 
 	sn_order = 4, 
-	dsa = {
-		kappa = 4, 
-		tol = 1e-6, 
+	acceleration = {
+		type = "LDGSA", 
+		solver = "cg", 
+		reltol = 1e-2, 
 		max_it = 50
 	},
 	tol = 1e-10, 
 	max_it = 100, 
+	solver = "gmres",
 	write_graph = false
 }

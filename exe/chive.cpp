@@ -11,6 +11,8 @@
 #include "phase_coefficient.hpp"
 #include "comment_stream.hpp"
 
+using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
+
 class TransportIterationMonitor : public mfem::IterativeSolverMonitor
 {
 private:
@@ -117,6 +119,8 @@ int main(int argc, char *argv[]) {
 	lua.open_libraries(); // allows using standard libraries (e.g. math) in input
 	lua.script_file(input_file); // load from first cmd line argument 
 
+	// overwrite input script with lua commands provided 
+	// through cmdline 
 	if (!lua_cmds.empty()) {
 		lua.script(lua_cmds); 
 	}
@@ -135,12 +139,27 @@ int main(int argc, char *argv[]) {
 
 	// get data from lua 
 	auto nattr = attr_list.size(); 
-	mfem::Vector total_list(nattr), scattering_list(nattr), source_list(nattr); 
+	mfem::Vector total_list(nattr), scattering_list(nattr); 
+	// must store the lua object so data doesn't go out of scope 
+	// for the source coefficients 
+	std::vector<sol::object> lua_source_objs(nattr); 
+	mfem::Array<PhaseSpaceCoefficient*> source_list(nattr); 
 	for (auto i=0; i<attr_list.size(); i++) {
 		sol::table data = materials[attr_list[i].c_str()]; 
+		if (!data.valid()) MFEM_ABORT("material named " << attr_list[i] << " not found"); 
 		total_list(i) = data["total"]; 
 		scattering_list(i) = data["scattering"]; 
-		source_list(i) = data["source"]; 
+		lua_source_objs[i] = data["source"]; 
+		if (lua_source_objs[i].get_type() == sol::type::number) {
+			auto source_val = lua_source_objs[i].as<double>(); 
+			source_list[i] = new ConstantPhaseSpaceCoefficient(source_val); 
+		} else if (lua_source_objs[i].get_type() == sol::type::function) {
+			LuaPhaseFunction lua_source = lua_source_objs[i].as<sol::function>(); 
+			auto source_func = [lua_source](const mfem::Vector &x, const mfem::Vector &Omega) {
+				return lua_source(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
+			};
+			source_list[i] = new FunctionGrayCoefficient(source_func); 
+		}
 	}
 
 	// print materials list to cout 
@@ -150,7 +169,12 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "attribute" << YAML::Value << i+1; 
 		out << YAML::Key << "total" << YAML::Value << total_list(i); 
 		out << YAML::Key << "scattering" << YAML::Value << scattering_list(i); 
-		out << YAML::Key << "source" << YAML::Value << source_list(i); 
+		out << YAML::Key << "source" << YAML::Value; 
+		if (lua_source_objs[i].get_type() == sol::type::number) {
+			out << lua_source_objs[i].as<double>(); 
+		} else {
+			out << "function"; 
+		}
 		out << YAML::EndMap; 
 	}
 	out << YAML::EndSeq; 
@@ -174,10 +198,20 @@ int main(int argc, char *argv[]) {
 
 	// get values 
 	auto nbattr = bdr_attr_list.size(); 
-	mfem::Vector inflow_list(nbattr); 
+	std::vector<sol::object> lua_bc_objs(nbattr); 
+	mfem::Array<PhaseSpaceCoefficient*> inflow_list(nbattr); 
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
-		double data = bcs[bdr_attr_list[i].c_str()]; 
-		inflow_list(i) = data; 
+		lua_bc_objs[i] = bcs[bdr_attr_list[i].c_str()]; 
+		if (lua_bc_objs[i].get_type() == sol::type::number) {
+			auto val = lua_bc_objs[i].as<double>(); 
+			inflow_list[i] = new ConstantPhaseSpaceCoefficient(val); 
+		} else if (lua_bc_objs[i].get_type() == sol::type::function) {
+			auto lua_func = lua_bc_objs[i].as<LuaPhaseFunction>();
+			auto func = [lua_func](const mfem::Vector &x, const mfem::Vector &Omega) {
+				return lua_func(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
+			};
+			inflow_list[i] = new FunctionGrayCoefficient(func);  
+		}
 	}
 
 	// print list to screen 
@@ -186,7 +220,12 @@ int main(int argc, char *argv[]) {
 		out << YAML::BeginMap; 
 		out << YAML::Key << "name" << YAML::Value << bdr_attr_list[i]; 
 		out << YAML::Key << "bdr attribute" << YAML::Value << i+1; 
-		out << YAML::Key << "inflow" << YAML::Value << inflow_list(i); 
+		out << YAML::Key << "inflow" << YAML::Value; 
+		if (lua_bc_objs[i].get_type() == sol::type::number) {
+			out << lua_bc_objs[i].as<double>(); 
+		} else {
+			out << "function"; 
+		}
 		out << YAML::EndMap; 
 	}
 	out << YAML::EndSeq; 
@@ -268,14 +307,14 @@ int main(int argc, char *argv[]) {
 	out << YAML::EndMap; 
 
 	// --- assign materials to elements --- 
-	mfem::Vector center(3); 
-	center = 0.0; 
 	sol::function geom_func = lua["material_map"]; 
 	for (int e=0; e<smesh.GetNE(); e++) {
-		mfem::Vector c; 
+		mfem::Vector c(3);
 		smesh.GetElementCenter(e, c);
-		for (int d=0; d<c.Size(); d++) { center(d) = c(d); } 
-		std::string attr_name = geom_func(center(0), center(1), center(2)); 
+		std::string attr_name = geom_func(c(0), c(1), c(2)); 
+		if (!attr_map.contains(attr_name)) {
+			MFEM_ABORT("material named \"" << attr_name << "\" not defined"); 
+		}
 		int attr = attr_map[attr_name]; 
 		smesh.SetAttribute(e, attr); 
 	}			
@@ -286,10 +325,12 @@ int main(int argc, char *argv[]) {
 		const mfem::Element &el = *smesh.GetBdrElement(e); 
 		int geom = smesh.GetBdrElementBaseGeometry(e);
 		mfem::ElementTransformation &trans = *smesh.GetBdrElementTransformation(e); 
-		mfem::Vector c(smesh.SpaceDimension()); 
+		mfem::Vector c(3); 
 		trans.Transform(mfem::Geometries.GetCenter(geom), c); 
-		for (int d=0; d<c.Size(); d++) { center(d) = c(d); }
-		std::string attr_name = bdr_func(center(0), center(1), center(2)); 
+		std::string attr_name = bdr_func(c(0), c(1), c(2)); 
+		if (!bdr_attr_map.contains(attr_name)) {
+			MFEM_ABORT("boundary condition named \"" << attr_name << "\" not defined"); 
+		}
 		smesh.SetBdrAttribute(e, bdr_attr_map[attr_name]); 
 	}
 
@@ -330,9 +371,13 @@ int main(int argc, char *argv[]) {
 	mfem::GridFunctionCoefficient scattering(&scattering_gf); 
 
 	// piecewise constant isotropic source 
-	mfem::PWConstCoefficient source(source_list); 
+	mfem::Array<int> attrs(nattr); 
+	for (int i=0; i<nattr; i++) { attrs[i] = i+1; }
+	PWPhaseSpaceCoefficient source(attrs, source_list); 
 	mfem::SumCoefficient absorption(total, scattering, 1, -1); 
-	mfem::PWConstCoefficient inflow(inflow_list); 
+	mfem::Array<int> battrs(nbattr); 
+	for (int i=0; i<nbattr; i++) { battrs[i] = i+1; }
+	PWPhaseSpaceCoefficient inflow(battrs, inflow_list); 
 
 	// --- angular quadrature rule --- 
 	LevelSymmetricQuadrature quad(sn_order, dim); 
@@ -384,38 +429,10 @@ int main(int argc, char *argv[]) {
 	D.Mult(psi, phi); 
 
 	// form fixed source term 
-	// allows either space/angle dependent source function 
-	sol::optional<sol::function> source_func_avail = lua["source_function"]; 
-	sol::optional<sol::function> inflow_func_avail = lua["inflow_function"]; 
-	PhaseSpaceCoefficient *source_coef, *inflow_coef; 
-	if (source_func_avail) {
-		std::function<double(double x, double y, double z, double mu, double eta, double xi)> lua_source
-			= source_func_avail.value(); 		
-		auto source_func = [lua_source](const mfem::Vector &x, const mfem::Vector &Omega) {
-			return lua_source(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
-		};
-		source_coef = new FunctionGrayCoefficient(source_func); 
-	} 
-	else {
-		source_coef = new IsotropicGrayCoefficient(source); 
-	}
-
-	if (inflow_func_avail) {
-		std::function<double(double x, double y, double z, double mu, double eta, double xi)> lua_inflow
-			= inflow_func_avail.value(); 
-		auto inflow_func = [lua_inflow](const mfem::Vector &x, const mfem::Vector &Omega) {
-			return lua_inflow(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
-		};			
-		inflow_coef = new FunctionGrayCoefficient(inflow_func); 		
-	} 
-	else {
-		inflow_coef = new IsotropicGrayCoefficient(inflow); 
-	}
-
 	mfem::Vector source_vec(psi_size); 
 	source_vec = 0.0; 
 	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
-	FormTransportSource(fes, quad, *source_coef, *inflow_coef, source_vec_view); 
+	FormTransportSource(fes, quad, source, inflow, source_vec_view); 
 
 	// build sweep operator 
 	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
@@ -554,8 +571,8 @@ int main(int argc, char *argv[]) {
 	if (dsa_solver) delete dsa_solver; 
 	if (slu_op) delete slu_op; 
 	if (dsa_mat) delete dsa_mat; 
-	delete source_coef; 
-	delete inflow_coef; 
+	for (int i=0; i<nattr; i++) { delete source_list[i]; }
+	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
 
 	// --- compute error if exact solution provided --- 
 	sol::optional<sol::function> solution_func_avail = lua["solution"]; 
