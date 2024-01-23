@@ -403,7 +403,9 @@ int main(int argc, char *argv[]) {
 			sol::table accel = accel_avail.value();
 			out << YAML::BeginMap; 
 			for (const auto &it : accel) {
-				out << YAML::Key << it.first.as<std::string>() << YAML::Value << it.second.as<std::string>(); 
+				out << YAML::Key << it.first.as<std::string>() << YAML::Value; 
+				if (it.second.get_type() == sol::type::number) { out << it.second.as<double>(); }
+				else { out << it.second.as<std::string>(); } 
 			}
 			out << YAML::EndMap; 
 		}
