@@ -1,6 +1,7 @@
 #pragma once 
 
 #include "mfem.hpp"
+#include "angular_quadrature.hpp"
 
 class PhaseSpaceCoefficient : public mfem::Coefficient 
 {
@@ -58,5 +59,21 @@ private:
 	PhaseFunction f; 
 public:
 	FunctionGrayCoefficient(PhaseFunction _f) : f(_f) { }
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
+};
+
+class InflowPartialCurrentCoefficient : public mfem::Coefficient 
+{
+private:
+	PhaseSpaceCoefficient &phase_coef; 
+	const AngularQuadrature &quad; 
+	double scale; 
+
+	mfem::Vector nor; 
+public:
+	InflowPartialCurrentCoefficient(PhaseSpaceCoefficient &pc, const AngularQuadrature &q, double s=1.0) 
+		: phase_coef(pc), quad(q), scale(s)
+	{ }
+
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
 };

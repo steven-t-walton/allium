@@ -205,3 +205,18 @@ TEST(Integrators, SMMFaceTermBdr) {
 	ex -= elvec; 
 	EXPECT_DOUBLE_EQ(ex.Norml2(), 0.0); 
 }
+
+TEST(Integrators, BoundaryNormalFaceLFIntegrator) {
+	mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D(2,1, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace vfes(&mesh, &fec, dim); 
+	mfem::ConstantCoefficient inflow(2.0); 
+	BoundaryNormalFaceLFIntegrator lfi(inflow); 
+	auto &trans = *mesh.GetBdrFaceTransformations(0); 
+	mfem::Vector elvec; 
+	lfi.AssembleRHSElementVect(*vfes.GetFE(trans.Elem1No), trans, elvec); 
+	mfem::Vector ex({0,0,0,0,-0.5,-0.5,0,0}); 
+	ex -= elvec; 
+	EXPECT_DOUBLE_EQ(ex.Norml2(), 0.0); 
+}

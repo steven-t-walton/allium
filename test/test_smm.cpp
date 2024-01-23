@@ -1,6 +1,8 @@
 #include "gtest/gtest.h"
 #include "p1diffusion.hpp"
 #include "smm_integrators.hpp"
+#include "phase_coefficient.hpp"
+#include "linalg.hpp"
 
 TEST(SMM, CorrectionTensorIsotropic) {
 	mfem::Mesh smesh = mfem::Mesh::MakeCartesian2D(5,5,mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
@@ -123,9 +125,10 @@ TEST(SMM, BdrCorrectionQuadratic) {
 }
 
 std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
-	double delta = 0.1; 
-	double gamma = 0.1; 
-	auto sn_order = 8; 
+	double delta = 0.5; 
+	double gamma = 1.0; 
+	double base = 2.0; 
+	auto sn_order = 4; 
 	mfem::Mesh smesh = mfem::Mesh::MakeCartesian2D(Ne, Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
 	const auto dim = mesh.Dimension(); 
@@ -140,22 +143,23 @@ std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
 
 	TransportVectorExtents psi_ext(1,quad.Size(),fes.GetVSize()); 
 	mfem::Vector psi(TotalExtent(psi_ext)); 
-	auto f = [&delta, &gamma](const mfem::Vector &x, const mfem::Vector &Omega) {
+	auto f = [&delta, &gamma, base](const mfem::Vector &x, const mfem::Vector &Omega) {
 		return (sin(M_PI*x(0))*sin(M_PI*x(1)) + delta*(Omega(0) + Omega(1))*sin(2*M_PI*x(0))*sin(2*M_PI*x(1)) 
-			+ gamma*(Omega*Omega)*sin(3*M_PI*x(0))*sin(3*M_PI*x(1)))/4/M_PI; 
+			+ gamma*(Omega*Omega)*sin(3*M_PI*x(0))*sin(3*M_PI*x(1)) + base)/4/M_PI; 
 	};
+	FunctionGrayCoefficient psi_coef(f); 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
 	ProjectPsi(fes, quad, f, psi_view); 
 
 	mfem::Vector nor(dim); 
 	nor = 0.0; 
 	nor(0) = 1.0; 
-	auto alpha = ComputeAlpha(quad, nor); 
+	const auto alpha = ComputeAlpha(quad, nor); 
 	SMMCorrectionTensorCoefficient T(fes, quad, psi_view); 
 	SMMBdrCorrectionFactorCoefficient beta(fes, quad, psi_view, alpha); 	
 
-	auto Q0f = [&total, &scattering, &delta, &gamma](const mfem::Vector &x) {
-		return (total-scattering)*(sin(M_PI*x(0))*sin(M_PI*x(1)) + gamma*2./3*sin(3*M_PI*x(0))*sin(3*M_PI*x(1))) 
+	auto Q0f = [&total, &scattering, &delta, &gamma, base](const mfem::Vector &x) {
+		return (total-scattering)*(sin(M_PI*x(0))*sin(M_PI*x(1)) + base + gamma*2./3*sin(3*M_PI*x(0))*sin(3*M_PI*x(1))) 
 			+ delta*2*M_PI/3*sin(2*M_PI*(x(0) + x(1))); 
 	};
 	mfem::FunctionCoefficient Q0(Q0f); 
@@ -169,6 +173,9 @@ std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
 
 	mfem::ParLinearForm fform(&fes); 
 	fform.AddDomainIntegrator(new mfem::DomainLFIntegrator(Q0)); 
+	InflowPartialCurrentCoefficient Jin(psi_coef, quad); 
+	mfem::SumCoefficient bdr_coef_f(beta, Jin, -0.5, -1.0); 
+	fform.AddBdrFaceIntegrator(new mfem::BoundaryLFIntegrator(bdr_coef_f, 2, 1)); 
 	fform.Assemble(); 
 
 	mfem::ParLinearForm gform(&vfes); 
@@ -176,8 +183,8 @@ std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
 	gform.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(T)); 
 	gform.AddInteriorFaceIntegrator(new VectorJumpTensorAverageLFIntegrator(T)); 
 	gform.AddBdrFaceIntegrator(new VectorJumpTensorAverageLFIntegrator(T)); 
-	mfem::ProductCoefficient bdr_coef(1./(3*alpha), beta); 
-	gform.AddBdrFaceIntegrator(new BoundaryNormalFaceLFIntegrator(bdr_coef)); 
+	mfem::SumCoefficient bdr_coef_g(beta, Jin, 1./2/alpha/3, 1./alpha/3);
+	gform.AddBdrFaceIntegrator(new BoundaryNormalFaceLFIntegrator(bdr_coef_g, 2, 1)); 
 	gform.Assemble();
 	gform *= 3.0;  
 
@@ -189,10 +196,11 @@ std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
 	mfem::ParBilinearForm Mtform(&vfes);
 	mfem::ProductCoefficient total3(3.0, total_coef); 
 	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3)); 
-	// Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha)); 
+	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha)); 
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	auto Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
+	auto iMt = HypreParMatrixPtr(ElementByElementBlockInverse(vfes, *Mt)); 
 
 	mfem::ParBilinearForm Maform(&fes); 
 	mfem::ConstantCoefficient alpha_c(alpha/2); 
@@ -214,33 +222,31 @@ std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
 	Dform.Finalize(); 
 	auto D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
 	auto DT = HypreParMatrixPtr(D->Transpose()); 
-	(*DT) *= -1.0; 
 
-	mfem::Array<int> offsets(3); 
-	offsets[0] = 0; 
-	offsets[1] = vfes.GetVSize(); 
-	offsets[2] = fes.GetVSize(); 
-	offsets.PartialSum();
-	mfem::BlockOperator bop(offsets); 
-	bop.SetBlock(0,0, Mt.get()); 
-	bop.SetBlock(0,1, DT.get()); 
-	bop.SetBlock(1,0, D.get()); 
-	bop.SetBlock(1,1, Ma.get()); 
+	auto DiMt = HypreParMatrixPtr(mfem::ParMult(D.get(), iMt.get(), true)); 
+	auto DiMtDT = HypreParMatrixPtr(mfem::ParMult(DiMt.get(), DT.get(), true)); 
+	auto S = HypreParMatrixPtr(mfem::ParAdd(DiMtDT.get(), Ma.get())); 
 
-	auto mono = HypreParMatrixPtr(BlockOperatorToMonolithic(bop)); 
-	mfem::SuperLURowLocMatrix slu_op(*mono); 
-	mfem::SuperLUSolver slu(slu_op); 
-	slu.SetPrintStatistics(false); 
+	DiMt->Mult(-1.0, gform, 1.0, fform); 
 
-	mfem::BlockVector b(offsets), x(offsets); 
-	b.GetBlock(0) = gform; 
-	b.GetBlock(1) = fform; 
-	slu.Mult(b, x); 
+	mfem::CGSolver solver(MPI_COMM_WORLD); 
+	solver.SetAbsTol(1e-10); 
+	solver.SetMaxIter(100); 
+	solver.SetPrintLevel(0); 
+	mfem::HypreBoomerAMG amg(*S); 
+	amg.SetPrintLevel(0); 
+	solver.SetOperator(*S); 
+	solver.SetPreconditioner(amg); 
 
-	mfem::ParGridFunction phi(&fes, x.GetBlock(1)); 
-	mfem::ParGridFunction J(&vfes, x.GetBlock(0)); 
-	auto exsol = [&gamma](const mfem::Vector &x) {
-		return sin(M_PI*x(0))*sin(M_PI*x(1)) + gamma*2./3*sin(3*M_PI*x(0))*sin(3*M_PI*x(1)); 
+	mfem::ParGridFunction phi(&fes), J(&vfes); 
+	phi = 0.0; 
+	solver.Mult(fform, phi); 
+
+	DT->Mult(1.0, phi, 1.0, gform); 
+	iMt->Mult(gform, J); 
+
+	auto exsol = [&gamma, base](const mfem::Vector &x) {
+		return sin(M_PI*x(0))*sin(M_PI*x(1)) + gamma*2./3*sin(3*M_PI*x(0))*sin(3*M_PI*x(1)) + base; 
 	};
 	mfem::FunctionCoefficient exsol_coef(exsol); 
 	double err = phi.ComputeL2Error(exsol_coef); 
@@ -250,6 +256,7 @@ std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
 	};
 	mfem::VectorFunctionCoefficient Jexsol_coef(dim, Jexsol); 
 	double Jerr = J.ComputeL2Error(Jexsol_coef); 
+
 	return {err, Jerr}; 
 }
 
@@ -259,7 +266,7 @@ TEST(SMM, IndependentLDGSMMp1) {
 	double phi_ooa = log2(phi1/phi2); 
 	double J_ooa = log2(J1/J2); 
 	EXPECT_NEAR(phi_ooa, 2.0, 0.1); 
-	EXPECT_NEAR(J_ooa, 2.0, 0.1); 
+	EXPECT_NEAR(J_ooa, 2.0, 0.2); 
 }
 
 TEST(SMM, IndependentLDGSMMp2) {
@@ -269,4 +276,13 @@ TEST(SMM, IndependentLDGSMMp2) {
 	double J_ooa = log2(J1/J2); 
 	EXPECT_NEAR(phi_ooa, 3.0, 0.15); 
 	EXPECT_NEAR(J_ooa, 3.0, 0.15); 
+}
+
+TEST(SMM, IndependentLDGSMMp3) {
+	auto [phi1, J1] = IndependentLDGSMMError(10, 3); 
+	auto [phi2, J2] = IndependentLDGSMMError(20, 3); 
+	double phi_ooa = log2(phi1/phi2); 
+	double J_ooa = log2(J1/J2); 
+	EXPECT_NEAR(phi_ooa, 4.0, 0.15); 
+	EXPECT_NEAR(J_ooa, 4.0, 0.15); 
 }

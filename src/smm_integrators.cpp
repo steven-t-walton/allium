@@ -163,7 +163,7 @@ void BoundaryNormalFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteEl
 			nor(0) = 1.0; 
 		}
 
-		double inf = inflow.Eval(*trans.Face, ip); 
+		double inf = inflow.Eval(trans, ip); 
 		el.CalcShape(eip, shape); 
 		for (int d=0; d<dim; d++) {
 			for (int i=0; i<ndof; i++) {

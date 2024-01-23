@@ -11,12 +11,14 @@ LIST(APPEND TESTS
 	test_mfem.cpp
 	test_smm.cpp
 	test_phase_coef.cpp
+	test_linalg.cpp
 )
 
 LIST(APPEND PAR_TESTS
 	test_sweep.cpp
 	test_transport_mms.cpp
 	test_diffusion_mms.cpp
+	test_smm.cpp
 )
 
 foreach(test ${TESTS})
