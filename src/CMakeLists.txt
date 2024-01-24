@@ -10,6 +10,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/phase_coefficient.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/linalg.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dg_trace_coll.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/smm_op.hpp
 )
 
 LIST(APPEND srcs 
@@ -23,6 +24,7 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/phase_coefficient.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/linalg.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dg_trace_coll.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/smm_op.cpp
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)

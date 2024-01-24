@@ -53,12 +53,12 @@ class SMMCorrectionTensorCoefficient : public mfem::MatrixArrayCoefficient
 {
 private:
 	mfem::ParFiniteElementSpace &fes; 
-	AngularQuadrature &quad; 
+	const AngularQuadrature &quad; 
 	ConstTransportVectorView psi; 
 public:
 	mfem::Array<mfem::ParGridFunction*> gfs; 
 
-	SMMCorrectionTensorCoefficient(mfem::ParFiniteElementSpace &_fes, AngularQuadrature &_quad, ConstTransportVectorView _psi);
+	SMMCorrectionTensorCoefficient(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, ConstTransportVectorView _psi);
 	~SMMCorrectionTensorCoefficient(); 
 };
 
@@ -66,14 +66,14 @@ class SMMBdrCorrectionFactorCoefficient : public mfem::Coefficient
 {
 private:
 	mfem::ParFiniteElementSpace &fes; 
-	AngularQuadrature &quad; 
+	const AngularQuadrature &quad; 
 	ConstTransportVectorView psi; 
 	double alpha; 
 
 	int dim; 
 	mfem::Vector nor, shape; 
 public:
-	SMMBdrCorrectionFactorCoefficient(mfem::ParFiniteElementSpace &_fes, AngularQuadrature &_quad, 
+	SMMBdrCorrectionFactorCoefficient(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 		ConstTransportVectorView _psi, double _alpha=0.5); 
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
 };

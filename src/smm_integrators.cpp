@@ -174,7 +174,7 @@ void BoundaryNormalFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteEl
 }
 
 SMMCorrectionTensorCoefficient::SMMCorrectionTensorCoefficient(
-	mfem::ParFiniteElementSpace &_fes, AngularQuadrature &_quad, ConstTransportVectorView _psi)
+	mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, ConstTransportVectorView _psi)
 	: fes(_fes), quad(_quad), psi(_psi), mfem::MatrixArrayCoefficient(_fes.GetMesh()->Dimension())
 {
 	const auto dim = height; 
@@ -217,7 +217,7 @@ SMMCorrectionTensorCoefficient::~SMMCorrectionTensorCoefficient()
 }
 
 SMMBdrCorrectionFactorCoefficient::SMMBdrCorrectionFactorCoefficient(
-	mfem::ParFiniteElementSpace &_fes, AngularQuadrature &_quad, 
+	mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	ConstTransportVectorView _psi, double _alpha)
 	: fes(_fes), quad(_quad), psi(_psi), alpha(_alpha)
 {
