@@ -17,8 +17,9 @@ TEST(SMM, CorrectionTensorIsotropic) {
 	auto f = [](const mfem::Vector &x, const mfem::Vector &Omega) {
 		return sin(M_PI*x(0))*sin(M_PI*x(1)); 
 	};
+	FunctionGrayCoefficient psi_coef(f); 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	ProjectPsi(fes, quad, f, psi_view); 
+	ProjectPsi(fes, quad, psi_coef, psi_view); 
 	SMMCorrectionTensorCoefficient T(fes, quad, psi_view);
 	mfem::DenseMatrix t(dim); 
 	double norm = 0.0; 
@@ -46,8 +47,9 @@ TEST(SMM, CorrectionTensorQuadratic) {
 	auto f = [](const mfem::Vector &x, const mfem::Vector &Omega) {
 		return Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
 	};
+	FunctionGrayCoefficient psi_coef(f); 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	ProjectPsi(fes, quad, f, psi_view); 
+	ProjectPsi(fes, quad, psi_coef, psi_view); 
 
 	SMMCorrectionTensorCoefficient T(fes, quad, psi_view);
 	mfem::DenseMatrix t(dim); 
@@ -72,8 +74,9 @@ TEST(SMM, BdrCorrectionLinear) {
 	auto f = [](const mfem::Vector &x, const mfem::Vector &Omega) {
 		return 5.0 + Omega(0) + Omega(1); 
 	};
+	FunctionGrayCoefficient psi_coef(f); 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	ProjectPsi(fes, quad, f, psi_view); 
+	ProjectPsi(fes, quad, psi_coef, psi_view); 
 
 	mfem::Vector nor(dim); 
 	nor = 0.0; 
@@ -102,8 +105,9 @@ std::tuple<double,int> BetaError(int sn_order) {
 	auto f = [](const mfem::Vector &x, const mfem::Vector &Omega) {
 		return Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
 	};
+	FunctionGrayCoefficient psi_coef(f); 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	ProjectPsi(fes, quad, f, psi_view); 
+	ProjectPsi(fes, quad, psi_coef, psi_view); 
 
 	mfem::Vector nor(dim); 
 	nor = 0.0; 
@@ -149,7 +153,7 @@ std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
 	};
 	FunctionGrayCoefficient psi_coef(f); 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	ProjectPsi(fes, quad, f, psi_view); 
+	ProjectPsi(fes, quad, psi_coef, psi_view); 
 
 	mfem::Vector nor(dim); 
 	nor = 0.0; 
