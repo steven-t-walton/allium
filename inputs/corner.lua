@@ -71,5 +71,5 @@ sn = {
 	tol = 1e-5, 
 	max_it = 200, 
 	acceleration = ldgsa,
-	solver = "sli"
+	solver = "gmres"
 }
