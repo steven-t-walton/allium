@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.27)
+cmake_minimum_required(VERSION 3.22)
 set(CMAKE_CXX_STANDARD 20) 
 project(allium)
 
@@ -93,11 +93,10 @@ add_subdirectory(src)
 # includes all third party libraries 
 add_library(allium ${SOURCES} ${HEADERS})
 target_link_libraries(allium PUBLIC mfem igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX)
-target_include_directories(allium PUBLIC ${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
+target_include_directories(allium PUBLIC ${MFEM_INCLUDE_DIRS} ${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
 
 # add executables in exe directory 
 LIST(APPEND EXE
-	exe/sweep.cpp
 	exe/parsweep.cpp
 	exe/scratch.cpp
 	exe/chive.cpp
@@ -105,6 +104,10 @@ LIST(APPEND EXE
 
 if (${MFEM_USE_SUPERLU}) 
 	LIST(APPEND EXE exe/p1.cpp)
+endif()
+
+if (${MFEM_USE_SUITESPARSE}) 
+	LIST(APPEND EXE exe/sweep.cpp)
 endif()
 
 foreach(exe ${EXE})
