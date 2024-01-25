@@ -449,7 +449,7 @@ int main(int argc, char *argv[]) {
 	mfem::SuperLURowLocMatrix *slu_op = nullptr; 
 	mfem::Vector normal(dim); 
 	normal = 0.0; normal(0) = 1.0; 
-	double alpha = ComputeAlpha(quad, normal)/2;
+	double alpha = ComputeAlpha(quad, normal);
 	if (accel_avail) {
 		sol::table accel = accel_avail.value(); 
 		std::string type = accel["type"]; 
@@ -457,15 +457,15 @@ int main(int argc, char *argv[]) {
 			// build MIP DSA operator
 			mfem::ParBilinearForm Dform(&fes); 
 			mfem::RatioCoefficient diffco(1./3, total); 
-			mfem::ConstantCoefficient alpha_c(alpha); 
+			mfem::ConstantCoefficient alpha_c(alpha/2); 
 			double dsa_kappa = accel["kappa"].get_or(pow(fe_order+1,2)); 
 			Dform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
 			Dform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 			// Dform.AddInteriorFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
 			// Dform.AddBdrFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
-			Dform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha)); 
-			// Dform.AddBdrFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha)); 
-			Dform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+			Dform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha/2)); 
+			Dform.AddBdrFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha/2)); 
+			// Dform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
 			Dform.Assemble(); 
 			Dform.Finalize(); 
 			dsa_mat = Dform.ParallelAssemble(); 
