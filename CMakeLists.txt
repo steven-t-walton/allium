@@ -31,7 +31,10 @@ if (NOT ${MFEM_USE_METIS})
 	message(FATAL_ERROR "metis is required")
 endif()
 if (NOT ${MFEM_USE_SUPERLU})
-	message(WARNING "some functionality disabled when MFEM build without SuperLU")
+	message(WARNING "some functionality disabled when MFEM built without SuperLU")
+endif()
+if (NOT ${MFEM_USE_SUITESPARSE})
+	message(WARNING "some functionality disabled when MFEM built without Suitesparse")
 endif()
 
 # find igraph 
@@ -92,7 +95,7 @@ add_subdirectory(src)
 # create a library 
 # includes all third party libraries 
 add_library(allium ${SOURCES} ${HEADERS})
-target_link_libraries(allium PUBLIC mfem igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX)
+target_link_libraries(allium PUBLIC ${MFEM_LIBRARIES} igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX)
 target_include_directories(allium PUBLIC ${MFEM_INCLUDE_DIRS} ${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
 
 # add executables in exe directory 
