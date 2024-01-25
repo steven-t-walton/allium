@@ -7,6 +7,7 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	: fes(_fes), vfes(_vfes), total(_total), absorption(_absorption), alpha(_alpha)
 {
 	offsets.SetSize(3); 
+	offsets[0] = 0; 
 	offsets[1] = vfes.GetVSize(); 
 	offsets[2] = fes.GetVSize(); 
 	offsets.PartialSum(); 
@@ -81,6 +82,7 @@ LDGSMMSourceOperator::LDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mf
 	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha)
 {
 	offsets.SetSize(3); 
+	offsets[0] = 0; 
 	offsets[1] = vfes.GetVSize(); 
 	offsets[2] = fes.GetVSize(); 
 	offsets.PartialSum(); 

@@ -1,6 +1,7 @@
 #include "gtest/gtest.h"
 #include "p1diffusion.hpp"
 
+#ifdef MFEM_USE_SUITESPARSE
 // use exact solution 
 double P1DiffusionError1D(int Ne, int fe_order) {
 	mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D(Ne, 1.0); 
@@ -10,6 +11,7 @@ double P1DiffusionError1D(int Ne, int fe_order) {
 	mfem::FiniteElementSpace vfes(&mesh, &fec, dim); 
 
 	mfem::Array<int> offsets(3); 
+	offsets[0] = 0; 
 	offsets[1] = vfes.GetVSize(); 
 	offsets[2] = fes.GetVSize(); 
 	offsets.PartialSum(); 
@@ -93,6 +95,7 @@ TEST(MMS, P1Diffusion1Dp2) {
 	double E = P1DiffusionError1D(10, fe_order); 
 	EXPECT_TRUE(E < 1e-12); 
 }
+#endif
 
 using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>; 
 double LDGError(mfem::Mesh &smesh, int fe_order, 
@@ -105,6 +108,7 @@ double LDGError(mfem::Mesh &smesh, int fe_order,
 	mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); // dim copies of scalar space 
 
 	mfem::Array<int> offsets(3); 
+	offsets[0] = 0; 
 	offsets[1] = vfes.GetVSize(); 
 	offsets[2] = fes.GetVSize(); 
 	offsets.PartialSum(); 
