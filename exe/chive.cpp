@@ -447,7 +447,9 @@ int main(int argc, char *argv[]) {
 	DiffusionSyntheticAccelerationOperator *prec = nullptr; 
 	mfem::HypreParMatrix *dsa_mat = nullptr; 
 	mfem::Operator *dsa_solver = nullptr, *dsa_prec = nullptr; 
+#ifdef MFEM_USE_SUPERLU
 	mfem::SuperLURowLocMatrix *slu_op = nullptr; 
+#endif
 	mfem::Vector normal(dim); 
 	normal = 0.0; normal(0) = 1.0; 
 	bool moment_solve = false; 
@@ -489,6 +491,7 @@ int main(int argc, char *argv[]) {
 			dsa_prec = amg; 
 		} 
 		else if (type == "P1SA") {
+#ifdef MFEM_USE_SUPERLU
 			std::string solve_type = accel["solver"]; 
 			if (solve_type != "direct") MFEM_ABORT("only direct available for P1"); 
 			// vector finite element space for current in P1SA 
@@ -502,6 +505,9 @@ int main(int argc, char *argv[]) {
 			auto *ceo = new ComponentExtractionOperator(p1disc->RowOffsets(), 1); 
 			auto *ceo_t = new mfem::TransposeOperator(*ceo); 
 			dsa_solver = new mfem::TripleProductOperator(ceo, slu, ceo_t, true, true, true); 
+#else
+			MFEM_ABORT("super LU required for P1"); 
+#endif
 		} 
 		else if (type == "LDGSA") {
 			mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 

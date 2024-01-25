@@ -4,11 +4,14 @@ target_link_libraries(gtest_main_mpi PUBLIC allium GTest::gtest)
 LIST(APPEND TESTS
 	test_angle_quad.cpp
 	test_integrators.cpp
-	test_p1.cpp
 	test_mfem.cpp
 	test_phase_coef.cpp
 	test_linalg.cpp
 )
+
+if (${MFEM_USE_SUPERLU})
+	LIST(APPEND TESTS test_p1.cpp)
+endif()
 
 LIST(APPEND PAR_TESTS
 	test_sweep.cpp

@@ -22,7 +22,7 @@ if (NOT ${MFEM_USE_METIS})
 	message(FATAL_ERROR "metis is required")
 endif()
 if (NOT ${MFEM_USE_SUPERLU})
-	message(FATAL_ERROR "superlu is required")
+	message(WARNING "some functionality disabled when MFEM build without SuperLU")
 endif()
 
 # find igraph 
@@ -92,8 +92,11 @@ LIST(APPEND EXE
 	exe/parsweep.cpp
 	exe/scratch.cpp
 	exe/chive.cpp
-	exe/p1.cpp
 )
+
+if (${MFEM_USE_SUPERLU}) 
+	LIST(APPEND EXE exe/p1.cpp)
+endif()
 
 foreach(exe ${EXE})
 	get_filename_component(name ${exe} NAME) 
