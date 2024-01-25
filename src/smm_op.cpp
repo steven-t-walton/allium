@@ -6,6 +6,10 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha)
 	: fes(_fes), vfes(_vfes), total(_total), absorption(_absorption), alpha(_alpha)
 {
+	offsets.SetSize(3); 
+	offsets[1] = vfes.GetVSize(); 
+	offsets[2] = fes.GetVSize(); 
+	offsets.PartialSum(); 
 	const auto dim = fes.GetMesh()->Dimension(); 
 
 	mfem::ParBilinearForm Mtform(&vfes);
@@ -58,6 +62,19 @@ void LDGDiffusionDiscretization::BackSolve(const mfem::Vector &g, const mfem::Ve
 	iMt->Mult(tmp_elim_vec, J); 
 }
 
+void InverseLDGDiffusionOperator::Mult(const mfem::Vector &b, mfem::Vector &x) const 
+{
+	const auto &offsets = disc.GetOffsets(); 
+	mfem::BlockVector bb(b.GetData(), offsets); 
+	mfem::BlockVector bx(x.GetData(), offsets);
+
+	const auto &S = disc.SchurComplement(); 
+	phi_source = bb.GetBlock(1); 
+	disc.EliminateRHS(bb.GetBlock(0), phi_source); 
+	Sinv.Mult(phi_source, bx.GetBlock(1)); 
+	disc.BackSolve(bb.GetBlock(0), bx.GetBlock(1), bx.GetBlock(0)); 
+}
+
 LDGSMMSourceOperator::LDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, PhaseSpaceCoefficient &source_coef, 
 	PhaseSpaceCoefficient &inflow_coef, double _alpha)
@@ -67,6 +84,9 @@ LDGSMMSourceOperator::LDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mf
 	offsets[1] = vfes.GetVSize(); 
 	offsets[2] = fes.GetVSize(); 
 	offsets.PartialSum(); 
+
+	width = TotalExtent(psi_ext); 
+	height = offsets.Last(); 
 
 	const auto dim = fes.GetMesh()->Dimension(); 
 	Q0.SetSize(fes.GetVSize()); 
