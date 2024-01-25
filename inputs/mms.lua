@@ -63,3 +63,7 @@ sn = {
 	solver = "gmres",
 	write_graph = false
 }
+
+output = {
+       name = "solution"
+}

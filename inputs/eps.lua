@@ -55,3 +55,7 @@ sn = {
 	max_it = 100, 
 	solver = "sli",
 }
+
+output = {
+       name = "solution"
+}

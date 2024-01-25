@@ -392,13 +392,16 @@ int main(int argc, char *argv[]) {
 	// integrates over angle psi -> phi 
 	DiscreteToMoment D(quad, psi_ext, phi_ext); 
 
+	const auto psi_size_global = mesh.ReduceInt(psi_size); 
+	const auto phi_size_global = mesh.ReduceInt(phi_size); 
+
 	// --- output algorithmic options used --- 
 	out << YAML::Key << "sn" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "fe order" << YAML::Value << fe_order; 
 		out << YAML::Key << "sn order" << YAML::Value << sn_order; 
 		out << YAML::Key << "num angles" << YAML::Value << Nomega; 			
-		out << YAML::Key << "psi size" << YAML::Value << psi_size;
-		out << YAML::Key << "phi size" << YAML::Value << phi_size;
+		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
+		out << YAML::Key << "phi size" << YAML::Value << phi_size_global;
 		out << YAML::Key << "acceleration" << YAML::Value; 
 		if (accel_avail) {
 			sol::table accel = accel_avail.value();
@@ -666,14 +669,20 @@ int main(int argc, char *argv[]) {
 	}
 
 	// --- output to paraview --- 
-	mfem::ParGridFunction mesh_part(&fes0); 
-	for (int i=0; i<mesh_part.Size(); i++) { mesh_part[i] = rank; }
-	mfem::ParaViewDataCollection dc("solution", &mesh); 
-	dc.RegisterField("phi", &phi); 
-	dc.RegisterField("partition", &mesh_part); 
-	dc.RegisterField("total", &total_gf); 
-	dc.RegisterField("scattering", &scattering_gf); 
-	dc.Save(); 
+	sol::optional<sol::table> output_avail = lua["output"]; 
+	if (output_avail) {
+		sol::table output = output_avail.value(); 
+		std::string output_name(output["name"]); 
+		out << YAML::Key << "output name" << YAML::Value << realpath(output_name.c_str(), nullptr); 
+		mfem::ParGridFunction mesh_part(&fes0); 
+		for (int i=0; i<mesh_part.Size(); i++) { mesh_part[i] = rank; }
+		mfem::ParaViewDataCollection dc(output_name, &mesh); 
+		dc.RegisterField("phi", &phi); 
+		dc.RegisterField("partition", &mesh_part); 
+		dc.RegisterField("total", &total_gf); 
+		dc.RegisterField("scattering", &scattering_gf); 
+		dc.Save(); 
+	}
 
 	timer.Stop(); 
 	double time = timer.RealTime(); 

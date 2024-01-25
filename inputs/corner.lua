@@ -73,3 +73,7 @@ sn = {
 	acceleration = ldgsa,
 	solver = "gmres"
 }
+
+output = {
+       name = "solution"
+}
