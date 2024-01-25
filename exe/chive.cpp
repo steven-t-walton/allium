@@ -8,6 +8,7 @@
 #include "p1diffusion.hpp"
 #include "sweep.hpp"
 #include "transport_op.hpp"
+#include "smm_op.hpp"
 #include "phase_coefficient.hpp"
 #include "comment_stream.hpp"
 
@@ -449,6 +450,7 @@ int main(int argc, char *argv[]) {
 	mfem::SuperLURowLocMatrix *slu_op = nullptr; 
 	mfem::Vector normal(dim); 
 	normal = 0.0; normal(0) = 1.0; 
+	bool moment_solve = false; 
 	double alpha = ComputeAlpha(quad, normal);
 	if (accel_avail) {
 		sol::table accel = accel_avail.value(); 
@@ -522,52 +524,115 @@ int main(int argc, char *argv[]) {
 			dsa_solver = itsolve; 
 			dsa_prec = amg; 
 		}
+		else if (type == "LDGSMM") {
+			moment_solve = true; 
+		}
 		else MFEM_ABORT("dsa type " << type << " not defined"); 
 
-		prec = new DiffusionSyntheticAccelerationOperator(*dsa_solver, Ms_form); 
+		if (!moment_solve)
+			prec = new DiffusionSyntheticAccelerationOperator(*dsa_solver, Ms_form); 
 	}
 
-	// form source for schur complement solve 
-	// b -> D L^{-1} b
-	Linv.Mult(source_vec, psi); 
-	mfem::Vector schur_source(phi_size); 
-	D.Mult(psi, schur_source);
+	if (!moment_solve) {
+		// form source for schur complement solve 
+		// b -> D L^{-1} b
+		Linv.Mult(source_vec, psi); 
+		mfem::Vector schur_source(phi_size); 
+		D.Mult(psi, schur_source);
 
-	// create outer solver object 
-	mfem::IterativeSolver *outer; 
-	if (outer_type == "sli") {
-		outer = new mfem::SLISolver(MPI_COMM_WORLD); 
-	} 
-	else if (outer_type == "gmres") {
-		outer = new mfem::GMRESSolver(MPI_COMM_WORLD); 
-	} 
-	else if (outer_type == "bicg") {
-		outer = new mfem::BiCGSTABSolver(MPI_COMM_WORLD); 
+		// create outer solver object 
+		mfem::IterativeSolver *outer; 
+		if (outer_type == "sli") {
+			outer = new mfem::SLISolver(MPI_COMM_WORLD); 
+		} 
+		else if (outer_type == "gmres") {
+			outer = new mfem::GMRESSolver(MPI_COMM_WORLD); 
+		} 
+		else if (outer_type == "bicg") {
+			outer = new mfem::BiCGSTABSolver(MPI_COMM_WORLD); 
+		}
+		else if (outer_type == "fgmres") {
+			outer = new mfem::FGMRESSolver(MPI_COMM_WORLD); 
+		}
+		else MFEM_ABORT("solver " << outer_type << " not defined"); 
+		outer->SetRelTol(tolerance*tolerance); 
+		outer->SetAbsTol(tolerance); 
+		outer->SetMaxIter(max_it); 
+		if (accel_avail) { outer->SetPreconditioner(*prec); }
+		outer->SetOperator(T); 
+		outer->SetPrintLevel(0); 
+		TransportIterationMonitor monitor(out, dynamic_cast<mfem::IterativeSolver*>(dsa_solver)); 
+		outer->SetMonitor(monitor); 
+		outer->Mult(schur_source, phi); 
+		out << YAML::Key << "outer iterations" << YAML::Value << outer->GetNumIterations();
+		if (monitor.inner_it.Size()) {
+			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
+			out << YAML::Key << "min inner" << YAML::Value << monitor.inner_it.Min(); 
+			out << YAML::Key << "max inner" << YAML::Value << monitor.inner_it.Max();
+			out << YAML::Key << "avg inner" << YAML::Value << (double)monitor.inner_it.Sum()/monitor.inner_it.Size(); 		
+			out << YAML::EndMap; 
+		}
+		delete outer; 
 	}
-	else if (outer_type == "fgmres") {
-		outer = new mfem::FGMRESSolver(MPI_COMM_WORLD); 
-	}
-	else MFEM_ABORT("solver " << outer_type << " not defined"); 
-	outer->SetRelTol(tolerance*tolerance); 
-	outer->SetAbsTol(tolerance); 
-	outer->SetMaxIter(max_it); 
-	if (accel_avail) { outer->SetPreconditioner(*prec); }
-	outer->SetOperator(T); 
-	outer->SetPrintLevel(0); 
-	TransportIterationMonitor monitor(out, dynamic_cast<mfem::IterativeSolver*>(dsa_solver)); 
-	outer->SetMonitor(monitor); 
-	outer->Mult(schur_source, phi); 
-	out << YAML::Key << "outer iterations" << YAML::Value << outer->GetNumIterations();
-	if (monitor.inner_it.Size()) {
-		out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "min inner" << YAML::Value << monitor.inner_it.Min(); 
-		out << YAML::Key << "max inner" << YAML::Value << monitor.inner_it.Max();
-		out << YAML::Key << "avg inner" << YAML::Value << (double)monitor.inner_it.Sum()/monitor.inner_it.Size(); 		
-		out << YAML::EndMap; 
+
+	else {
+		sol::table accel = accel_avail.value(); 
+		mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
+		LDGSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source, inflow, alpha); 
+		LDGDiffusionDiscretization ldg(fes, vfes, total, absorption, alpha); 
+		const auto &S = ldg.SchurComplement(); 
+
+		mfem::CGSolver solver(MPI_COMM_WORLD); 
+		solver.SetPrintLevel(0); 
+		sol::optional<double> rel_avail = accel["reltol"]; 
+		sol::optional<double> abs_avail = accel["abstol"]; 
+		if (not(rel_avail or abs_avail)) MFEM_ABORT("must specify tolerance for iterative solver"); 
+		if (rel_avail) solver.SetRelTol(rel_avail.value()); 
+		if (abs_avail) solver.SetAbsTol(abs_avail.value()); 
+		solver.SetMaxIter(accel["max_it"].get_or(50));
+		solver.SetPrintLevel(0);
+		mfem::HypreBoomerAMG amg(S); 
+		amg.SetPrintLevel(0); 
+		solver.SetOperator(S); 
+		solver.SetPreconditioner(amg); 
+		solver.iterative_mode = true; 
+
+		InverseLDGDiffusionOperator inv_ldg(ldg, solver); 
+		mfem::ProductOperator smm(&inv_ldg, &source_op, false, false); 
+		mfem::BlockVector x(ldg.GetOffsets()), xold(ldg.GetOffsets()); 
+		x = 0.0; 
+		xold = 0.0; 
+		mfem::Vector scat_source(phi_size); 
+		int it; 
+		double norm; 
+		out << YAML::Key << "smm iterations" << YAML::Value << YAML::BeginSeq; 
+		for (it=0; it<max_it; it++) {
+			Ms_form.Mult(xold.GetBlock(1), scat_source); 
+			D.MultTranspose(scat_source, psi); 
+			psi += source_vec; 
+			Linv.Mult(psi, psi); 
+			smm.Mult(psi, x); 
+
+			xold -= x; 
+			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, xold, xold)); 
+			xold = x; 
+
+			out << YAML::BeginMap; 
+			out << YAML::Key << "it" << YAML::Value << it+1; 
+			out << YAML::Key << "norm" << YAML::Value << norm; 
+			out << YAML::Key << "inner it" << YAML::Value << solver.GetNumIterations(); 
+			out << YAML::Key << "inner norm" << YAML::Value << solver.GetFinalNorm(); 
+			// out << YAML::Key << "time" << YAML::Value << time; 
+			out << YAML::EndMap; 
+
+			if (norm < tolerance) break; 
+		}
+		out << YAML::EndSeq; 
+		out << YAML::Key << "outer iterations" << YAML::Value << it;
+		phi = x.GetBlock(1); 
 	}
 
 	// --- clean up hanging pointers --- 
-	delete outer; 
 	if (prec) delete prec; 
 	if (dsa_prec) delete dsa_prec; 
 	if (dsa_solver) delete dsa_solver; 
