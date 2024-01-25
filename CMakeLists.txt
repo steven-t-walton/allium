@@ -2,6 +2,15 @@ cmake_minimum_required(VERSION 3.27)
 set(CMAKE_CXX_STANDARD 20) 
 project(allium)
 
+# test compiler has std::span
+try_compile(HAS_STD_SPAN SOURCE_FROM_CONTENT "span_test.cpp"
+	"#include <span>
+	int main() { double *data = new double[5]; auto s = std::span<double>(data, 5); delete data; }"
+	OUTPUT_VARIABLE output)
+if (NOT ${HAS_STD_SPAN})
+	message(FATAL_ERROR "compiler does not have std::span")
+endif()
+
 # --- default value for build type --- 
 if (NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
