@@ -642,7 +642,9 @@ int main(int argc, char *argv[]) {
 	if (prec) delete prec; 
 	if (dsa_prec) delete dsa_prec; 
 	if (dsa_solver) delete dsa_solver; 
+#ifdef MFEM_USE_SUPERLU
 	if (slu_op) delete slu_op; 
+#endif
 	if (dsa_mat) delete dsa_mat; 
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
