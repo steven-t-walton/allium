@@ -671,9 +671,11 @@ int main(int argc, char *argv[]) {
 	// --- output to paraview --- 
 	sol::optional<sol::table> output_avail = lua["output"]; 
 	if (output_avail) {
-		sol::table output = output_avail.value(); 
-		std::string output_name(output["name"]); 
-		out << YAML::Key << "output name" << YAML::Value << realpath(output_name.c_str(), nullptr); 
+		sol::table output = output_avail.value();
+		std::string output_name = output["name"]; 	
+		char output_name_resolve[PATH_MAX];
+		realpath(output_name.c_str(), output_name_resolve);  	
+		out << YAML::Key << "output name" << YAML::Value << output_name_resolve; 
 		mfem::ParGridFunction mesh_part(&fes0); 
 		for (int i=0; i<mesh_part.Size(); i++) { mesh_part[i] = rank; }
 		mfem::ParaViewDataCollection dc(output_name, &mesh); 
