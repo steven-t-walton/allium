@@ -11,6 +11,7 @@
 #include "smm_op.hpp"
 #include "phase_coefficient.hpp"
 #include "comment_stream.hpp"
+#include "linalg.hpp"
 #include "utils.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
