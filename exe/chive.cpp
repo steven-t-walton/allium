@@ -11,6 +11,7 @@
 #include "smm_op.hpp"
 #include "phase_coefficient.hpp"
 #include "comment_stream.hpp"
+#include "utils.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
 
@@ -686,9 +687,11 @@ int main(int argc, char *argv[]) {
 		dc.Save(); 
 	}
 
+	// output wall clock time 
+	MPI_Barrier(MPI_COMM_WORLD); 
 	timer.Stop(); 
 	double time = timer.RealTime(); 
-	out << YAML::Key << "solve time" << YAML::Value << time; 
+	out << YAML::Key << "wall time" << YAML::Value << FormatTimeString(time); 
 
 	// --- end yaml output --- 
 	out << YAML::EndMap << YAML::Newline; 
