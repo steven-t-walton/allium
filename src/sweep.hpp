@@ -19,6 +19,8 @@ private:
 	// range [mesh_offsets[0], mesh_offsets[1]) 
 	mfem::Array<HYPRE_BigInt> mesh_offsets; 
 	mfem::Array<HYPRE_BigInt> dof_offsets; 
+	mfem::Array<HYPRE_BigInt> mesh_face_nbr_offsets; 
+	std::unordered_map<int,int> proc_to_fn; 
 	// map a ghost element id to its global id 
 	mfem::Array<HYPRE_BigInt> fnbr_to_global; 
 	// "inverse" map: global id to the ghost element id 

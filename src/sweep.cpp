@@ -68,7 +68,7 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 
 	// --- swap offsets with parallel neighbors --- 
 	// from this info can compute global element number of ghost cells 
-	mfem::Array<HYPRE_BigInt> mesh_face_nbr_offsets(num_face_nbrs); 
+	mesh_face_nbr_offsets.SetSize(num_face_nbrs); 
 	for (auto fn=0; fn<num_face_nbrs; fn++) {
 		auto nbr_rank = mesh.GetFaceNbrRank(fn); 
 		MPI_Isend(&mesh_offsets[0], 1, HYPRE_MPI_BIG_INT, nbr_rank, 0, MPI_COMM_WORLD, &send_requests[fn]); 
@@ -187,7 +187,7 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 			fes.GetElementDofs(tail / Nomega, dofs);
 			const auto a = tail % Nomega; 
 			for (const auto &dof : dofs) {
-				send_edges.Append({fn, dof * Nomega + a}); 
+				send_edges.Append({fn, dof * Nomega + int(a)}); 
 			} 
 		}
 		IGRAPH_EIT_NEXT(eit); 
@@ -238,6 +238,10 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 			auto fnbr = face_nbr_local_dof_map.at(gdof); 
 			row[i] = fnbr*Nomega + a; 
 		}
+	}
+
+	for (auto fn=0; fn<num_face_nbrs; fn++) {
+		proc_to_fn[mesh.GetFaceNbrRank(fn)] = fn; 
 	}
 
 	delete[] requests; delete[] statuses; 
@@ -308,7 +312,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 		while (not(local.empty())) {
 			nsweep++; //increment sweep counter to know when to stop 
 			// get first element of queue 
-			auto node = local.front();
+			const auto node = local.front();
 			local.pop_front(); 
 
 			// --- do work --- 
@@ -443,11 +447,10 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			}
 
 			// MPI send data if available 
-			auto tag = mesh_offsets[0] * Nomega + node; 
 			for (const auto &fn : send_fn_set) {
 				auto nbr_rank = mesh.GetFaceNbrRank(fn); 
 				MPI_Request send_request; 
-				MPI_Isend(rhs.GetData(), dofs.Size(), MPI_DOUBLE, nbr_rank, tag, MPI_COMM_WORLD, &send_request); 
+				MPI_Isend(rhs.GetData(), dofs.Size(), MPI_DOUBLE, nbr_rank, node, MPI_COMM_WORLD, &send_request); 
 				MPI_Wait(&send_request, MPI_STATUS_IGNORE); 
 			}
 		}
@@ -465,11 +468,14 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			// iprobe has same status as if MPI_Recv was called 
 			// extract info to reproduce call to MPI_Recv 
 			// also used to find the right buffer to place data in 
-			auto tag = status.MPI_TAG; 
+			auto tag = status.MPI_TAG; // local node id to source processor 
 			auto source = status.MPI_SOURCE; 
+			auto fn = proc_to_fn.at(source);
+			// convert to global id so that it can be mapped to local fnbr id 
+			auto global = mesh_face_nbr_offsets[fn] * Nomega + tag;  
 			// convert tag (global idx) to a local index 
-			auto e = tag / Nomega; 
-			auto a = tag % Nomega; 
+			auto e = global / Nomega; 
+			auto a = global % Nomega; 
 			auto local_e = global_to_fnbr.at(e) + Ne; 
 			auto local_id = local_e*Nomega + a;		
 			// size of message 
