@@ -1,5 +1,5 @@
 # Overview
-`exe/chive.cpp`: driver for steady-state, mono-energetic, neutral particle transport supporting 
+* `exe/chive.cpp`: driver for steady-state, mono-energetic, neutral particle transport supporting 
 	* P1, Local Discontinuous Galerkin, and Modified Interior Penalty diffusion synthetic acceleration preconditioners for fixed-point and Krylov solvers
 	* Independent Local Discontinuous Galerkin Second Moment Method 
 	* arbitrary material descriptions and mesh composition 
