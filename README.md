@@ -1,3 +1,17 @@
+# Overview
+`exe/chive.cpp`: driver for steady-state, mono-energetic, neutral particle transport supporting 
+	* P1, Local Discontinuous Galerkin, and Modified Interior Penalty diffusion synthetic acceleration preconditioners for fixed-point and Krylov solvers
+	* Independent Local Discontinuous Galerkin Second Moment Method 
+	* arbitrary material descriptions and mesh composition 
+	* Lua input system 
+	* parallel decomposition with full upwind sweep 
+	* output is YAML-parsable 
+* `inputs/`: collection of example Lua input files for `chive` 
+	* `eps.lua` standard "thick diffusion limit" stress test parameterized by variable `epsilon` 
+	* `mms.lua` quadratically anisotropic transport test problem to assess spatial/angular error 
+	* `corner.lua` crooked pipe-like problem with two materials 
+* `tests/`: collection of tests using the GoogleTest framework. Run with `ctest`. 
+
 # Building 
 ## Required Dependencies 
 * [MFEM](https://github.com/mfem/mfem) built with MPI, [Hypre](https://github.com/hypre-space/hypre), [Metis](https://github.com/mfem/tpls/blob/gh-pages/metis-4.0.3.tar.gz) and optionally [Suitesparse](https://github.com/DrTimothyAldenDavis/SuiteSparse), [Libunwind](https://github.com/libunwind/libunwind), and [SuperLU_DIST](https://github.com/xiaoyeli/superlu_dist) are useful 
@@ -25,3 +39,4 @@ make install
 ``` 
 cmake .. -Dmfem_DIR=<path to mfem install>/lib/cmake/mfem -Digraph_DIR=<path to igraph>/lib64/cmake/igraph/ -Dmdspan_DIR=<path to mdspan>/lib64/cmake/mdspan -Dyaml-cpp_DIR=<path to yaml-cpp>/lib64/cmake/yaml-cpp -Dsol2_DIR=<path to sol2>/share/cmake/sol2/ -DGTest_ROOT=<path to googletest>/lib64/cmake/GTest -DENABLE_TESTS=TRUE -DCMAKE_BUILD_TYPE=Release 
 ```
+3. Run all tests with `ctest` 
