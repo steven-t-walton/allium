@@ -143,7 +143,7 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 			if (dim==1) {
 				normal(0) = 2*trans->GetElement1IntPoint().x - 1.0;
 			} else {
-				CalcOrtho(trans->Jacobian(), normal); 				
+				mfem::CalcOrtho(trans->Jacobian(), normal); 				
 			}
 
 			// add directed edges based on Omega.n 
