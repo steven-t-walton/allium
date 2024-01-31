@@ -49,6 +49,42 @@ public:
 	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, mfem::Vector &elvec); 
 };
 
+class ProjectedCoefBoundaryLFIntegrator : public mfem::LinearFormIntegrator
+{
+private:
+	mfem::Coefficient &Q;
+	const mfem::FiniteElementCollection &fec;  
+	int oa, ob; 
+
+	mfem::Vector shape, Qnodes, tr_shape; 
+public:
+	ProjectedCoefBoundaryLFIntegrator(mfem::Coefficient &q, const mfem::FiniteElementCollection &_fec, int a=1, int b=1) 
+		: Q(q), fec(_fec), oa(a), ob(b)
+	{ }
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::ElementTransformation &T, mfem::Vector &elvec) {
+		MFEM_ABORT("only call for faces"); 
+	}
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, mfem::Vector &elvec); 
+};
+
+class ProjectedCoefBoundaryNormalLFIntegrator : public mfem::LinearFormIntegrator
+{
+private:
+	mfem::Coefficient &Q; 
+	const mfem::FiniteElementCollection &fec; 
+	int oa, ob; 
+
+	mfem::Vector shape, nor, Qnodes, tr_shape; 
+public:
+	ProjectedCoefBoundaryNormalLFIntegrator(mfem::Coefficient &q, const mfem::FiniteElementCollection &_fec, int a=1, int b=1) 
+		: Q(q), fec(_fec), oa(a), ob(b)
+	{ }
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::ElementTransformation &T, mfem::Vector &elvec) {
+		MFEM_ABORT("only call for faces"); 
+	}
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, mfem::Vector &elvec); 	
+};
+
 class SMMCorrectionTensorCoefficient : public mfem::MatrixArrayCoefficient
 {
 private:

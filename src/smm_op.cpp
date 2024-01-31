@@ -115,11 +115,13 @@ LDGSMMSourceOperator::LDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mf
 
 	InflowPartialCurrentCoefficient Jin(inflow_coef, quad); 
 	mfem::LinearForm fform(&fes); 
-	fform.AddBdrFaceIntegrator(new mfem::BoundaryLFIntegrator(Jin, 2, 1)); 
+	// fform.AddBdrFaceIntegrator(new mfem::BoundaryLFIntegrator(Jin, 2, 1)); 
+	fform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryLFIntegrator(Jin, *fes.FEColl(), 2, 1)); 
 	fform.Assemble(); 
 
 	mfem::LinearForm gform(&vfes); 
-	gform.AddBdrFaceIntegrator(new BoundaryNormalFaceLFIntegrator(Jin, 2, 1)); 
+	// gform.AddBdrFaceIntegrator(new BoundaryNormalFaceLFIntegrator(Jin, 2, 1)); 
+	gform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryNormalLFIntegrator(Jin, *fes.FEColl(), 2, 1)); 
 	gform.Assemble(); 
 
 	Q0.Add(-1.0, fform); 
@@ -130,13 +132,14 @@ LDGSMMSourceOperator::LDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mf
 void LDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
 {
 	mfem::BlockVector bv(source.GetData(), offsets); 
-	TransportVectorView psi_view(psi.GetData(), psi_ext); 
+	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 
 	SMMCorrectionTensorCoefficient T(fes, quad, psi_view); 
 	SMMBdrCorrectionFactorCoefficient beta(fes, quad, psi_view, alpha); 	
 
 	mfem::ParLinearForm fform(&fes, bv.GetBlock(1).GetData()); 
 	mfem::ProductCoefficient bdr_coef_f(-0.5, beta); 
-	fform.AddBdrFaceIntegrator(new mfem::BoundaryLFIntegrator(bdr_coef_f, 2, 1)); 
+	// fform.AddBdrFaceIntegrator(new mfem::BoundaryLFIntegrator(bdr_coef_f, 2, 1)); 
+	fform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryLFIntegrator(bdr_coef_f, *fes.FEColl(), 2, 1)); 
 	fform.Assemble(); 
 
 	mfem::ParLinearForm gform(&vfes, bv.GetBlock(0).GetData()); 
@@ -144,7 +147,8 @@ void LDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) c
 	gform.AddInteriorFaceIntegrator(new VectorJumpTensorAverageLFIntegrator(T)); 
 	gform.AddBdrFaceIntegrator(new VectorJumpTensorAverageLFIntegrator(T)); 
 	mfem::ProductCoefficient bdr_coef_g(1./2/alpha/3, beta);
-	gform.AddBdrFaceIntegrator(new BoundaryNormalFaceLFIntegrator(bdr_coef_g, 2, 1)); 
+	// gform.AddBdrFaceIntegrator(new BoundaryNormalFaceLFIntegrator(bdr_coef_g, 2, 1)); 
+	gform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryNormalLFIntegrator(bdr_coef_g, *fes.FEColl(), 2, 1)); 
 	gform.Assemble();
 	gform *= 3.0;  
 

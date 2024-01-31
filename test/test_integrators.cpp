@@ -220,3 +220,45 @@ TEST(Integrators, BoundaryNormalFaceLFIntegrator) {
 	ex -= elvec; 
 	EXPECT_DOUBLE_EQ(ex.Norml2(), 0.0); 
 }
+
+TEST(Integrators, ProjectedBoundaryNormalLF) {
+	mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D(2,1, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace vfes(&mesh, &fec, dim); 
+	auto f = [](const mfem::Vector &x) {
+		return x(0)*x(1) + x(0) + x(1) + 2.0; 
+	};
+	mfem::FunctionCoefficient inflow(f); 
+	BoundaryNormalFaceLFIntegrator lfi(inflow); 
+	auto &trans = *mesh.GetBdrFaceTransformations(0); 
+	mfem::Vector elvec; 
+	lfi.AssembleRHSElementVect(*vfes.GetFE(trans.Elem1No), trans, elvec); 
+
+	ProjectedCoefBoundaryNormalLFIntegrator pclfi(inflow, fec); 
+	mfem::Vector pcelvec; 
+	pclfi.AssembleRHSElementVect(*vfes.GetFE(trans.Elem1No), trans, pcelvec); 
+	pcelvec -= elvec; 
+	EXPECT_DOUBLE_EQ(pcelvec.Norml2(), 0.0); 
+}
+
+TEST(Integrators, ProjectedBoundaryLF) {
+	mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D(2,1, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace vfes(&mesh, &fec, dim); 
+	auto f = [](const mfem::Vector &x) {
+		return x(0)*x(1) + x(0) + x(1) + 2.0; 
+	};
+	mfem::FunctionCoefficient inflow(f); 
+	mfem::BoundaryLFIntegrator lfi(inflow); 
+	auto &trans = *mesh.GetBdrFaceTransformations(0); 
+	mfem::Vector elvec; 
+	lfi.AssembleRHSElementVect(*vfes.GetFE(trans.Elem1No), trans, elvec); 
+
+	ProjectedCoefBoundaryLFIntegrator pclfi(inflow, fec); 
+	mfem::Vector pcelvec; 
+	pclfi.AssembleRHSElementVect(*vfes.GetFE(trans.Elem1No), trans, pcelvec); 
+	pcelvec -= elvec; 
+	EXPECT_DOUBLE_EQ(pcelvec.Norml2(), 0.0); 
+}

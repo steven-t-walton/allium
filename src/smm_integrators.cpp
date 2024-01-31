@@ -173,6 +173,82 @@ void BoundaryNormalFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteEl
 	}
 }
 
+void ProjectedCoefBoundaryNormalLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el, 
+	mfem::FaceElementTransformations &trans, mfem::Vector &elvec)
+{
+	const auto ndof = el.GetDof(); 
+	const auto dim = el.GetDim(); 
+	shape.SetSize(ndof); 
+	nor.SetSize(dim); 
+	elvec.SetSize(ndof*dim); 
+	elvec = 0.0; 
+
+	const auto &tr_el = *fec.TraceFiniteElementForGeometry(trans.GetGeometryType()); 
+	const auto tr_dof = tr_el.GetDof(); 
+	Qnodes.SetSize(tr_dof); 
+	tr_el.Project(Q, trans, Qnodes); 
+	tr_shape.SetSize(tr_dof); 
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		int intorder = oa * el.GetOrder() + ob;  
+		ir = &mfem::IntRules.Get(el.GetGeomType(), intorder);
+	}
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const mfem::IntegrationPoint &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		const mfem::IntegrationPoint &eip = trans.GetElement1IntPoint(); 
+		if (dim>1) {
+			mfem::CalcOrtho(trans.Jacobian(), nor); 
+		}
+		else {
+			nor(0) = 1.0; 
+		}
+
+		tr_el.CalcShape(ip, tr_shape); 
+		double q = tr_shape * Qnodes; 
+		el.CalcShape(eip, shape); 
+		for (int d=0; d<dim; d++) {
+			for (int i=0; i<ndof; i++) {
+				elvec(i + d*ndof) += shape(i) * nor(d) * ip.weight * q; 
+			}
+		}
+	}
+}
+
+void ProjectedCoefBoundaryLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el, 
+	mfem::FaceElementTransformations &trans, mfem::Vector &elvec) 
+{
+	const auto dof = el.GetDof(); 
+	const auto &tr_el = *fec.TraceFiniteElementForGeometry(trans.GetGeometryType()); 
+	const auto tr_dof = tr_el.GetDof(); 
+	Qnodes.SetSize(tr_dof); 
+	tr_el.Project(Q, trans, Qnodes); 
+	tr_shape.SetSize(tr_dof); 
+	shape.SetSize(dof); 
+	elvec.SetSize(dof); 
+	elvec = 0.0; 
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		int intorder = oa * el.GetOrder() + ob;  
+		ir = &mfem::IntRules.Get(el.GetGeomType(), intorder);
+	}
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const auto &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		const auto &eip = trans.GetElement1IntPoint(); 
+		el.CalcShape(eip, shape); 
+		tr_el.CalcShape(ip, tr_shape); 
+		double val = trans.Weight() * ip.weight * (tr_shape * Qnodes); 
+		elvec.Add(val, shape); 
+	}
+}
+
 SMMCorrectionTensorCoefficient::SMMCorrectionTensorCoefficient(
 	mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, ConstTransportVectorView _psi)
 	: fes(_fes), quad(_quad), psi(_psi), mfem::MatrixArrayCoefficient(_fes.GetMesh()->Dimension())
