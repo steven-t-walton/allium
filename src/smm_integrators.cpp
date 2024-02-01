@@ -49,7 +49,7 @@ void VectorJumpTensorAverageLFIntegrator::AssembleRHSElementVect(const mfem::Fin
 	const mfem::IntegrationRule *ir = IntRule;
 	if (ir == NULL)
 	{
-		ir = &mfem::IntRules.Get(el.GetGeomType(), oa * el.GetOrder() + ob);
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), oa * el.GetOrder() + ob);
 	}
 
 	for (auto n=0; n<ir->GetNPoints(); n++) {
@@ -97,7 +97,7 @@ void VectorJumpTensorAverageLFIntegrator::AssembleRHSElementVect(
 	const mfem::IntegrationRule *ir = IntRule;
 	if (ir == NULL)
 	{
-		ir = &mfem::IntRules.Get(el1.GetGeomType(), oa * std::max(el1.GetOrder(),el2.GetOrder()) + ob);
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), oa * std::max(el1.GetOrder(),el2.GetOrder()) + ob);
 	}
 
 	for (auto n=0; n<ir->GetNPoints(); n++) {
@@ -149,7 +149,7 @@ void BoundaryNormalFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteEl
 	if (ir == NULL)
 	{
 		int intorder = oa * el.GetOrder() + ob;  
-		ir = &mfem::IntRules.Get(el.GetGeomType(), intorder);
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), intorder);
 	}
 
 	for (auto n=0; n<ir->GetNPoints(); n++) {
@@ -193,7 +193,7 @@ void ProjectedCoefBoundaryNormalLFIntegrator::AssembleRHSElementVect(const mfem:
 	if (ir == NULL)
 	{
 		int intorder = oa * el.GetOrder() + ob;  
-		ir = &mfem::IntRules.Get(el.GetGeomType(), intorder);
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), intorder);
 	}
 
 	for (auto n=0; n<ir->GetNPoints(); n++) {
@@ -235,7 +235,7 @@ void ProjectedCoefBoundaryLFIntegrator::AssembleRHSElementVect(const mfem::Finit
 	if (ir == NULL)
 	{
 		int intorder = oa * el.GetOrder() + ob;  
-		ir = &mfem::IntRules.Get(el.GetGeomType(), intorder);
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), intorder);
 	}
 
 	for (auto n=0; n<ir->GetNPoints(); n++) {
@@ -328,4 +328,239 @@ double SMMBdrCorrectionFactorCoefficient::Eval(mfem::ElementTransformation &tran
 		beta += (std::fabs(Omega*nor) - alpha) * psi_at_ip * quad.GetWeight(a); 
 	}
 	return beta; 
+}
+
+void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el, 
+	mfem::FaceElementTransformations &trans, mfem::Vector &elvec) 
+{
+	const auto face_el_no = trans.mesh->GetBdrElementFaceIndex(trans.ElementNo); 
+	// extract beta values at face 
+	const auto &tr_fes = *beta.FESpace();
+	tr_fes.GetElementDofs(trans.Elem1No, beta_dofs1);  
+	beta.GetSubVector(beta_dofs1, beta_all1); 
+	const auto &tr_el = *tr_fes.GetTraceElement(face_el_no, trans.GetGeometryType()); 
+	const auto tr_dof = tr_el.GetDof(); 
+	auto info = trans.mesh->GetFaceInformation(face_el_no); 
+	assert(info.IsBoundary()); 
+	auto local_face_id = info.element[0].local_face_id; 
+	beta_trace1.SetSize(tr_dof); 
+	for (int i=0; i<tr_dof; i++) { beta_trace1(i) = beta_all1(local_face_id * tr_dof + i); }
+	tr_shape1.SetSize(tr_dof); 
+
+	const auto dof = el.GetDof(); 
+	shape1.SetSize(dof); 
+	elvec.SetSize(dof); 
+	elvec = 0.0; 
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		int intorder = oa * el.GetOrder() + ob;  
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), intorder);
+	}
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const auto &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		const auto &eip = trans.GetElement1IntPoint(); 
+		el.CalcShape(eip, shape1); 
+		tr_el.CalcShape(ip, tr_shape1); 
+		double val = trans.Weight() * ip.weight * (tr_shape1 * beta_trace1); 
+		elvec.Add(-val/2, shape1); 
+	}
+}
+
+void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2,
+	mfem::FaceElementTransformations &trans, mfem::Vector &elvec) 
+{
+	// extract beta data for this face 
+	const auto &tr_fes = *beta.ParFESpace();
+	const auto &tr_el = *tr_fes.GetTraceElement(trans.ElementNo, trans.GetGeometryType()); 
+	const auto tr_dof = tr_el.GetDof(); 
+	auto info = trans.mesh->GetFaceInformation(trans.ElementNo); 
+	assert(trans.Elem1No < trans.mesh->GetNE()); 
+	const auto nbr_el = trans.Elem2No - trans.mesh->GetNE(); 
+
+	// get element "1" data 
+	tr_fes.GetElementDofs(trans.Elem1No, beta_dofs1);  
+	beta.GetSubVector(beta_dofs1, beta_all1); 
+	auto local_face_id1 = info.element[0].local_face_id; 
+	auto local_face_id2 = info.element[1].local_face_id; 
+	beta_trace1.SetSize(tr_dof); 
+	for (int i=0; i<tr_dof; i++) { beta_trace1(i) = beta_all1(local_face_id1 * tr_dof + i); }
+	tr_shape1.SetSize(tr_dof); 
+
+	// get element "2" data 
+	// look into parallel data structure if shared face
+	if (nbr_el >= 0) {
+		tr_fes.GetFaceNbrElementVDofs(nbr_el, beta_dofs2); 
+		const auto &fnbr_data = beta.FaceNbrData(); 
+		fnbr_data.GetSubVector(beta_dofs2, beta_all2); 
+	}
+
+	else {
+		tr_fes.GetElementDofs(trans.Elem2No, beta_dofs2); 
+		beta.GetSubVector(beta_dofs2, beta_all2); 
+	}
+	beta_trace2.SetSize(tr_dof); 
+	for (int i=0; i<tr_dof; i++) { beta_trace2(i) = beta_all2(local_face_id2 * tr_dof + i); }
+	tr_shape2.SetSize(tr_dof); 		
+
+	const auto dof1 = el1.GetDof(); 
+	const auto dof2 = el2.GetDof(); 
+	assert(dof1 == dof2); 
+	shape1.SetSize(dof1); 
+	shape2.SetSize(dof2); 
+	elvec.SetSize(dof1 + dof2); 
+	elvec = 0.0; 
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		int intorder = oa * std::max(el1.GetOrder(), el2.GetOrder()) + ob;  
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), intorder);
+	}
+
+	mfem::Vector elvec1(elvec, 0, dof1); 
+	mfem::Vector elvec2(elvec, dof1, dof2); 
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const auto &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		const auto &eip1 = trans.GetElement1IntPoint(); 
+		const auto &eip2 = trans.GetElement2IntPoint(); 
+		el1.CalcShape(eip1, shape1); 
+		el2.CalcShape(eip2, shape2); 
+		tr_el.CalcShape(ip, tr_shape1); 
+		tr_el.CalcShape(ip, tr_shape2); // <-- should there be a second trace element?
+		double jump = (tr_shape1 * beta_trace1) - (tr_shape2 * beta_trace2); 
+		double val = trans.Weight() * ip.weight * jump; 
+		elvec1.Add(-val/2, shape1); 
+		elvec2.Add(val/2, shape2); 
+	}
+}
+
+void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el, 
+	mfem::FaceElementTransformations &trans, mfem::Vector &elvec) 
+{
+	const auto face_el_no = trans.mesh->GetBdrElementFaceIndex(trans.ElementNo); 
+	const auto dim = trans.GetSpaceDim(); 
+	const auto &tr_vfes = *tensor.FESpace(); 
+	tr_vfes.GetElementVDofs(trans.Elem1No, tr_vdofs1); 
+	tensor.GetSubVector(tr_vdofs1, tensor_all1); 
+
+	const auto &tr_el = *tr_vfes.GetTraceElement(face_el_no, trans.GetGeometryType()); 
+	const auto tr_dof = tr_el.GetDof(); 
+	const auto info = trans.mesh->GetFaceInformation(face_el_no); 
+	const auto local_face_id1 = info.element[0].local_face_id; 
+
+	const auto dofs_per_el = tr_vdofs1.Size() / dim; 
+	tensor_tr1.SetSize(dim*tr_dof); 
+	for (int d=0; d<dim; d++) {
+		for (int i=0; i<tr_dof; i++) {
+			tensor_tr1(tr_dof*d + i) = tensor_all1(local_face_id1*tr_dof*dim + i + d*tr_dof); 
+		}
+	}
+	tr_shape.SetSize(tr_dof); 
+
+	const auto dof = el.GetDof(); 
+	shape1.SetSize(dof); 
+	elvec.SetSize(dim*dof); 
+	elvec = 0.0; 
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		int intorder = oa * el.GetOrder() + ob;  
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), intorder);
+	}
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const auto &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		const auto &eip = trans.GetElement1IntPoint(); 
+
+		el.CalcShape(eip, shape1); 
+		tr_el.CalcShape(ip, tr_shape); 
+		for (auto d=0; d<dim; d++) {
+			mfem::Vector tensor_tr1_d(tensor_tr1, tr_dof*d, tr_dof); 
+			mfem::Vector elvec_d(elvec, dof*d, dof); 
+			elvec_d.Add(-(tensor_tr1_d * tr_shape)*ip.weight*trans.Weight(), shape1); 
+		}
+	}
+}
+
+void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
+	mfem::FaceElementTransformations &trans, mfem::Vector &elvec)
+{
+	assert(trans.Elem1No < trans.mesh->GetNE()); 
+	const auto nbr_el = trans.Elem2No - trans.mesh->GetNE(); 
+
+	const auto dim = trans.GetSpaceDim(); 
+	const auto &tr_vfes = *tensor.ParFESpace(); 
+	const auto &tr_el = *tr_vfes.GetTraceElement(trans.ElementNo, trans.GetGeometryType()); 
+	const auto tr_dof = tr_el.GetDof(); 
+	const auto info = trans.mesh->GetFaceInformation(trans.ElementNo); 
+	const auto local_face_id1 = info.element[0].local_face_id; 
+	const auto local_face_id2 = info.element[1].local_face_id; 
+
+	tr_vfes.GetElementVDofs(trans.Elem1No, tr_vdofs1); 
+	tensor.GetSubVector(tr_vdofs1, tensor_all1); 
+
+	if (nbr_el >= 0) {
+		tr_vfes.GetFaceNbrElementVDofs(nbr_el, tr_vdofs2); 
+		const auto &fnbr_data = tensor.FaceNbrData(); 
+		fnbr_data.GetSubVector(tr_vdofs2, tensor_all2); 
+	}
+
+	else {
+		tr_vfes.GetElementVDofs(trans.Elem2No, tr_vdofs2); 
+		tensor.GetSubVector(tr_vdofs2, tensor_all2); 
+	}
+
+	const auto dofs_per_el = tr_vdofs1.Size() / dim; 
+	tensor_tr1.SetSize(dim*tr_dof); 
+	tensor_tr2.SetSize(dim*tr_dof); 
+	for (int d=0; d<dim; d++) {
+		for (int i=0; i<tr_dof; i++) {
+			tensor_tr1(tr_dof*d + i) = tensor_all1(local_face_id1*tr_dof*dim + i + d*tr_dof); 
+			tensor_tr2(tr_dof*d + i) = tensor_all2(local_face_id2*tr_dof*dim + i + d*tr_dof); 
+		}
+	}
+	tr_shape.SetSize(tr_dof); 
+
+	const auto dof1 = el1.GetDof(); 
+	const auto dof2 = el2.GetDof(); 
+	shape1.SetSize(dof1);
+	shape2.SetSize(dof2);  
+	elvec.SetSize(dim*(dof1 + dof2)); 
+	mfem::Vector elvec1(elvec, 0, dim*dof1), elvec2(elvec, dim*dof1, dim*dof2); 
+	elvec = 0.0; 
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		int intorder = oa * std::max(el1.GetOrder(), el2.GetOrder()) + ob;  
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), intorder);
+	}
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const auto &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		const auto &eip1 = trans.GetElement1IntPoint(); 
+		const auto &eip2 = trans.GetElement2IntPoint(); 
+
+		el1.CalcShape(eip1, shape1); 
+		el2.CalcShape(eip2, shape2); 
+		tr_el.CalcShape(ip, tr_shape); 
+		double w = ip.weight * trans.Weight(); 
+		for (auto d=0; d<dim; d++) {
+			mfem::Vector tensor_tr1_d(tensor_tr1, tr_dof*d, tr_dof); 
+			mfem::Vector tensor_tr2_d(tensor_tr2, tr_dof*d, tr_dof); 
+			double upw_tensor_d = (tensor_tr1_d*tr_shape) - (tensor_tr2_d*tr_shape); 
+
+			mfem::Vector elvec1_d(elvec1, d*dof1, dof1), elvec2_d(elvec2, d*dof2, dof2); 
+			elvec1_d.Add(-upw_tensor_d * w, shape1); 
+			elvec2_d.Add(upw_tensor_d * w, shape2); 
+		}
+	}
 }
