@@ -43,7 +43,7 @@ public:
 };
 
 mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.25); 
+		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.5); 
 
 mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop); 
 

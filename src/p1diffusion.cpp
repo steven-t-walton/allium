@@ -289,8 +289,8 @@ mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace
 	mfem::ParBilinearForm Mtform(&vfes);
 	mfem::ProductCoefficient total3(3.0, total); 
 	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3));
-	Mtform.AddInteriorFaceIntegrator(new DGVectorJumpJumpIntegrator); 
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator); 
+	Mtform.AddInteriorFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/2/alpha)); 
+	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/2/alpha)); 
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	mfem::HypreParMatrix *Mt = Mtform.ParallelAssemble(); 
