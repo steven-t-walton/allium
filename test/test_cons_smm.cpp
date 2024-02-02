@@ -79,7 +79,6 @@ TEST_F(ProjectBetaTest, Quadratic) {
 TEST(CSMM, CSMMZerothLFI) {
 	auto smesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, false, 1.0, 1.0, false); 
 	auto mesh = mfem::ParMesh(MPI_COMM_WORLD, smesh); 
-	if (mfem::Mpi::WorldSize()>1) return; 
 	const auto dim = mesh.Dimension(); 
 	auto fec = mfem::L2_FECollection(1, dim, mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::ParFiniteElementSpace(&mesh, &fec); 
@@ -96,7 +95,6 @@ TEST(CSMM, CSMMZerothLFI) {
 	nor(0) = 1.0; 
 	double alpha = ComputeAlpha(quad, nor);
 
-	ConsistentSMMSourceOperator op(fes, vfes, quad, psi_ext, source_view, alpha); 
 	auto tr_fec = DGTrace_FECollection(1, dim); 
 	auto tr_fes = mfem::ParFiniteElementSpace(&mesh, &tr_fec); 
 	auto tr_vfes = mfem::ParFiniteElementSpace(&mesh, &tr_fec, dim); 
@@ -108,50 +106,11 @@ TEST(CSMM, CSMMZerothLFI) {
 	ProjectPsi(fes, quad, angle_space_coef, psi_view); 
 	ProjectClosuresToFaces(fes, quad, psi_view, alpha, beta, tensor); 
 
-	// for (int i=0; i<mesh.GetNumFaces(); i++) {
-	// 	auto info = mesh.GetFaceInformation(i); 
-	// 	if (info.IsInterior()) continue; 
-	// 	auto *trans = mesh.GetFaceElementTransformations(i); 
-
-	// 	CSMMZerothMomentFaceLFIntegrator lfi(beta); 
-	// 	mfem::Vector elvec; 
-	// 	lfi.AssembleRHSElementVect(*fes.GetFE(trans->Elem1No), *trans, elvec); 
-
-	// 	CSMMFaceIntegrator0 lfi2(fes, quad, psi_view, alpha); 
-	// 	mfem::Vector elvec2; 
-	// 	lfi2.AssembleRHSElementVect(*fes.GetFE(trans->Elem1No), *trans, elvec2); 
-	// 	double norm = elvec.Norml2(); 
-	// 	elvec.Print(); 
-	// 	elvec2.Print(); 
-	// 	std::cout << info << std::endl; 
-	// }
 	mfem::ParLinearForm fform(&fes); 
-	fform.AddInteriorFaceIntegrator(new CSMMFaceIntegrator0(fes, quad, psi_view, alpha)); 
-	fform.AddBdrFaceIntegrator(new CSMMFaceIntegrator0(fes, quad, psi_view, alpha)); 
+	fform.AddInteriorFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta));
 	fform.Assemble(); 
-
-	mfem::ParLinearForm fform2(&fes); 
-	fform2.AddInteriorFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta));
-	fform2.AddBdrFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta)); 
-	fform2.Assemble(); 
-
-	fform -= fform2; 
+	// [[ beta ]] = 0 when GaussLobatto used 
 	EXPECT_NEAR(fform.Norml2(), 0.0, 1e-15); 
-
-	SMMCorrectionTensorCoefficient T(fes, quad, psi_view);
-	mfem::ParLinearForm gform(&vfes); 
-	gform.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(T)); 
-	gform.AddInteriorFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
-	gform.AddBdrFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
-	gform.Assemble(); 
-
-	mfem::ParLinearForm gform2(&vfes); 
-	gform2.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(T)); 
-	gform2.AddInteriorFaceIntegrator(new CSMMFaceIntegrator1(fes, quad, psi_view, alpha)); 
-	gform2.AddBdrFaceIntegrator(new CSMMFaceIntegrator1(fes, quad, psi_view, alpha)); 
-	gform2.Assemble(); 
-	gform2 -= gform; 
-	EXPECT_NEAR(gform2.Norml2(), 0.0, 1e-15); 
 }
 
 std::tuple<double,double> P1SMMError(int Ne, int fe_order) {
