@@ -65,15 +65,28 @@ ldgsa = {
 	max_it = 50
 }
 
+ldgsmm = {
+	type = "LDGSMM", 
+	solver = "cg", 
+	abstol = 1e-7, 
+	max_it = 200, 
+}
+
+p1smm = {
+	type = "P1SMM", 
+	solver = "direct"
+}
+
 sn = {
 	fe_order = 1, 
 	sn_order = 16, 
 	tol = 1e-5, 
 	max_it = 200, 
-	acceleration = ldgsa,
-	solver = "gmres"
+	-- acceleration = ldgsmm,
+	preconditioner = ldgsa,
+	solver = "sli"
 }
 
 output = {
-       name = "solution"
+	name = "solution"
 }

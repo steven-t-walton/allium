@@ -50,12 +50,18 @@ ldgsa = {
 sn = {
 	fe_order = 1, 
 	sn_order = 4, 
-	acceleration = ldgsa, 
+	-- preconditioner = p1sa, 
+	acceleration = {
+		type = "LDGSMM",
+		solver = "cg", 
+		abstol = 1e-12, 
+		max_it = 100
+	},
 	tol = 1e-6, 
 	max_it = 100, 
 	solver = "sli",
 }
 
 output = {
-       name = "solution"
+	name = "solution"
 }

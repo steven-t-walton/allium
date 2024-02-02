@@ -53,10 +53,10 @@ sn = {
 	fe_order = 1, 
 	sn_order = 4, 
 	acceleration = {
-		type = "LDGSA", 
-		solver = "cg", 
-		reltol = 1e-2, 
-		max_it = 50
+		type = "P1SMM", 
+		solver = "direct", 
+		-- abstol = 1e-12, 
+		-- max_it = 50
 	},
 	tol = 1e-10, 
 	max_it = 100, 
@@ -65,5 +65,5 @@ sn = {
 }
 
 output = {
-       name = "solution"
+	name = "solution"
 }
