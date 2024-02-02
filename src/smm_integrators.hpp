@@ -141,7 +141,7 @@ private:
 	int oa, ob; 
 
 	mfem::Array<int> tr_vdofs1, tr_vdofs2; 
-	mfem::Vector shape1, shape2, tr_shape; 
+	mfem::Vector shape1, shape2, tr_shape1, tr_shape2; 
 	mfem::Vector tensor_all1, tensor_all2, tensor_tr1, tensor_tr2; 
 public:
 	CSMMFirstMomentFaceLFIntegrator(const mfem::ParGridFunction &_tensor, int a=2, int b=1)

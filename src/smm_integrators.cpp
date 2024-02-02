@@ -431,7 +431,11 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 		el1.CalcShape(eip1, shape1); 
 		el2.CalcShape(eip2, shape2); 
 		tr_el.CalcShape(ip, tr_shape1); 
-		tr_el.CalcShape(ip, tr_shape2); // <-- should there be a second trace element?
+		mfem::IntegrationPoint ip2(ip); 
+		if (nbr_el>=0) {
+			ip2.x = 1 - ip2.x; 
+		}
+		tr_el.CalcShape(ip2, tr_shape2); // <-- should there be a second trace element?
 		double jump = (tr_shape1 * beta_trace1) - (tr_shape2 * beta_trace2); 
 		double val = trans.Weight() * ip.weight * jump; 
 		elvec1.Add(-val/2, shape1); 
@@ -460,7 +464,7 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 			tensor_tr1(tr_dof*d + i) = tensor_all1(local_face_id1*tr_dof*dim + i + d*tr_dof); 
 		}
 	}
-	tr_shape.SetSize(tr_dof); 
+	tr_shape1.SetSize(tr_dof); 
 
 	const auto dof = el.GetDof(); 
 	shape1.SetSize(dof); 
@@ -480,11 +484,11 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 		const auto &eip = trans.GetElement1IntPoint(); 
 
 		el.CalcShape(eip, shape1); 
-		tr_el.CalcShape(ip, tr_shape); 
+		tr_el.CalcShape(ip, tr_shape1); 
 		for (auto d=0; d<dim; d++) {
 			mfem::Vector tensor_tr1_d(tensor_tr1, tr_dof*d, tr_dof); 
 			mfem::Vector elvec_d(elvec, dof*d, dof); 
-			elvec_d.Add(-(tensor_tr1_d * tr_shape)*ip.weight*trans.Weight(), shape1); 
+			elvec_d.Add(-(tensor_tr1_d * tr_shape1)*ip.weight*trans.Weight(), shape1); 
 		}
 	}
 }
@@ -526,7 +530,8 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 			tensor_tr2(tr_dof*d + i) = tensor_all2(local_face_id2*tr_dof*dim + i + d*tr_dof); 
 		}
 	}
-	tr_shape.SetSize(tr_dof); 
+	tr_shape1.SetSize(tr_dof); 
+	tr_shape2.SetSize(tr_dof); 
 
 	const auto dof1 = el1.GetDof(); 
 	const auto dof2 = el2.GetDof(); 
@@ -551,12 +556,17 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 
 		el1.CalcShape(eip1, shape1); 
 		el2.CalcShape(eip2, shape2); 
-		tr_el.CalcShape(ip, tr_shape); 
+		tr_el.CalcShape(ip, tr_shape1); 
+		mfem::IntegrationPoint ip2(ip); 
+		if (nbr_el>=0) {
+			ip2.x = 1.0 - ip2.x; 
+		}
+		tr_el.CalcShape(ip2, tr_shape2); 
 		double w = ip.weight * trans.Weight(); 
 		for (auto d=0; d<dim; d++) {
 			mfem::Vector tensor_tr1_d(tensor_tr1, tr_dof*d, tr_dof); 
 			mfem::Vector tensor_tr2_d(tensor_tr2, tr_dof*d, tr_dof); 
-			double upw_tensor_d = (tensor_tr1_d*tr_shape) - (tensor_tr2_d*tr_shape); 
+			double upw_tensor_d = (tensor_tr1_d*tr_shape1) - (tensor_tr2_d*tr_shape2); 
 
 			mfem::Vector elvec1_d(elvec1, d*dof1, dof1), elvec2_d(elvec2, d*dof2, dof2); 
 			elvec1_d.Add(-upw_tensor_d * w, shape1); 
