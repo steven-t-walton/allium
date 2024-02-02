@@ -3,7 +3,7 @@
 #include "tvector.hpp"
 #include <regex>
 
-LevelSymmetricQuadrature::LevelSymmetricQuadrature(int _order, int _dim) : dim(_dim) {
+LevelSymmetricQuadrature::LevelSymmetricQuadrature(int _order, int _dim) : AngularQuadrature(_dim) {
 	if (dim==1) {
 		int degree = 2*_order - 1; 
 		const auto &rule = mfem::IntRules.Get(mfem::Geometry::SEGMENT, degree); 

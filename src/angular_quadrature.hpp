@@ -6,23 +6,26 @@ protected:
 	std::vector<mfem::Vector> Omegas; 
 	std::vector<double> weights; 
 	double weights_sum = 0.0; 
+	int dim; 
 public:
+	AngularQuadrature(int _dim) : dim(_dim) { }
 	int Size() const { return weights.size(); }
 	const mfem::Vector &GetOmega(int angle) const { return Omegas[angle]; }
 	double GetWeight(int angle) const { return weights[angle]; }
 	double SumWeights() const { return weights_sum; }
+	int Dimension() const { return dim; }
 };
 
 class LevelSymmetricQuadrature : public AngularQuadrature {
-private:
-	int dim; 
 public:
 	LevelSymmetricQuadrature(int _order, int _dim); 
 };
 
 class SingleAngleQuadratureRule : public AngularQuadrature {
 public:
-	SingleAngleQuadratureRule(const AngularQuadrature &rule, int angle) {
+	SingleAngleQuadratureRule(const AngularQuadrature &rule, int angle)
+		: AngularQuadrature(rule.Dimension()) 
+	{
 		Omegas.resize(1); 
 		weights.resize(1); 
 		weights[0] = 4*M_PI; 

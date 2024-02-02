@@ -20,7 +20,7 @@ using TransportVectorExtents = Kokkos::dextents<std::size_t,3>;
 using TransportVectorView = Kokkos::mdspan<double,TransportVectorExtents,TransportVectorLayout>; 
 using ConstTransportVectorView = Kokkos::mdspan<const double,TransportVectorExtents,TransportVectorLayout>; 
 
-// index into moment vector with (moment number, energy, space)
+// index into moment vector with (energy, moment index, space)
 using MomentVectorExtents = Kokkos::dextents<std::size_t,3>;
 using MomentVectorView = Kokkos::mdspan<double,MomentVectorExtents,Kokkos::layout_right>;  
 using ConstMomentVectorView = Kokkos::mdspan<const double,MomentVectorExtents,Kokkos::layout_right>;
