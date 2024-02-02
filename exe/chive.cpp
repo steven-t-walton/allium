@@ -9,6 +9,7 @@
 #include "sweep.hpp"
 #include "transport_op.hpp"
 #include "smm_op.hpp"
+#include "cons_smm_op.hpp"
 #include "phase_coefficient.hpp"
 #include "comment_stream.hpp"
 #include "linalg.hpp"
@@ -242,12 +243,14 @@ int main(int argc, char *argv[]) {
 
 	// --- algorithmic parameters --- 
 	sol::table sn = lua["sn"]; 
-	int fe_order = sn["fe_order"]; 
-	int sn_order = sn["sn_order"]; 
-	int max_it = sn["max_it"]; 
-	double tolerance = sn["tol"]; 
+	const int fe_order = sn["fe_order"]; 
+	const int sn_order = sn["sn_order"]; 
+	const int max_it = sn["max_it"]; 
+	const double tolerance = sn["tol"]; 
 	sol::optional<sol::table> accel_avail = sn["acceleration"]; 
-	std::string outer_type = sn["solver"].get_or(std::string("sli")); 
+	sol::optional<sol::table> prec_avail = sn["preconditioner"]; 
+	if (accel_avail and prec_avail) { MFEM_ABORT("cannot use both preconditioning and acceleration"); }
+	const std::string outer_type = sn["solver"].get_or(std::string("sli")); 
 
 	// --- make mesh and solution spaces --- 
 	auto mesh_node = lua["mesh"]; 
@@ -312,9 +315,10 @@ int main(int argc, char *argv[]) {
 	// --- assign materials to elements --- 
 	sol::function geom_func = lua["material_map"]; 
 	for (int e=0; e<smesh.GetNE(); e++) {
-		mfem::Vector c(3);
-		smesh.GetElementCenter(e, c);
-		std::string attr_name = geom_func(c(0), c(1), c(2)); 
+		double c[3]; 
+		mfem::Vector cvec(c, dim); 
+		smesh.GetElementCenter(e, cvec);
+		std::string attr_name = geom_func(c[0], c[1], c[2]); 
 		if (!attr_map.contains(attr_name)) {
 			MFEM_ABORT("material named \"" << attr_name << "\" not defined"); 
 		}
@@ -328,9 +332,10 @@ int main(int argc, char *argv[]) {
 		const mfem::Element &el = *smesh.GetBdrElement(e); 
 		int geom = smesh.GetBdrElementBaseGeometry(e);
 		mfem::ElementTransformation &trans = *smesh.GetBdrElementTransformation(e); 
-		mfem::Vector c(3); 
-		trans.Transform(mfem::Geometries.GetCenter(geom), c); 
-		std::string attr_name = bdr_func(c(0), c(1), c(2)); 
+		double c[3]; 
+		mfem::Vector cvec(c, dim);  
+		trans.Transform(mfem::Geometries.GetCenter(geom), cvec); 
+		std::string attr_name = bdr_func(c[0], c[1], c[2]); 
 		if (!bdr_attr_map.contains(attr_name)) {
 			MFEM_ABORT("boundary condition named \"" << attr_name << "\" not defined"); 
 		}
@@ -404,8 +409,8 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "num angles" << YAML::Value << Nomega; 			
 		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
 		out << YAML::Key << "phi size" << YAML::Value << phi_size_global;
-		out << YAML::Key << "acceleration" << YAML::Value; 
 		if (accel_avail) {
+			out << YAML::Key << "acceleration" << YAML::Value; 
 			sol::table accel = accel_avail.value();
 			out << YAML::BeginMap; 
 			for (const auto &it : accel) {
@@ -414,8 +419,20 @@ int main(int argc, char *argv[]) {
 				else { out << it.second.as<std::string>(); } 
 			}
 			out << YAML::EndMap; 
+		} 
+		else {
+			out << YAML::Key << "preconditioner" << YAML::Value; 
+			if (prec_avail) {
+				sol::table prec = prec_avail.value();
+				out << YAML::BeginMap; 
+				for (const auto &it : prec) {
+					out << YAML::Key << it.first.as<std::string>() << YAML::Value; 
+					if (it.second.get_type() == sol::type::number) { out << it.second.as<double>(); }
+					else { out << it.second.as<std::string>(); } 
+				}
+				out << YAML::EndMap; 
+			} else { out << "none"; }
 		}
-		else out << YAML::Value << "none"; 
 		out << YAML::Key << "solver" << YAML::Value << outer_type; 
 		out << YAML::Key << "max iterations" << YAML::Value << max_it;
 		out << YAML::Key << "fp tolerance" << YAML::Value << tolerance;
@@ -432,7 +449,7 @@ int main(int argc, char *argv[]) {
 	mfem::Vector psi(psi_size);
 	psi = 0.0; 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	mfem::ParGridFunction phi(&fes); 
+	mfem::ParGridFunction phi(&fes), phi_old(&fes); 
 	// initial guess 
 	D.Mult(psi, phi); 
 
@@ -447,104 +464,105 @@ int main(int argc, char *argv[]) {
 	bool write_graph = lua["sn"]["write_graph"].get_or(false); 
 	if (write_graph) Linv.WriteGraphToDot("graph"); 
 
-	TransportOperator T(D, Linv, Ms_form, psi); 
-
-	DiffusionSyntheticAccelerationOperator *prec = nullptr; 
-	mfem::HypreParMatrix *dsa_mat = nullptr; 
-	mfem::Operator *dsa_solver = nullptr, *dsa_prec = nullptr; 
-#ifdef MFEM_USE_SUPERLU
-	mfem::SuperLURowLocMatrix *slu_op = nullptr; 
-#endif
 	mfem::Vector normal(dim); 
 	normal = 0.0; normal(0) = 1.0; 
-	bool moment_solve = false; 
 	double alpha = ComputeAlpha(quad, normal);
-	if (accel_avail) {
-		sol::table accel = accel_avail.value(); 
-		std::string type = accel["type"]; 
-		if (type == "MIP") {
-			// build MIP DSA operator
-			mfem::ParBilinearForm Dform(&fes); 
-			mfem::RatioCoefficient diffco(1./3, total); 
-			mfem::ConstantCoefficient alpha_c(alpha/2); 
-			double dsa_kappa = accel["kappa"].get_or(pow(fe_order+1,2)); 
-			Dform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
-			Dform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
-			// Dform.AddInteriorFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
-			// Dform.AddBdrFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
-			Dform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha/2)); 
-			Dform.AddBdrFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha/2)); 
-			// Dform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
-			Dform.Assemble(); 
-			Dform.Finalize(); 
-			dsa_mat = Dform.ParallelAssemble(); 
 
-			auto *itsolve = new mfem::CGSolver(MPI_COMM_WORLD); 
-			sol::optional<double> rel_avail = accel["reltol"]; 
-			sol::optional<double> abs_avail = accel["abstol"]; 
-			if (not(rel_avail or abs_avail)) MFEM_ABORT("must specify tolerance for iterative solver"); 
-			if (rel_avail) itsolve->SetRelTol(rel_avail.value()); 
-			if (abs_avail) itsolve->SetAbsTol(abs_avail.value()); 
-			itsolve->SetMaxIter(accel["max_it"].get_or(50));
-			itsolve->SetPrintLevel(0);
-			auto *amg = new mfem::HypreBoomerAMG(*dsa_mat); 
-			amg->SetPrintLevel(0); 
-			itsolve->SetOperator(*dsa_mat); 
-			itsolve->SetPreconditioner(*amg); 
-			itsolve->iterative_mode = false; 
-			dsa_solver = itsolve; 
-			dsa_prec = amg; 
-		} 
-		else if (type == "P1SA") {
-#ifdef MFEM_USE_SUPERLU
-			std::string solve_type = accel["solver"]; 
-			if (solve_type != "direct") MFEM_ABORT("only direct available for P1"); 
-			// vector finite element space for current in P1SA 
-			mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
-			auto p1disc = std::unique_ptr<mfem::BlockOperator>(CreateP1DiffusionDiscretization(
-				fes, vfes, total, absorption, alpha)); 
-			auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
-			slu_op = new mfem::SuperLURowLocMatrix(*mono); 
-			auto *slu = new mfem::SuperLUSolver(*slu_op); 
-			slu->SetPrintStatistics(false); 
-			auto *ceo = new ComponentExtractionOperator(p1disc->RowOffsets(), 1); 
-			auto *ceo_t = new mfem::TransposeOperator(*ceo); 
-			dsa_solver = new mfem::TripleProductOperator(ceo, slu, ceo_t, true, true, true); 
-#else
-			MFEM_ABORT("super LU required for P1"); 
-#endif
-		} 
-		else if (type == "LDGSA") {
-			mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
-			mfem::Vector beta(dim); 
-			for (int d=0; d<dim; d++) { beta(d) = d+1; }
-			dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta); 
-			auto *itsolve = new mfem::CGSolver(MPI_COMM_WORLD); 
-			sol::optional<double> rel_avail = accel["reltol"]; 
-			sol::optional<double> abs_avail = accel["abstol"]; 
-			if (not(rel_avail or abs_avail)) MFEM_ABORT("must specify tolerance for iterative solver"); 
-			if (rel_avail) itsolve->SetRelTol(rel_avail.value()); 
-			if (abs_avail) itsolve->SetAbsTol(abs_avail.value()); 
-			itsolve->SetMaxIter(accel["max_it"].get_or(50));
-			itsolve->SetPrintLevel(0);
-			auto *amg = new mfem::HypreBoomerAMG(*dsa_mat); 
-			amg->SetPrintLevel(0); 
-			itsolve->SetOperator(*dsa_mat); 
-			itsolve->SetPreconditioner(*amg); 
-			itsolve->iterative_mode = false; 
-			dsa_solver = itsolve; 
-			dsa_prec = amg; 
-		}
-		else if (type == "LDGSMM") {
-			moment_solve = true; 
-		}
-		else MFEM_ABORT("dsa type " << type << " not defined"); 
+	// standard sn iteration with preconditioning if available 
+	if (!accel_avail) {
+		DiffusionSyntheticAccelerationOperator *prec = nullptr; 
+		mfem::HypreParMatrix *dsa_mat = nullptr; 
+		mfem::Operator *dsa_solver = nullptr, *dsa_prec = nullptr; 
+		#ifdef MFEM_USE_SUPERLU
+		mfem::SuperLURowLocMatrix *slu_op = nullptr; 
+		#endif
 
-		if (!moment_solve)
+		if (prec_avail) {
+			sol::table prec_table = prec_avail.value(); 
+			std::string type = prec_table["type"]; 
+			if (type == "MIP") {
+				// build MIP DSA operator
+				mfem::ParBilinearForm Dform(&fes); 
+				mfem::RatioCoefficient diffco(1./3, total); 
+				mfem::ConstantCoefficient alpha_c(alpha/2); 
+				double dsa_kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
+				Dform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
+				Dform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
+				// Dform.AddInteriorFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
+				// Dform.AddBdrFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
+				Dform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha/2)); 
+				Dform.AddBdrFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha/2)); 
+				// Dform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+				Dform.Assemble(); 
+				Dform.Finalize(); 
+				dsa_mat = Dform.ParallelAssemble(); 
+
+				auto *itsolve = new mfem::CGSolver(MPI_COMM_WORLD); 
+				sol::optional<double> rel_avail = prec_table["reltol"]; 
+				sol::optional<double> abs_avail = prec_table["abstol"]; 
+				if (not(rel_avail or abs_avail)) MFEM_ABORT("must specify tolerance for iterative solver"); 
+				if (rel_avail) itsolve->SetRelTol(rel_avail.value()); 
+				if (abs_avail) itsolve->SetAbsTol(abs_avail.value()); 
+				itsolve->SetMaxIter(prec_table["max_it"].get_or(50));
+				itsolve->SetPrintLevel(0);
+				auto *amg = new mfem::HypreBoomerAMG(*dsa_mat); 
+				amg->SetPrintLevel(0); 
+				itsolve->SetOperator(*dsa_mat); 
+				itsolve->SetPreconditioner(*amg); 
+				itsolve->iterative_mode = false; 
+				dsa_solver = itsolve; 
+				dsa_prec = amg; 
+			} 
+			else if (type == "P1SA") {
+			#ifdef MFEM_USE_SUPERLU
+				std::string solve_type = prec_table["solver"]; 
+				if (solve_type != "direct") MFEM_ABORT("only direct available for P1"); 
+				// vector finite element space for current in P1SA 
+				mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
+				auto p1disc = std::unique_ptr<mfem::BlockOperator>(CreateP1DiffusionDiscretization(
+					fes, vfes, total, absorption, alpha)); 
+				auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
+				slu_op = new mfem::SuperLURowLocMatrix(*mono); 
+				auto *slu = new mfem::SuperLUSolver(*slu_op); 
+				slu->SetPrintStatistics(false); 
+				auto *ceo = new ComponentExtractionOperator(p1disc->RowOffsets(), 1); 
+				auto *ceo_t = new mfem::TransposeOperator(*ceo); 
+				dsa_solver = new mfem::TripleProductOperator(ceo, slu, ceo_t, true, true, true); 
+			#else
+				MFEM_ABORT("super LU required for P1"); 
+			#endif
+			} 
+			else if (type == "LDGSA") {
+				mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
+				mfem::Vector beta(dim); 
+				for (int d=0; d<dim; d++) { beta(d) = d+1; }
+				dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta); 
+				auto *itsolve = new mfem::CGSolver(MPI_COMM_WORLD); 
+				sol::optional<double> rel_avail = prec_table["reltol"]; 
+				sol::optional<double> abs_avail = prec_table["abstol"]; 
+				if (not(rel_avail or abs_avail)) MFEM_ABORT("must specify tolerance for iterative solver"); 
+				if (rel_avail) itsolve->SetRelTol(rel_avail.value()); 
+				if (abs_avail) itsolve->SetAbsTol(abs_avail.value()); 
+				itsolve->SetMaxIter(prec_table["max_it"].get_or(50));
+				itsolve->SetPrintLevel(0);
+				auto *amg = new mfem::HypreBoomerAMG(*dsa_mat); 
+				amg->SetPrintLevel(0); 
+				itsolve->SetOperator(*dsa_mat); 
+				itsolve->SetPreconditioner(*amg); 
+				itsolve->iterative_mode = false; 
+				dsa_solver = itsolve; 
+				dsa_prec = amg; 
+			}
+			else MFEM_ABORT("dsa type " << type << " not defined"); 
+
 			prec = new DiffusionSyntheticAccelerationOperator(*dsa_solver, Ms_form); 
-	}
+		}
 
-	if (!moment_solve) {
+		// build main transport iteration operator 
+		// applies I - DL^{-1} MS 
+		// uses psi as storage vector 
+		TransportOperator T(D, Linv, Ms_form, psi); 
+
 		// form source for schur complement solve 
 		// b -> D L^{-1} b
 		Linv.Mult(source_vec, psi); 
@@ -569,7 +587,7 @@ int main(int argc, char *argv[]) {
 		outer->SetRelTol(tolerance*tolerance); 
 		outer->SetAbsTol(tolerance); 
 		outer->SetMaxIter(max_it); 
-		if (accel_avail) { outer->SetPreconditioner(*prec); }
+		if (prec_avail) { outer->SetPreconditioner(*prec); }
 		outer->SetOperator(T); 
 		outer->SetPrintLevel(0); 
 		TransportIterationMonitor monitor(out, dynamic_cast<mfem::IterativeSolver*>(dsa_solver)); 
@@ -584,73 +602,143 @@ int main(int argc, char *argv[]) {
 			out << YAML::EndMap; 
 		}
 		delete outer; 
+		if (prec) delete prec; 
+		if (dsa_prec) delete dsa_prec; 
+		if (dsa_solver) delete dsa_solver; 
+	#ifdef MFEM_USE_SUPERLU
+		if (slu_op) delete slu_op; 
+	#endif
+		if (dsa_mat) delete dsa_mat; 
 	}
 
+	// moment-based solve
 	else {
-		sol::table accel = accel_avail.value(); 
+		mfem::StopWatch it_time; 
+		// space for current 
 		mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
-		LDGSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source, inflow, alpha); 
-		LDGDiffusionDiscretization ldg(fes, vfes, total, absorption, alpha); 
-		const auto &S = ldg.SchurComplement(); 
+		mfem::Operator *smm = nullptr, *prec = nullptr; 
+		mfem::IterativeSolver *inner_solver = nullptr; 
+		LDGDiffusionDiscretization *ldg_disc = nullptr; 
+	#ifdef MFEM_USE_SUPERLU
+		mfem::SuperLURowLocMatrix *slu_op = nullptr; 
+	#endif
 
-		mfem::CGSolver solver(MPI_COMM_WORLD); 
-		solver.SetPrintLevel(0); 
-		sol::optional<double> rel_avail = accel["reltol"]; 
-		sol::optional<double> abs_avail = accel["abstol"]; 
-		if (not(rel_avail or abs_avail)) MFEM_ABORT("must specify tolerance for iterative solver"); 
-		if (rel_avail) solver.SetRelTol(rel_avail.value()); 
-		if (abs_avail) solver.SetAbsTol(abs_avail.value()); 
-		solver.SetMaxIter(accel["max_it"].get_or(50));
-		solver.SetPrintLevel(0);
-		mfem::HypreBoomerAMG amg(S); 
-		amg.SetPrintLevel(0); 
-		solver.SetOperator(S); 
-		solver.SetPreconditioner(amg); 
-		solver.iterative_mode = true; 
+		sol::table accel = accel_avail.value(); 
+		std::string type = accel["type"]; 
+		if (type == "LDGSMM") {
+			auto *source_op = new LDGSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 
+			ldg_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha); 
+			const auto &S = ldg_disc->SchurComplement(); 
 
-		InverseLDGDiffusionOperator inv_ldg(ldg, solver); 
-		mfem::ProductOperator smm(&inv_ldg, &source_op, false, false); 
-		mfem::BlockVector x(ldg.GetOffsets()), xold(ldg.GetOffsets()); 
-		x = 0.0; 
-		xold = 0.0; 
+			auto *amg = new mfem::HypreBoomerAMG(S); 
+			amg->SetPrintLevel(0); 
+
+			auto *solver = new mfem::CGSolver(MPI_COMM_WORLD); 
+			solver->SetPrintLevel(0); 
+			sol::optional<double> rel_avail = accel["reltol"]; 
+			sol::optional<double> abs_avail = accel["abstol"]; 
+			if (not(rel_avail or abs_avail)) MFEM_ABORT("must specify tolerance for iterative solver"); 
+			if (rel_avail) solver->SetRelTol(rel_avail.value()); 
+			if (abs_avail) solver->SetAbsTol(abs_avail.value()); 
+			solver->SetMaxIter(accel["max_it"].get_or(50));
+			solver->SetPrintLevel(0);
+			solver->SetOperator(S); 
+			solver->SetPreconditioner(*amg); 
+			solver->iterative_mode = accel["iterative_mode"].get_or(true); 
+
+			// set to outer variables
+			inner_solver = solver; 
+			prec = amg; 
+
+			auto *inv_ldg = new InverseLDGDiffusionOperator(*ldg_disc, *solver); 
+			auto *ceo = new ComponentExtractionOperator(ldg_disc->GetOffsets(), 1);
+			// psi -> SMM source -> diffusion solution -> extract phi from block vector 
+			smm = new mfem::TripleProductOperator(ceo, inv_ldg, source_op, true, true, true); 
+		} 
+		else if (type == "P1SMM") {
+		#ifdef MFEM_USE_SUPERLU
+			std::string solve_type = accel["solver"]; 
+			if (solve_type != "direct") MFEM_ABORT("only direct available for P1"); 
+			auto p1disc = std::unique_ptr<mfem::BlockOperator>(CreateP1DiffusionDiscretization(
+				fes, vfes, total, absorption, alpha)); 
+			auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
+			slu_op = new mfem::SuperLURowLocMatrix(*mono); 
+			auto *slu = new mfem::SuperLUSolver(*slu_op); 
+			slu->SetPrintStatistics(false); 
+
+			auto *source_op = new ConsistentSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha); 
+			auto *ceo = new ComponentExtractionOperator(p1disc->RowOffsets(), 1); 
+			// build SM source, invert P1, extract phi 
+			smm = new mfem::TripleProductOperator(ceo, slu, source_op, true, true, true); 
+		#else
+			MFEM_ABORT("super LU required for P1"); 
+		#endif
+		} 
+		else { MFEM_ABORT("acceleration type " << type << " not defined"); }
+
+		phi_old = phi; 
 		mfem::Vector scat_source(phi_size); 
 		int it; 
 		double norm; 
-		out << YAML::Key << "smm iterations" << YAML::Value << YAML::BeginSeq; 
+		mfem::Array<int> inner_its; 
+		out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
 		for (it=0; it<max_it; it++) {
-			Ms_form.Mult(xold.GetBlock(1), scat_source); 
+			it_time.Clear(); 
+			it_time.Start(); 
+
+			Ms_form.Mult(phi_old, scat_source); 
 			D.MultTranspose(scat_source, psi); 
 			psi += source_vec; 
 			Linv.Mult(psi, psi); 
-			smm.Mult(psi, x); 
+			smm->Mult(psi, phi); 
 
-			xold -= x; 
-			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, xold, xold)); 
-			xold = x; 
+			phi_old -= phi; 
+			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi_old, phi_old)); 
+			phi_old = phi; 
 
+			it_time.Stop(); 
+			double time = it_time.RealTime(); 
 			out << YAML::BeginMap; 
 			out << YAML::Key << "it" << YAML::Value << it+1; 
 			out << YAML::Key << "norm" << YAML::Value << norm; 
-			out << YAML::Key << "inner it" << YAML::Value << solver.GetNumIterations(); 
-			out << YAML::Key << "inner norm" << YAML::Value << solver.GetFinalNorm(); 
-			// out << YAML::Key << "time" << YAML::Value << time; 
-			out << YAML::EndMap; 
+			if (inner_solver) {
+				out << YAML::Key << "inner it" << YAML::Value << inner_solver->GetNumIterations(); 
+				out << YAML::Key << "inner norm" << YAML::Value << inner_solver->GetFinalNorm(); 				
+				inner_its.Append(inner_solver->GetNumIterations()); 
+			}
+			out << YAML::Key << "time" << YAML::Value << time; 
+			out << YAML::EndMap << YAML::Newline; 
 
 			if (norm < tolerance) break; 
 		}
 		out << YAML::EndSeq; 
-		out << YAML::Key << "outer iterations" << YAML::Value << it;
-		phi = x.GetBlock(1); 
+		out << YAML::Key << "outer iterations" << YAML::Value << it+1;
+		if (inner_its.Size()) {
+			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
+			out << YAML::Key << "min inner" << YAML::Value << inner_its.Min(); 
+			out << YAML::Key << "max inner" << YAML::Value << inner_its.Max();
+			out << YAML::Key << "avg inner" << YAML::Value << (double)inner_its.Sum()/inner_its.Size(); 		
+			out << YAML::EndMap; 
+		}
+
+		mfem::ParGridFunction phi_sn(&fes); 
+		D.Mult(psi, phi_sn); 
+		mfem::GridFunctionCoefficient phi_snc(&phi_sn); 
+		double consistency = phi.ComputeL2Error(phi_snc); 
+		std::stringstream ss; 
+		ss << std::setprecision(3) << std::scientific << consistency; 
+		out << YAML::Key << "consistency" << YAML::Value << ss.str(); 
+
+		if (smm) delete smm; 
+		if (inner_solver) delete inner_solver; 
+		if (prec) delete prec; 
+		if (ldg_disc) delete ldg_disc; 
+	#ifdef MFEM_USE_SUPERLU
+		if (slu_op) delete slu_op; 
+	#endif
 	}
 
 	// --- clean up hanging pointers --- 
-	if (prec) delete prec; 
-	if (dsa_prec) delete dsa_prec; 
-	if (dsa_solver) delete dsa_solver; 
-#ifdef MFEM_USE_SUPERLU
-	if (slu_op) delete slu_op; 
-#endif
-	if (dsa_mat) delete dsa_mat; 
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
 
@@ -677,7 +765,7 @@ int main(int argc, char *argv[]) {
 		std::string output_name = output["name"]; 	
 		char output_name_resolve[PATH_MAX];
 		realpath(output_name.c_str(), output_name_resolve);  	
-		out << YAML::Key << "output name" << YAML::Value << output_name_resolve; 
+		out << YAML::Key << "output base" << YAML::Value << output_name_resolve; 
 		mfem::ParGridFunction mesh_part(&fes0); 
 		for (int i=0; i<mesh_part.Size(); i++) { mesh_part[i] = rank; }
 		mfem::ParaViewDataCollection dc(output_name, &mesh); 
