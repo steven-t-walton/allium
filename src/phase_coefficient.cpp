@@ -19,10 +19,10 @@ double PWPhaseSpaceCoefficient::Eval(mfem::ElementTransformation &trans, const m
 }
 
 double FunctionGrayCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {
-	double x[3]; 
-	mfem::Vector transip(x, 3); 
+	mfem::Vector x(3); 
+	mfem::Vector transip(x, 0, 3); 
 	trans.Transform(ip, transip); 	
-	return f(transip, Omega); 
+	return f(x, Omega); 
 }
 
 double InflowPartialCurrentCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {
