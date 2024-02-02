@@ -23,14 +23,15 @@ public:
 	ConsistentSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 		const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, double _alpha); 
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
-
-	// change to tensor closure only for first moment 
-	// hat(P)n - n/3 {{ phi }} - n/6/alpha [[ J.n ]]
-	// An = Pn^+ - n/6 phi - n/6/alpha J.n 
-	// -A(-n) = Pn^- - n/6 phi + n/6/alpha J.n
-	// closure is An1 - A(-n)2 (always compute outflow normal component of pressure)
-	void ProjectClosuresToFaces(ConstTransportVectorView psi, mfem::ParGridFunction &beta, mfem::ParGridFunction &tensor) const; 
+	const mfem::Array<int> &Offsets() const { return offsets; }
 };
+
+// hat(P)n - n/3 {{ phi }} - n/6/alpha [[ J.n ]]
+// An = Pn^+ - n/6 phi - n/6/alpha J.n 
+// -A(-n) = Pn^- - n/6 phi + n/6/alpha J.n
+// closure is An1 - A(-n)2 (always compute outflow normal component of pressure)
+void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const AngularQuadrature &quad, ConstTransportVectorView psi, 
+	double alpha, mfem::ParGridFunction &beta, mfem::ParGridFunction &tensor); 
 
 class CSMMFaceIntegrator0: public mfem::LinearFormIntegrator
 {

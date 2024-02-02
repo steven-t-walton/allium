@@ -16,12 +16,72 @@ TEST(CSMM, DGTraceColl) {
 	EXPECT_EQ(fe->GetDof(), 2); 
 }
 
-TEST(CSMM, ProjectBeta) {
-	if (!mfem::Mpi::Root()) mfem::out.Disable(); 
-	auto smesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+class ProjectBetaTest : public testing::Test {
+protected:
+	mfem::Mesh smesh = mfem::Mesh::MakeCartesian2D(2,2,mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	mfem::ParMesh mesh = mfem::ParMesh(MPI_COMM_WORLD, smesh); 
+	const int dim = mesh.Dimension();  
+
+	DGTrace_FECollection tr_fec = DGTrace_FECollection(1, dim); 
+	mfem::ParFiniteElementSpace tr_fes = mfem::ParFiniteElementSpace(&mesh, &tr_fec); 
+	mfem::ParFiniteElementSpace tr_vfes = mfem::ParFiniteElementSpace(&mesh, &tr_fec, dim); 
+	mfem::ParGridFunction beta = mfem::ParGridFunction(&tr_fes);
+	mfem::ParGridFunction tensor = mfem::ParGridFunction(&tr_vfes); 
+
+	void ProjectClosures(PhaseSpaceCoefficient &f, int sn_order) {
+		auto fec = mfem::L2_FECollection(1, dim); 
+		auto fes = mfem::ParFiniteElementSpace(&mesh, &fec); 
+		auto vfes = mfem::ParFiniteElementSpace(&mesh, &fec, dim); 
+		auto quad = LevelSymmetricQuadrature(sn_order, dim); 
+		auto psi_ext = TransportVectorExtents(1,quad.Size(), fes.GetVSize()); 
+		auto psi = mfem::Vector(TotalExtent(psi_ext)); 
+		auto psi_view = TransportVectorView(psi.GetData(), psi_ext); 
+		mfem::Vector nor(dim); 
+		nor = 0.0; 
+		nor(0) = 1.0; 
+		const auto alpha = ComputeAlpha(quad, nor);
+		ProjectPsi(fes, quad, f, psi_view); 
+		ProjectClosuresToFaces(fes, quad, psi_view, alpha, beta, tensor); 
+	}
+};
+
+TEST_F(ProjectBetaTest, Isotropic) {
+	ConstantPhaseSpaceCoefficient f(1.0);  
+	ProjectClosures(f, 4); 
+	EXPECT_NEAR(beta.Norml2(), 0.0, 1e-13); 
+}
+
+TEST_F(ProjectBetaTest, SpatialIsotropic) {
+	auto iso = [](const mfem::Vector &x, const mfem::Vector &Omega) {
+		return sin(M_PI*x(0))*sin(M_PI*x(1))/4/M_PI; 
+	};
+	FunctionGrayCoefficient iso_coef(iso); 
+	ProjectClosures(iso_coef, 4); 
+	EXPECT_NEAR(beta.Norml2(), 0.0, 1e-13); 
+}
+
+TEST_F(ProjectBetaTest, Quadratic) {
+	auto angular = [](const mfem::Vector &x, const mfem::Vector &Omega) {
+		return Omega*Omega/4/M_PI; 
+	};
+	FunctionGrayCoefficient angular_coef(angular); 
+	ProjectClosures(angular_coef, 8); 
+	beta -= 0.041666666666666664; 
+	double E1 = beta.Norml2(); 
+	ProjectClosures(angular_coef, 16); 
+	beta -= 0.041666666666666664; 
+	double E2 = beta.Norml2(); 
+	int N1 = 40, N2 = 144; 
+	auto ooa = log(E1/E2)/log(N2/N1); 
+	EXPECT_NEAR(ooa, 1.0, 0.2); 
+}
+
+TEST(CSMM, CSMMZerothLFI) {
+	auto smesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, false, 1.0, 1.0, false); 
 	auto mesh = mfem::ParMesh(MPI_COMM_WORLD, smesh); 
+	if (mfem::Mpi::WorldSize()>1) return; 
 	const auto dim = mesh.Dimension(); 
-	auto fec = mfem::L2_FECollection(1, dim); 
+	auto fec = mfem::L2_FECollection(1, dim, mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::ParFiniteElementSpace(&mesh, &fec); 
 	auto vfes = mfem::ParFiniteElementSpace(&mesh, &fec, dim); 
 	LevelSymmetricQuadrature quad(8, dim); 
@@ -35,138 +95,64 @@ TEST(CSMM, ProjectBeta) {
 	nor = 0.0; 
 	nor(0) = 1.0; 
 	double alpha = ComputeAlpha(quad, nor);
-	ConsistentSMMSourceOperator op(fes, vfes, quad, psi_ext, source_view, alpha); 
 
+	ConsistentSMMSourceOperator op(fes, vfes, quad, psi_ext, source_view, alpha); 
 	auto tr_fec = DGTrace_FECollection(1, dim); 
 	auto tr_fes = mfem::ParFiniteElementSpace(&mesh, &tr_fec); 
 	auto tr_vfes = mfem::ParFiniteElementSpace(&mesh, &tr_fec, dim); 
 	mfem::ParGridFunction beta(&tr_fes), tensor(&tr_vfes); 
-	op.ProjectClosuresToFaces(psi_view, beta, tensor); 
-	EXPECT_NEAR(beta.Norml2(), 0.0, 1e-13); 
+	auto angle_space = [](const mfem::Vector &x, const mfem::Vector &Omega) {
+		return (sin(M_PI*x(0))*sin(M_PI*x(1)) + (Omega(0) + Omega(1))*sin(2*M_PI*x(0))*sin(2*M_PI*x(1)) + (Omega*Omega)*sin(3*M_PI*(x(0)+.05)/1.1)*sin(3*M_PI*(x(1)+.05)/1.1))/4/M_PI; 
+	};
+	FunctionGrayCoefficient angle_space_coef(angle_space); 
+	ProjectPsi(fes, quad, angle_space_coef, psi_view); 
+	ProjectClosuresToFaces(fes, quad, psi_view, alpha, beta, tensor); 
 
-	// auto iso = [](const mfem::Vector &x, const mfem::Vector &Omega) {
-	// 	return sin(M_PI*x(0))*sin(M_PI*x(1))/4/M_PI; 
-	// };
-	// FunctionGrayCoefficient iso_coef(iso); 
-	// ProjectPsi(fes, quad, iso_coef, psi_view); 
-	// op.ProjectClosuresToFaces(psi_view, beta, tensor); 
-	// EXPECT_NEAR(beta.Norml2(), 0.0, 1e-13); 
+	// for (int i=0; i<mesh.GetNumFaces(); i++) {
+	// 	auto info = mesh.GetFaceInformation(i); 
+	// 	if (info.IsInterior()) continue; 
+	// 	auto *trans = mesh.GetFaceElementTransformations(i); 
 
-	// auto angular = [](const mfem::Vector &x, const mfem::Vector &Omega) {
-	// 	return Omega*Omega/4/M_PI; 
-	// };
-	// FunctionGrayCoefficient angular_coef(angular); 
-	// ProjectPsi(fes, quad, angular_coef, psi_view); 
-	// op.ProjectClosuresToFaces(psi_view, beta, tensor); 
-	// beta -= 0.041666666666666664; 
-	// EXPECT_NEAR(beta.Norml2(), 0.0, 1e-2); 
+	// 	CSMMZerothMomentFaceLFIntegrator lfi(beta); 
+	// 	mfem::Vector elvec; 
+	// 	lfi.AssembleRHSElementVect(*fes.GetFE(trans->Elem1No), *trans, elvec); 
 
-	// auto angle_space = [](const mfem::Vector &x, const mfem::Vector &Omega) {
-	// 	return (sin(M_PI*x(0))*sin(M_PI*x(1)) + Omega*Omega*x(0)*x(1))/4/M_PI; 
-	// };
-	// FunctionGrayCoefficient angle_space_coef(angle_space); 
-	// ProjectPsi(fes, quad, angle_space_coef, psi_view); 
-	// op.ProjectClosuresToFaces(psi_view, beta, tensor); 
-
-	// mfem::FaceElementTransformations *trans; 
-	// for (auto f=0; f<mesh.GetNumFaces(); f++) {
-	// 	trans = mesh.GetInteriorFaceTransformations(f); 
-	// 	if (trans) break; 
+	// 	CSMMFaceIntegrator0 lfi2(fes, quad, psi_view, alpha); 
+	// 	mfem::Vector elvec2; 
+	// 	lfi2.AssembleRHSElementVect(*fes.GetFE(trans->Elem1No), *trans, elvec2); 
+	// 	double norm = elvec.Norml2(); 
+	// 	elvec.Print(); 
+	// 	elvec2.Print(); 
+	// 	std::cout << info << std::endl; 
 	// }
-	// auto info = mesh.GetFaceInformation(trans->ElementNo); 
-	// mfem::Array<int> dof; 
-	// tr_fes.GetElementDofs(trans->Elem1No, dof);
-	// mfem::Vector beta_local(dof.Size()); 
-	// beta.GetSubVector(dof, beta_local); 
-	// mfem::Vector beta_face(2); 
-	// for (auto i=0; i<2; i++) { beta_face[i] = beta_local[2*info.element[0].local_face_id + i]; }
-	// mfem::Vector shape(2); 
-	// auto center = mfem::Geometries.GetCenter(trans->GetGeometryType()); 
-	// mfem::Vector X(dim); 
-	// trans->Transform(center, X); 
-	// const auto &tr_el = *tr_fes.GetTraceElement(trans->ElementNo, mesh.GetFaceGeometry(trans->ElementNo)); 
-	// tr_el.CalcShape(center, shape); 
-	// double interp = beta_face*shape; 
-	// double ex = 0.041666666666666664 * X(0)*X(1); 
-	// EXPECT_NEAR(interp, ex, 1e-2); 
+	mfem::ParLinearForm fform(&fes); 
+	fform.AddInteriorFaceIntegrator(new CSMMFaceIntegrator0(fes, quad, psi_view, alpha)); 
+	fform.AddBdrFaceIntegrator(new CSMMFaceIntegrator0(fes, quad, psi_view, alpha)); 
+	fform.Assemble(); 
+
+	mfem::ParLinearForm fform2(&fes); 
+	fform2.AddInteriorFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta));
+	fform2.AddBdrFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta)); 
+	fform2.Assemble(); 
+
+	fform -= fform2; 
+	EXPECT_NEAR(fform.Norml2(), 0.0, 1e-15); 
+
+	SMMCorrectionTensorCoefficient T(fes, quad, psi_view);
+	mfem::ParLinearForm gform(&vfes); 
+	gform.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(T)); 
+	gform.AddInteriorFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
+	gform.AddBdrFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
+	gform.Assemble(); 
+
+	mfem::ParLinearForm gform2(&vfes); 
+	gform2.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(T)); 
+	gform2.AddInteriorFaceIntegrator(new CSMMFaceIntegrator1(fes, quad, psi_view, alpha)); 
+	gform2.AddBdrFaceIntegrator(new CSMMFaceIntegrator1(fes, quad, psi_view, alpha)); 
+	gform2.Assemble(); 
+	gform2 -= gform; 
+	EXPECT_NEAR(gform2.Norml2(), 0.0, 1e-15); 
 }
-
-// TEST(CSMM, CSMMZerothLFI) {
-// 	auto smesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, false, 1.0, 1.0, false); 
-// 	auto mesh = mfem::ParMesh(MPI_COMM_WORLD, smesh); 
-// 	const auto dim = mesh.Dimension(); 
-// 	auto fec = mfem::L2_FECollection(1, dim, mfem::BasisType::GaussLobatto); 
-// 	auto fes = mfem::ParFiniteElementSpace(&mesh, &fec); 
-// 	auto vfes = mfem::ParFiniteElementSpace(&mesh, &fec, dim); 
-// 	LevelSymmetricQuadrature quad(8, dim); 
-// 	TransportVectorExtents psi_ext(1,quad.Size(),fes.GetVSize()); 
-// 	const auto psi_size = TotalExtent(psi_ext); 
-// 	mfem::Vector psi(psi_size), source(psi_size); 
-// 	TransportVectorView psi_view(psi.GetData(), psi_ext), source_view(source.GetData(), psi_ext); 
-// 	psi = 1.0; 
-// 	source = 0.0; 
-// 	mfem::Vector nor(dim); 
-// 	nor = 0.0; 
-// 	nor(0) = 1.0; 
-// 	double alpha = ComputeAlpha(quad, nor);
-
-// 	ConsistentSMMSourceOperator op(fes, vfes, quad, psi_ext, source_view, alpha); 
-// 	auto tr_fec = DGTrace_FECollection(1, dim); 
-// 	auto tr_fes = mfem::ParFiniteElementSpace(&mesh, &tr_fec); 
-// 	auto tr_vfes = mfem::ParFiniteElementSpace(&mesh, &tr_fec, dim); 
-// 	mfem::ParGridFunction beta(&tr_fes), tensor(&tr_vfes); 
-// 	auto angle_space = [](const mfem::Vector &x, const mfem::Vector &Omega) {
-// 		return (sin(M_PI*x(0))*sin(M_PI*x(1)) + (Omega(0) + Omega(1))*sin(2*M_PI*x(0))*sin(2*M_PI*x(1)) + (Omega*Omega)*sin(3*M_PI*(x(0)+.05)/1.1)*sin(3*M_PI*(x(1)+.05)/1.1))/4/M_PI; 
-// 	};
-// 	FunctionGrayCoefficient angle_space_coef(angle_space); 
-// 	ProjectPsi(fes, quad, angle_space_coef, psi_view); 
-// 	op.ProjectClosuresToFaces(psi_view, beta, tensor); 
-
-// 	// for (int i=0; i<mesh.GetNumFaces(); i++) {
-// 	// 	auto info = mesh.GetFaceInformation(i); 
-// 	// 	if (info.IsInterior()) continue; 
-// 	// 	auto *trans = mesh.GetFaceElementTransformations(i); 
-
-// 	// 	CSMMZerothMomentFaceLFIntegrator lfi(beta); 
-// 	// 	mfem::Vector elvec; 
-// 	// 	lfi.AssembleRHSElementVect(*fes.GetFE(trans->Elem1No), *trans, elvec); 
-
-// 	// 	CSMMFaceIntegrator0 lfi2(fes, quad, psi_view, alpha); 
-// 	// 	mfem::Vector elvec2; 
-// 	// 	lfi2.AssembleRHSElementVect(*fes.GetFE(trans->Elem1No), *trans, elvec2); 
-// 	// 	double norm = elvec.Norml2(); 
-// 	// 	elvec.Print(); 
-// 	// 	elvec2.Print(); 
-// 	// 	std::cout << info << std::endl; 
-// 	// }
-// 	mfem::ParLinearForm fform(&fes); 
-// 	fform.AddInteriorFaceIntegrator(new CSMMFaceIntegrator0(fes, quad, psi_view, alpha)); 
-// 	fform.AddBdrFaceIntegrator(new CSMMFaceIntegrator0(fes, quad, psi_view, alpha)); 
-// 	fform.Assemble(); 
-
-// 	mfem::ParLinearForm fform2(&fes); 
-// 	fform2.AddInteriorFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta));
-// 	fform2.AddBdrFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta)); 
-// 	fform2.Assemble(); 
-
-// 	fform -= fform2; 
-// 	EXPECT_NEAR(fform.Norml2(), 0.0, 1e-15); 
-
-// 	SMMCorrectionTensorCoefficient T(fes, quad, psi_view);
-// 	mfem::ParLinearForm gform(&vfes); 
-// 	gform.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(T)); 
-// 	gform.AddInteriorFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
-// 	gform.AddBdrFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
-// 	gform.Assemble(); 
-
-// 	mfem::ParLinearForm gform2(&vfes); 
-// 	gform2.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(T)); 
-// 	gform2.AddInteriorFaceIntegrator(new CSMMFaceIntegrator1(fes, quad, psi_view, alpha)); 
-// 	gform2.AddBdrFaceIntegrator(new CSMMFaceIntegrator1(fes, quad, psi_view, alpha)); 
-// 	gform2.Assemble(); 
-// 	gform2 -= gform; 
-// 	EXPECT_NEAR(gform2.Norml2(), 0.0, 1e-15); 
-// }
 
 std::tuple<double,double> P1SMMError(int Ne, int fe_order) {
 	double delta = 0.0; 
@@ -296,18 +282,18 @@ std::tuple<double,double> P1SMMError(int Ne, int fe_order) {
 
 TEST(CSMM, MMSp1) {
 	auto [phi1, J1] = P1SMMError(10, 1); 
-	// auto [phi2, J2] = P1SMMError(20, 1); 
-	// double phi_ooa = log2(phi1/phi2); 
-	// double J_ooa = log2(J1/J2); 
-	// EXPECT_NEAR(phi_ooa, 2.0, 0.1); 
-	// EXPECT_NEAR(J_ooa, 2.0, 0.2); 
+	auto [phi2, J2] = P1SMMError(20, 1); 
+	double phi_ooa = log2(phi1/phi2); 
+	double J_ooa = log2(J1/J2); 
+	EXPECT_NEAR(phi_ooa, 2.0, 0.1); 
+	EXPECT_NEAR(J_ooa, 2.0, 0.2); 
 }
 
-// TEST(CSMM, MMSp2) {
-// 	auto [phi1, J1] = P1SMMError(10, 2); 
-// 	auto [phi2, J2] = P1SMMError(20, 2); 
-// 	double phi_ooa = log2(phi1/phi2); 
-// 	double J_ooa = log2(J1/J2); 
-// 	EXPECT_NEAR(phi_ooa, 3.0, 0.1); 
-// 	EXPECT_NEAR(J_ooa, 3.0, 0.2); 
-// }
+TEST(CSMM, MMSp2) {
+	auto [phi1, J1] = P1SMMError(10, 2); 
+	auto [phi2, J2] = P1SMMError(20, 2); 
+	double phi_ooa = log2(phi1/phi2); 
+	double J_ooa = log2(J1/J2); 
+	EXPECT_NEAR(phi_ooa, 3.0, 0.1); 
+	EXPECT_NEAR(J_ooa, 3.0, 0.2); 
+}
