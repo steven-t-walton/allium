@@ -20,7 +20,7 @@ private:
 	mutable mfem::Vector tmp_elim_vec; 
 public:
 	LDGDiffusionDiscretization(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-		mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha); 
+		mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha, const mfem::Vector &beta); 
 	const mfem::HypreParMatrix &SchurComplement() const { return *S; }
 	// returns f -= D Mt^{-1} g
 	void EliminateRHS(const mfem::Vector &g, mfem::Vector &f) const; 

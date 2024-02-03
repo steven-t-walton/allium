@@ -3,7 +3,7 @@
 #include "linalg.hpp"
 
 LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-	mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha)
+	mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha, const mfem::Vector &beta)
 	: fes(_fes), vfes(_vfes), total(_total), absorption(_absorption), alpha(_alpha)
 {
 	offsets.SetSize(3); 
@@ -34,9 +34,7 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
 	mfem::ConstantCoefficient neg_one(-1.0); 
 	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
-	mfem::Vector ldg_beta(dim); 
-	for (auto d=0; d<dim; d++) { ldg_beta(d) = d+1; }
-	Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&ldg_beta)); 
+	Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta)); 
 	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5)); 
 	Dform.Assemble(); 
 	Dform.Finalize(); 

@@ -192,7 +192,9 @@ std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
 
 	// setup SMM operators 
 	LDGSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_coef, psi_coef, alpha); 
-	LDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha); 
+	mfem::Vector beta(dim); 
+	for (auto d=0; d<dim; d++) { beta(d) = d+1; }
+	LDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta); 
 	const auto &S = ldg.SchurComplement(); 
 
 	// solve schur complement 
