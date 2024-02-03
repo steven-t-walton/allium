@@ -21,3 +21,26 @@ mfem::HypreParMatrix *ElementByElementBlockInverse(const mfem::ParFiniteElementS
 	ptr->SetOwnerFlags(true, true, true); 
 	return ptr; 
 }
+
+TripleProductOperator::TripleProductOperator(const mfem::Operator *a, const mfem::Operator *b, const mfem::Operator *c,
+	bool owna, bool ownb, bool ownc)
+	: A(a), B(b), C(c), ownA(owna), ownB(ownb), ownC(ownc), mfem::Operator(a->Height(), c->Width())
+{
+	MFEM_VERIFY(A->Width() == B->Height(), 
+		"incompatible Operators: A->Width() = " << A->Width() << ", B->Height() = " << B->Height());
+	MFEM_VERIFY(B->Width() == C->Height(), 
+		"incompatible Operators: B->Width() = " << B->Width() << ", C->Height() = " << C->Height());
+	t1.SetSize(C->Height()); 
+	t2.SetSize(B->Height()); 
+
+	// only difference between mfem and this implementation 
+	t1 = 0.0; 
+	t2 = 0.0; 
+}
+
+TripleProductOperator::~TripleProductOperator() 
+{
+	if (ownA) delete A; 
+	if (ownB) delete B; 
+	if (ownC) delete C; 
+}
