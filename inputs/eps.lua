@@ -28,39 +28,29 @@ mesh = {
 	extents = {1,1} 
 }
 
-p1sa = {
-	type = "P1SA", 
-	solver = "direct"
-}
-
-mip = {
-	type = "MIP", 
-	solver = "cg", 
-	reltol = 1e-2, 
-	max_it = 50
-}
-
-ldgsa = {
-	type = "LDGSA", 
-	solver = "cg", 
-	reltol = 1e-2, 
-	max_it = 50
-}
-
-sn = {
+driver = {
 	fe_order = 1, 
 	sn_order = 4, 
-	-- preconditioner = p1sa, 
-	acceleration = {
-		type = "LDGSMM",
-		solver = "cg", 
-		abstol = 1e-8, 
-		max_it = 100, 
-		consistent = true
+	solver = {
+		type = "sli", 
+		abstol = 1e-6, 
+		max_iter = 50, 
 	},
-	tol = 1e-6, 
-	max_it = 100, 
-	solver = "sli",
+	-- preconditioner = {
+	-- 	type = "mip", 
+	-- 	solver = {
+	-- 		type = "cg", 
+	-- 		reltol = 1e-2, 
+	-- 		max_iter = 100
+	-- 	}
+	-- }
+	acceleration = {
+		type = "ldgsmm", 
+		consistent = false, 
+		solver = {
+			type = "direct"
+		}
+	}
 }
 
 output = {

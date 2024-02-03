@@ -49,19 +49,21 @@ mesh = {
 	extents = {1,1} 
 }
 
-sn = {
+driver = {
 	fe_order = 1, 
 	sn_order = 4, 
-	acceleration = {
-		type = "P1SMM", 
-		solver = "direct", 
-		-- abstol = 1e-12, 
-		-- max_it = 50
+	solver = {
+		type = "gmres", 
+		abstol = 1e-10, 
+		max_iter = 50
 	},
-	tol = 1e-10, 
-	max_it = 100, 
-	solver = "gmres",
-	write_graph = false
+	acceleration = {
+		type = "ldgsmm",
+		consistent = true,  
+		solver = {
+			type = "direct"
+		}
+	},
 }
 
 output = {

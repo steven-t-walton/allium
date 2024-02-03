@@ -46,46 +46,28 @@ mesh = {
 	extents = {1,1} 
 }
 
-mip = {
-	type = "MIP", 
-	reltol = 1e-2, 
-	max_it = 100,
-	solver = "cg"
-}
-
-p1sa = {
-	type = "P1SA", 
-	solver = "direct"
-}
-
-ldgsa = {
-	type = "LDGSA", 
-	solver = "cg", 
-	reltol = 1e-2, 
-	max_it = 50
-}
-
-ldgsmm = {
-	type = "LDGSMM", 
-	solver = "cg", 
-	abstol = 1e-7, 
-	max_it = 200, 
-	consistent = true
-}
-
-p1smm = {
-	type = "P1SMM", 
-	solver = "direct"
-}
-
-sn = {
+driver = {
 	fe_order = 1, 
 	sn_order = 16, 
-	tol = 1e-5, 
-	max_it = 200, 
-	acceleration = p1smm,
-	-- preconditioner = ldgsa,
-	solver = "sli"
+	solver = {
+		type = "gmres", 
+		abstol = 1e-5, 
+		max_iter = 200, 
+	},
+	-- acceleration = {
+	-- 	type = "LDGSMM",
+	-- 	solver = {
+	-- 		type = "direct", 
+	-- 	}
+	-- },
+	preconditioner = {
+		type = "ldgsa",
+		solver = {
+			type = "cg", 
+			reltol = 1e-2, 
+			max_iter = 100,
+		}
+	}
 }
 
 output = {
