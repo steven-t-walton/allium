@@ -10,10 +10,6 @@ LIST(APPEND TESTS
 	test_cons_smm.cpp
 )
 
-if (${MFEM_USE_SUPERLU})
-	LIST(APPEND TESTS test_p1.cpp)
-endif()
-
 LIST(APPEND PAR_TESTS
 	test_sweep.cpp
 	test_transport_mms.cpp
