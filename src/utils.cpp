@@ -5,8 +5,8 @@
 
 std::string FormatTimeString(double time) {
 	std::stringstream ss; 
-	if (time < 1) {
-		ss << std::setprecision(2) << time; 
+	if (time < 60) {
+		ss << std::setprecision(3) << time; 
 		return ss.str(); 
 	}
 	double remainder = std::fmod(time, 3600*24); 
