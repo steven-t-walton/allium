@@ -114,6 +114,7 @@ TEST(CSMM, CSMMZerothLFI) {
 	EXPECT_NEAR(fform.Norml2(), 0.0, 1e-15); 
 }
 
+#ifdef MFEM_USE_SUPERLU
 std::tuple<double,double> P1SMMError(int Ne, int fe_order) {
 	double delta = 0.5; 
 	double gamma = 1.0; 
@@ -250,6 +251,7 @@ TEST(CSMM, MMSp2) {
 	EXPECT_NEAR(phi_ooa, 3.0, 0.1); 
 	EXPECT_NEAR(J_ooa, 3.0, 0.2); 
 }
+#endif
 
 std::tuple<double,double> LDGSMMError(int Ne, int fe_order) {
 	double delta = 0.5; 
