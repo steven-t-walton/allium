@@ -44,12 +44,22 @@ void PenaltyIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &el1, const
 		const mfem::IntegrationPoint &eip1 = trans.GetElement1IntPoint(); 
 		const mfem::IntegrationPoint &eip2 = trans.GetElement2IntPoint(); 
 
+		double Davg = 1.0; 
+		if (D) {
+			double D1 = D->Eval(*trans.Elem1, eip1); 
+			double D2 = D->Eval(*trans.Elem2, eip2); 
+			Davg = (D1 + D2)/2; 
+		}
+
 		double w; 
 		if (scale) {
-			w = kappa * ip.weight * trans.Weight() * trans.Weight() / trans.Elem1->Weight(); 
+			double val = Davg * kappa * trans.Weight() / trans.Elem1->Weight(); 
+			if (val < limit) val = limit; 
+			w = ip.weight * trans.Weight() * val; 
 		}
-		else
-			w = kappa * ip.weight * trans.Weight(); 
+		else {
+			w = Davg * kappa * ip.weight * trans.Weight(); 
+		}
 		el1.CalcShape(eip1, shape1); 
 		for (int i=0; i<ndof1; i++) {
 			for (int j=0; j<ndof1; j++) {

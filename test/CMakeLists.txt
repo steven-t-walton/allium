@@ -7,7 +7,6 @@ LIST(APPEND TESTS
 	test_mfem.cpp
 	test_phase_coef.cpp
 	test_linalg.cpp
-	test_cons_smm.cpp
 )
 
 LIST(APPEND PAR_TESTS
@@ -15,6 +14,7 @@ LIST(APPEND PAR_TESTS
 	test_transport_mms.cpp
 	test_diffusion_mms.cpp
 	test_smm.cpp
+	test_cons_smm.cpp
 )
 
 foreach(test ${TESTS})
@@ -22,7 +22,7 @@ foreach(test ${TESTS})
 	string (REPLACE ".cpp" "" testname ${name})
 	add_executable(${testname} ${test})
 	target_link_libraries(${testname} PRIVATE gtest_main_mpi) 
-	gtest_discover_tests(${testname} DISCOVERY_TIMEOUT 10)
+	gtest_discover_tests(${testname} DISCOVERY_TIMEOUT 60 PROPERTIES LABELS "serial")
 endforeach()
 
 foreach(test ${PAR_TESTS})
@@ -30,7 +30,8 @@ foreach(test ${PAR_TESTS})
 	string (REPLACE ".cpp" "" testname ${name})
 	add_executable(${testname} ${test})
 	target_link_libraries(${testname} PRIVATE gtest_main_mpi) 
-	gtest_discover_tests(${testname} DISCOVERY_TIMEOUT 10)
+	gtest_discover_tests(${testname} DISCOVERY_TIMEOUT 60 PROPERTIES LABELS "serial")
 	add_test(NAME "${testname} (np = 4)" COMMAND mpirun -np 4 ${testname})
+	set_tests_properties("${testname} (np = 4)" PROPERTIES LABELS "parallel")
 endforeach()
 

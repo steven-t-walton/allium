@@ -7,11 +7,17 @@ class PenaltyIntegrator : public mfem::BilinearFormIntegrator
 private:
 	double kappa; 
 	bool scale; 
+	mfem::Coefficient *D = nullptr; 
+	double limit = 0.0; 
 
 	mfem::Vector shape1, shape2, nor; 
 public:
-	PenaltyIntegrator(double _kappa, bool _scale) : kappa(_kappa), scale(_scale) {
+	PenaltyIntegrator(double _kappa, bool _scale) 
+		: kappa(_kappa), scale(_scale) {
 	}
+	PenaltyIntegrator(mfem::Coefficient &_D, double _kappa, double _limit) 
+		: D(&_D), kappa(_kappa), scale(true), limit(_limit)
+	{ }
 	using mfem::BilinearFormIntegrator::AssembleFaceMatrix; 
 	void AssembleFaceMatrix(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat); 

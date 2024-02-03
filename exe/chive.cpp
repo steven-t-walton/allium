@@ -432,22 +432,12 @@ int main(int argc, char *argv[]) {
 		}
 		out << YAML::Key << "solver" << YAML::Value << solver; 
 		if (accel_avail) {
-			out << YAML::Key << "acceleration" << YAML::Value << YAML::BeginMap; 
-			sol::table table = accel_avail.value(); 
-			out << YAML::Key << "type" << YAML::Value << (std::string)table["type"];
-			sol::table solve = table["solver"];  
-			out << YAML::Key << "solver" << YAML::Value << solve; 
-			out << YAML::EndMap; 
+			out << YAML::Key << "acceleration" << YAML::Value << accel_avail.value(); 
 		} 
 		else {
 			out << YAML::Key << "preconditioner" << YAML::Value; 
 			if (prec_avail) {
-				sol::table table = prec_avail.value(); 
-				out << YAML::BeginMap; 
-				out << YAML::Key << "type" << YAML::Value << (std::string)table["type"];
-				sol::table solve = table["solver"];  
-				out << YAML::Key << "solver" << YAML::Value << solve; 
-				out << YAML::EndMap; 
+				out << prec_avail.value(); 
 			} else { out << "none"; }
 		}
 	out << YAML::EndMap << YAML::Newline; 
@@ -599,7 +589,7 @@ int main(int argc, char *argv[]) {
 		mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
 		mfem::Operator *smm = nullptr; 
 		mfem::HypreBoomerAMG *amg = nullptr; 
-		LDGDiffusionDiscretization *ldg_disc = nullptr; 
+		BlockDiffusionDiscretization *block_disc = nullptr; 
 	#ifdef MFEM_USE_SUPERLU
 		mfem::SuperLURowLocMatrix *slu_op = nullptr; 
 	#endif
@@ -613,10 +603,10 @@ int main(int argc, char *argv[]) {
 			if (consistent) {
 				source_op = new ConsistentLDGSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, beta); 
 			} else {
-				source_op = new LDGSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
+				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
 			}
-			ldg_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta); 
-			const auto &S = ldg_disc->SchurComplement(); 
+			block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta); 
+			const auto &S = block_disc->SchurComplement(); 
 
 			// iterative solve
 			if (inner_it_solver) {
@@ -633,13 +623,47 @@ int main(int argc, char *argv[]) {
 				inner_solver = slu; 
 			}
 
-			auto *inv_ldg = new InverseLDGDiffusionOperator(*ldg_disc, *inner_solver); 
-			auto *ceo = new ComponentExtractionOperator(ldg_disc->GetOffsets(), 1);
+			auto *inv_ldg = new InverseBlockDiffusionOperator(*block_disc, *inner_solver); 
+			auto *ceo = new ComponentExtractionOperator(block_disc->GetOffsets(), 1);
 			// psi -> SMM source -> diffusion solution -> extract phi from block vector 
 			// use allium version of triple product operator to ensure temp vectors 
 			// initialized to zero (for first initial guess when iterative_mode = true)
 			smm = new TripleProductOperator(ceo, inv_ldg, source_op, true, true, true); 
 		} 
+		else if (type == "IPSMM") {
+			bool consistent = accel["consistent"].get_or(false); 
+			double kappa = accel["kappa"].get_or(-1.0); 
+			mfem::Operator *source_op; 
+			if (consistent) {
+				source_op = new ConsistentIPSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, total, kappa); 
+			} else {
+				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
+			}
+			block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa); 
+			const auto &S = block_disc->SchurComplement(); 
+
+			// iterative solve
+			if (inner_it_solver) {
+				amg = new mfem::HypreBoomerAMG(S); 
+				inner_it_solver->SetOperator(S); 
+				inner_it_solver->SetPreconditioner(*amg); 				
+			} 
+
+			// direct solve 
+			else {
+				slu_op = new mfem::SuperLURowLocMatrix(S); 
+				auto *slu = new mfem::SuperLUSolver(*slu_op); 
+				slu->SetPrintStatistics(false); 
+				inner_solver = slu; 
+			}
+
+			auto *inv_ip = new InverseBlockDiffusionOperator(*block_disc, *inner_solver); 
+			auto *ceo = new ComponentExtractionOperator(block_disc->GetOffsets(), 1);
+			// psi -> SMM source -> diffusion solution -> extract phi from block vector 
+			// use allium version of triple product operator to ensure temp vectors 
+			// initialized to zero (for first initial guess when iterative_mode = true)
+			smm = new TripleProductOperator(ceo, inv_ip, source_op, true, true, true); 
+		}
 		else if (type == "P1SMM") {
 		#ifdef MFEM_USE_SUPERLU
 			if (inner_it_solver) { MFEM_ABORT("only direct supported for P1"); }
@@ -684,8 +708,12 @@ int main(int argc, char *argv[]) {
 			Ms_form.Mult(phi_old, scat_source); 
 			D.MultTranspose(scat_source, psi); 
 			psi += source_vec; 
+			mfem::tic(); 
 			Linv.Mult(psi, psi); 
+			double sweep_time = mfem::toc(); 
+			mfem::tic(); 
 			smm->Mult(psi, phi); 
+			double moment_time = mfem::toc(); 
 
 			phi_old -= phi; 
 			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi_old, phi_old)); 
@@ -703,7 +731,11 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "inner norm" << YAML::Value << inner_it_solver->GetFinalNorm(); 				
 				inner_its.Append(inner_it_solver->GetNumIterations()); 
 			}
-			out << YAML::Key << "time" << YAML::Value << time; 
+			out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "total" << FormatTimeString(time); 
+				out << YAML::Key << "sweep" << FormatTimeString(sweep_time); 
+				out << YAML::Key << "moment" << FormatTimeString(moment_time); 
+			out << YAML::EndMap; 
 			out << YAML::EndMap << YAML::Newline; 
 
 			if (norm < tolerance) break; 
@@ -728,7 +760,7 @@ int main(int argc, char *argv[]) {
 
 		if (smm) delete smm; 
 		if (amg) delete amg; 
-		if (ldg_disc) delete ldg_disc; 
+		if (block_disc) delete block_disc; 
 	#ifdef MFEM_USE_SUPERLU
 		if (slu_op) delete slu_op; 
 	#endif

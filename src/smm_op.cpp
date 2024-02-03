@@ -1,10 +1,25 @@
 #include "smm_op.hpp"
 #include "p1diffusion.hpp"
 #include "linalg.hpp"
+#include "mip.hpp"
 
-LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-	mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha, const mfem::Vector &beta)
-	: fes(_fes), vfes(_vfes), total(_total), absorption(_absorption), alpha(_alpha)
+void BlockDiffusionDiscretization::EliminateRHS(const mfem::Vector &g, mfem::Vector &f) const 
+{
+	tmp_elim_vec.SetSize(iMt->Height());
+	iMt->Mult(g, tmp_elim_vec); 
+	D->Mult(-1.0, tmp_elim_vec, 1.0, f);  
+}
+
+void BlockDiffusionDiscretization::BackSolve(const mfem::Vector &g, const mfem::Vector &phi, mfem::Vector &J) const
+{
+	tmp_elim_vec.SetSize(DT->Height()); 
+	DT->Mult(phi, tmp_elim_vec); 
+	tmp_elim_vec += g; 
+	iMt->Mult(tmp_elim_vec, J); 
+}
+
+LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, const mfem::Vector &beta)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
@@ -46,22 +61,55 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	S = HypreParMatrixPtr(mfem::ParAdd(DiMtDT.get(), Ma.get())); 
 }
 
-void LDGDiffusionDiscretization::EliminateRHS(const mfem::Vector &g, mfem::Vector &f) const 
+IPDiffusionDiscretization::IPDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, double kappa)
 {
-	tmp_elim_vec.SetSize(iMt->Height());
-	iMt->Mult(g, tmp_elim_vec); 
-	D->Mult(-1.0, tmp_elim_vec, 1.0, f);  
+	offsets.SetSize(3); 
+	offsets[0] = 0; 
+	offsets[1] = vfes.GetVSize(); 
+	offsets[2] = fes.GetVSize(); 
+	offsets.PartialSum(); 
+	const auto dim = fes.GetMesh()->Dimension(); 
+
+	if (kappa < 0) {
+		kappa *= -1.0 * pow(fes.GetOrder(0)+1, 2); 
+	}
+
+	mfem::ParBilinearForm Mtform(&vfes);
+	mfem::ProductCoefficient total3(3.0, total); 
+	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3)); 
+	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha)); 
+	Mtform.Assemble(); 
+	Mtform.Finalize();  
+	auto Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
+	iMt = HypreParMatrixPtr(ElementByElementBlockInverse(vfes, *Mt)); 
+
+	mfem::ParBilinearForm Maform(&fes); 
+	mfem::ConstantCoefficient alpha_c(alpha/2); 
+	mfem::RatioCoefficient diffco(1./3, total); 
+	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
+	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(diffco, kappa, alpha/2)); 
+	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+	Maform.Assemble(); 
+	Maform.Finalize(); 
+	Ma = HypreParMatrixPtr(Maform.ParallelAssemble());
+
+	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
+	mfem::ConstantCoefficient neg_one(-1.0); 
+	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
+	Dform.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator); 
+	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5)); 
+	Dform.Assemble(); 
+	Dform.Finalize(); 
+	D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
+	DT = HypreParMatrixPtr(D->Transpose()); 
+
+	auto DiMt = HypreParMatrixPtr(mfem::ParMult(D.get(), iMt.get(), true)); 
+	auto DiMtDT = HypreParMatrixPtr(mfem::ParMult(DiMt.get(), DT.get(), true)); 
+	S = HypreParMatrixPtr(mfem::ParAdd(DiMtDT.get(), Ma.get())); 
 }
 
-void LDGDiffusionDiscretization::BackSolve(const mfem::Vector &g, const mfem::Vector &phi, mfem::Vector &J) const
-{
-	tmp_elim_vec.SetSize(DT->Height()); 
-	DT->Mult(phi, tmp_elim_vec); 
-	tmp_elim_vec += g; 
-	iMt->Mult(tmp_elim_vec, J); 
-}
-
-void InverseLDGDiffusionOperator::Mult(const mfem::Vector &b, mfem::Vector &x) const 
+void InverseBlockDiffusionOperator::Mult(const mfem::Vector &b, mfem::Vector &x) const 
 {
 	const auto &offsets = disc.GetOffsets(); 
 	mfem::BlockVector bb(b.GetData(), offsets); 
@@ -73,7 +121,8 @@ void InverseLDGDiffusionOperator::Mult(const mfem::Vector &b, mfem::Vector &x) c
 	disc.BackSolve(bb.GetBlock(0), bx.GetBlock(1), bx.GetBlock(0)); 
 }
 
-LDGSMMSourceOperator::LDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+BlockDiffusionSMMSourceOperator::BlockDiffusionSMMSourceOperator(
+	mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, PhaseSpaceCoefficient &source_coef, 
 	PhaseSpaceCoefficient &inflow_coef, double _alpha)
 	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha)
@@ -126,7 +175,7 @@ LDGSMMSourceOperator::LDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mf
 	Q1 *= 3.0; 
 }
 
-void LDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+void BlockDiffusionSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
 {
 	mfem::BlockVector bv(source.GetData(), offsets); 
 	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 

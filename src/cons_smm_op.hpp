@@ -46,6 +46,26 @@ public:
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
 };
 
+class ConsistentIPSMMSourceOperator : public mfem::Operator {
+private:
+	mfem::ParFiniteElementSpace &fes, &vfes; 
+	const AngularQuadrature &quad; 
+	const TransportVectorExtents &psi_ext; 
+	double alpha, kappa; 
+
+	ConsistentSMMSourceOperator base_source_op; 
+	MomentVectorExtents phi_ext; 
+	mutable mfem::Vector moments;
+
+	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>; 
+	HypreParMatrixPtr F1, F2;  	
+public:
+	ConsistentIPSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+		const AngularQuadrature &quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
+		double _alpha, mfem::Coefficient &total, double _kappa=-1.0); 
+	void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
+};
+
 // hat(P)n - n/3 {{ phi }} - n/6/alpha [[ J.n ]]
 // An = Pn^+ - n/6 phi - n/6/alpha J.n 
 // -A(-n) = Pn^- - n/6 phi + n/6/alpha J.n

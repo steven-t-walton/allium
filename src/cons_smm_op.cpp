@@ -2,6 +2,7 @@
 #include "smm_integrators.hpp"
 #include "transport_op.hpp"
 #include "p1diffusion.hpp"
+#include "mip.hpp"
 
 ConsistentSMMSourceOperator::ConsistentSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 		const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, double _alpha)
@@ -120,6 +121,53 @@ void ConsistentLDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector 
 	F1->Mult(1.0, J, 1.0, bv.GetBlock(0)); 
 	F2->Mult(1.0, J, 1.0, bv.GetBlock(1)); 
 	F2->MultTranspose(-1.0, phi, 1.0, bv.GetBlock(0)); 
+}
+
+ConsistentIPSMMSourceOperator::ConsistentIPSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
+	double _alpha, mfem::Coefficient &total, double _kappa)
+	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), kappa(_kappa),
+	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha)
+{
+	height = base_source_op.Height(); 
+	width = base_source_op.Width(); 
+
+	if (kappa < 0.0) {
+		kappa *= -1.0 * pow(fes.GetOrder(0)+1, 2); 
+	} 
+
+	const auto dim = quad.Dimension(); 
+	phi_ext = MomentVectorExtents(1,dim+1,fes.GetVSize()); 
+	moments.SetSize(TotalExtent(phi_ext)); 
+
+	mfem::ParBilinearForm F1form(&vfes); 
+	F1form.AddInteriorFaceIntegrator(new DGVectorJumpJumpIntegrator(-1.0/2/alpha)); 
+	F1form.Assemble(); 
+	F1form.Finalize(); 
+	F1 = HypreParMatrixPtr(F1form.ParallelAssemble()); 
+
+	mfem::ParBilinearForm F2form(&fes); 
+	mfem::RatioCoefficient diffco(1./3, total); 
+	F2form.AddInteriorFaceIntegrator(new PenaltyIntegrator(-alpha/2, false)); 
+	F2form.AddInteriorFaceIntegrator(new PenaltyIntegrator(diffco, kappa, alpha/2)); 
+	F2form.Assemble(); 
+	F2form.Finalize(); 
+	F2 = HypreParMatrixPtr(F2form.ParallelAssemble());   
+}
+
+void ConsistentIPSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+{
+	base_source_op.Mult(psi, source); 
+
+	mfem::BlockVector bv(source.GetData(), base_source_op.Offsets()); 
+
+	const auto dim = quad.Dimension(); 
+	DiscreteToMoment D(quad, psi_ext, phi_ext); 
+	D.Mult(psi, moments); 
+	mfem::Vector phi(moments, 0, fes.GetVSize()); 
+	mfem::Vector J(moments, fes.GetVSize(), dim*fes.GetVSize()); 
+	F1->Mult(1.0, J, 1.0, bv.GetBlock(0)); 
+	F2->Mult(1.0, phi, 1.0, bv.GetBlock(1)); 
 }
 
 void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const AngularQuadrature &quad, ConstTransportVectorView psi, 
