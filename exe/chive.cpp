@@ -416,6 +416,7 @@ int main(int argc, char *argv[]) {
 			for (const auto &it : accel) {
 				out << YAML::Key << it.first.as<std::string>() << YAML::Value; 
 				if (it.second.get_type() == sol::type::number) { out << it.second.as<double>(); }
+				else if (it.second.get_type() == sol::type::boolean) { out << it.second.as<bool>(); }
 				else { out << it.second.as<std::string>(); } 
 			}
 			out << YAML::EndMap; 
@@ -467,6 +468,9 @@ int main(int argc, char *argv[]) {
 	mfem::Vector normal(dim); 
 	normal = 0.0; normal(0) = 1.0; 
 	double alpha = ComputeAlpha(quad, normal);
+
+	mfem::Vector beta(dim); 
+	for (int d=0; d<dim; d++) { beta(d) = d+1; }
 
 	// standard sn iteration with preconditioning if available 
 	if (!accel_avail) {
@@ -534,8 +538,6 @@ int main(int argc, char *argv[]) {
 			} 
 			else if (type == "LDGSA") {
 				mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
-				mfem::Vector beta(dim); 
-				for (int d=0; d<dim; d++) { beta(d) = d+1; }
 				dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta); 
 				auto *itsolve = new mfem::CGSolver(MPI_COMM_WORLD); 
 				sol::optional<double> rel_avail = prec_table["reltol"]; 
@@ -626,8 +628,14 @@ int main(int argc, char *argv[]) {
 		sol::table accel = accel_avail.value(); 
 		std::string type = accel["type"]; 
 		if (type == "LDGSMM") {
-			auto *source_op = new LDGSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 
-			ldg_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha); 
+			bool consistent = accel["consistent"].get_or(false); 
+			mfem::Operator *source_op; 
+			if (consistent) {
+				source_op = new ConsistentLDGSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, beta); 
+			} else {
+				source_op = new LDGSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
+			}
+			ldg_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta); 
 			const auto &S = ldg_disc->SchurComplement(); 
 
 			auto *amg = new mfem::HypreBoomerAMG(S); 

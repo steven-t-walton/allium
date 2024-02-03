@@ -1,5 +1,7 @@
 #include "cons_smm_op.hpp"
 #include "smm_integrators.hpp"
+#include "transport_op.hpp"
+#include "p1diffusion.hpp"
 
 ConsistentSMMSourceOperator::ConsistentSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 		const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, double _alpha)
@@ -75,6 +77,49 @@ void ConsistentSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &so
 
 	fform += Q0; 
 	gform += Q1; 
+}
+
+ConsistentLDGSMMSourceOperator::ConsistentLDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
+	double _alpha, const mfem::Vector &beta)
+	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), 
+	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha)
+{
+	height = base_source_op.Height(); 
+	width = base_source_op.Width(); 
+
+	const auto dim = quad.Dimension(); 
+	phi_ext = MomentVectorExtents(1,dim+1,fes.GetVSize()); 
+	moments.SetSize(TotalExtent(phi_ext)); 
+
+	mfem::ParBilinearForm F1form(&vfes); 
+	F1form.AddInteriorFaceIntegrator(new DGVectorJumpJumpIntegrator(-1.0/2/alpha)); 
+	F1form.Assemble(); 
+	F1form.Finalize(); 
+	F1 = HypreParMatrixPtr(F1form.ParallelAssemble()); 
+
+	mfem::ParMixedBilinearForm F2form(&vfes, &fes); 
+	F2form.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator(-1.0));
+	F2form.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta));
+	F2form.Assemble(); 
+	F2form.Finalize(); 
+	F2 = HypreParMatrixPtr(F2form.ParallelAssemble());   
+}
+
+void ConsistentLDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+{
+	base_source_op.Mult(psi, source); 
+
+	mfem::BlockVector bv(source.GetData(), base_source_op.Offsets()); 
+
+	const auto dim = quad.Dimension(); 
+	DiscreteToMoment D(quad, psi_ext, phi_ext); 
+	D.Mult(psi, moments); 
+	mfem::Vector phi(moments, 0, fes.GetVSize()); 
+	mfem::Vector J(moments, fes.GetVSize(), dim*fes.GetVSize()); 
+	F1->Mult(1.0, J, 1.0, bv.GetBlock(0)); 
+	F2->Mult(1.0, J, 1.0, bv.GetBlock(1)); 
+	F2->MultTranspose(-1.0, phi, 1.0, bv.GetBlock(0)); 
 }
 
 void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const AngularQuadrature &quad, ConstTransportVectorView psi, 

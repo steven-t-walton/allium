@@ -5,6 +5,7 @@
 #include "transport_op.hpp"
 #include "sweep.hpp"
 #include "p1diffusion.hpp"
+#include "smm_op.hpp"
 
 TEST(CSMM, DGTraceColl) {
 	auto mesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
@@ -114,8 +115,8 @@ TEST(CSMM, CSMMZerothLFI) {
 }
 
 std::tuple<double,double> P1SMMError(int Ne, int fe_order) {
-	double delta = 0.0; 
-	double gamma = 0.0; 
+	double delta = 0.5; 
+	double gamma = 1.0; 
 	double base = 2.0; 
 	auto sn_order = 4; 
 	mfem::Mesh smesh = mfem::Mesh::MakeCartesian2D(Ne, Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
@@ -184,8 +185,8 @@ std::tuple<double,double> P1SMMError(int Ne, int fe_order) {
 	DiscreteToMoment D(quad, psi_ext, phi_ext); 
 	FormTransportSource(fes, quad, source_coef, psi_coef, source_view); 
 	ConsistentSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha); 
-	auto p1 = CreateP1DiffusionDiscretization(fes, vfes, total_coef, absorption_coef, alpha); 
-	auto mono = BlockOperatorToMonolithic(*p1); 
+	auto *p1 = CreateP1DiffusionDiscretization(fes, vfes, total_coef, absorption_coef, alpha); 
+	auto *mono = BlockOperatorToMonolithic(*p1); 
 	mfem::SuperLURowLocMatrix slu_op(*mono); 
 	mfem::SuperLUSolver slu(slu_op); 
 	slu.SetPrintStatistics(false); 
@@ -224,17 +225,10 @@ std::tuple<double,double> P1SMMError(int Ne, int fe_order) {
 	double err = phi.ComputeL2Error(exsol_coef); 
 
 	mfem::VectorFunctionCoefficient Jexsol_coef(dim, J_func); 
-	double Jerr = J.ComputeL2Error(Jexsol_coef); 
+	double Jerr = J.ComputeL2Error(Jexsol_coef);
 
-	mfem::L2_FECollection fec0(0, dim); 
-	mfem::ParFiniteElementSpace fes0(&mesh, &fec); 
-	mfem::ParGridFunction part(&fes0); 
-	part = mfem::Mpi::WorldRank(); 
-	mfem::ParaViewDataCollection dc("solution", &mesh); 
-	dc.RegisterField("phi", &phi); 
-	dc.RegisterField("J", &J); 
-	dc.RegisterField("part", &part); 
-	dc.Save(); 
+	delete p1; 
+	delete mono; 
 
 	return {err, Jerr}; 
 }
@@ -251,6 +245,151 @@ TEST(CSMM, MMSp1) {
 TEST(CSMM, MMSp2) {
 	auto [phi1, J1] = P1SMMError(10, 2); 
 	auto [phi2, J2] = P1SMMError(20, 2); 
+	double phi_ooa = log2(phi1/phi2); 
+	double J_ooa = log2(J1/J2); 
+	EXPECT_NEAR(phi_ooa, 3.0, 0.1); 
+	EXPECT_NEAR(J_ooa, 3.0, 0.2); 
+}
+
+std::tuple<double,double> LDGSMMError(int Ne, int fe_order) {
+	double delta = 0.5; 
+	double gamma = 1.0; 
+	double base = 2.0; 
+	auto sn_order = 4; 
+	mfem::Mesh smesh = mfem::Mesh::MakeCartesian2D(Ne, Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
+	const auto dim = mesh.Dimension(); 
+
+	double total = 1.0; 
+	double scattering = .25; 
+	
+	mfem::L2_FECollection fec(fe_order, dim, mfem::BasisType::GaussLegendre); 
+	mfem::ParFiniteElementSpace fes(&mesh, &fec); 
+	mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
+	LevelSymmetricQuadrature quad(sn_order, dim); 
+
+	TransportVectorExtents psi_ext(1,quad.Size(),fes.GetVSize()); 
+	const auto psi_size = TotalExtent(psi_ext); 
+	mfem::Vector psi(psi_size), source_vec(psi_size); 
+	psi = 0.0; 
+	TransportVectorView psi_view(psi.GetData(), psi_ext), source_view(source_vec.GetData(), psi_ext); 
+
+	// exact solutions 
+	auto f = [&delta, &gamma, base](const mfem::Vector &x, const mfem::Vector &Omega) {
+		return (sin(M_PI*x(0))*sin(M_PI*x(1)) + delta*(Omega(0) + Omega(1))*sin(2*M_PI*x(0))*sin(2*M_PI*x(1)) 
+			+ gamma*(Omega*Omega)*sin(3*M_PI*x(0))*sin(3*M_PI*x(1)) + base)/4/M_PI; 
+	};
+	auto phi_func = [gamma, base](const mfem::Vector &x) {
+		return sin(M_PI*x(0))*sin(M_PI*x(1)) + gamma*2./3*sin(3*M_PI*x(0))*sin(3*M_PI*x(1)) + base; 
+	};
+	auto J_func = [&delta](const mfem::Vector &x, mfem::Vector &v) {
+		v = delta*sin(2*M_PI*x(0))*sin(2*M_PI*x(1))/3; 
+	};
+
+	// project onto discrete psi 
+	FunctionGrayCoefficient psi_coef(f); 
+
+	// mms source 
+	auto q = [delta, gamma, total, scattering, &f, &phi_func](const mfem::Vector &X, const mfem::Vector &Omega) {
+		double x = M_PI*X(0);
+		double y = M_PI*X(1); 
+		double mu = Omega(0); 
+		double eta = Omega(1); 
+		double dpsidx = .25*(cos(x)*sin(y) + 2*delta*(mu+eta)*cos(2*x)*sin(2*y) + 3*gamma*(Omega*Omega)*cos(3*x)*sin(3*y)); 
+		double dpsidy = .25*(sin(x)*cos(y) + 2*delta*(mu+eta)*sin(2*x)*cos(2*y) + 3*gamma*(Omega*Omega)*sin(3*x)*cos(3*y)); 
+		return mu*dpsidx + eta*dpsidy + total*f(X,Omega) - scattering*phi_func(X)/4/M_PI; 
+	};
+	FunctionGrayCoefficient source_coef(q); 
+
+	// compute alpha coefficient 
+	mfem::Vector nor(dim); 
+	nor = 0.0; 
+	nor(0) = 1.0; 
+	const auto alpha = ComputeAlpha(quad, nor); 
+
+	mfem::ConstantCoefficient total_coef(total); 
+	mfem::ConstantCoefficient scattering_coef(scattering); 
+	mfem::ConstantCoefficient absorption_coef(total - scattering); 
+
+	InverseAdvectionOperator Linv(fes, quad, psi_ext, total_coef, psi_coef); 
+	mfem::BilinearForm Ms_form(&fes); 
+	Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering_coef)); 
+	Ms_form.Assemble(); 
+	Ms_form.Finalize();
+	MomentVectorExtents phi_ext(1, 1, fes.GetVSize());
+	const auto phi_size = TotalExtent(phi_ext); 
+	// integrates over angle psi -> phi 
+	DiscreteToMoment D(quad, psi_ext, phi_ext); 
+	FormTransportSource(fes, quad, source_coef, psi_coef, source_view); 
+
+	mfem::Vector beta(dim); 
+	for (auto d=0; d<dim; d++) { beta(d) = d+1; }
+	ConsistentLDGSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha, beta);
+	LDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta); 
+	const auto &S = ldg.SchurComplement(); 
+
+	mfem::CGSolver solver(MPI_COMM_WORLD); 
+	solver.SetAbsTol(1e-12); 
+	solver.SetMaxIter(100); 
+	solver.SetPrintLevel(0); 
+	mfem::HypreBoomerAMG amg(S); 
+	amg.SetPrintLevel(0); 
+	solver.SetOperator(S); 
+	solver.SetPreconditioner(amg); 
+	solver.iterative_mode = false; 
+	InverseLDGDiffusionOperator inv_ldg(ldg, solver); 
+	mfem::ProductOperator smm(&inv_ldg, &source_op, false, false); 
+
+	mfem::BlockVector x(ldg.GetOffsets()), xold(ldg.GetOffsets()); 
+	x = 0.0; 
+	xold = 0.0; 
+	mfem::ParGridFunction phi(&fes, x.GetBlock(1)), J(&vfes, x.GetBlock(0)); 
+	mfem::Vector scat_source(phi_size); 
+	int it; 
+	double norm; 
+	for (it=0; it<10; it++) {
+		Ms_form.Mult(xold.GetBlock(1), scat_source); 
+		D.MultTranspose(scat_source, psi); 
+		psi += source_vec; 
+		Linv.Mult(psi, psi); 
+		smm.Mult(psi, x); 
+
+		xold -= x; 
+		norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, xold, xold)); 
+		xold = x; 
+		if (norm < 1e-10) break; 
+	}
+	EXPECT_TRUE(it < 15); 
+	EXPECT_TRUE(norm < 1e-10); 
+
+	mfem::ParGridFunction phi_sn(&fes); 
+	D.Mult(psi, phi_sn); 
+	mfem::GridFunctionCoefficient phi_sn_c(&phi_sn); 
+	double consistency = phi.ComputeL2Error(phi_sn_c); 
+	EXPECT_NEAR(consistency, 0.0, 1e-12); 
+
+	// compute errors 
+	mfem::FunctionCoefficient exsol_coef(phi_func); 
+	double err = phi.ComputeL2Error(exsol_coef); 
+
+	mfem::VectorFunctionCoefficient Jexsol_coef(dim, J_func); 
+	double Jerr = J.ComputeL2Error(Jexsol_coef);
+
+	return {err, Jerr}; 
+}
+
+TEST(ConsLDGSMM, MMSp1) {
+	auto [phi1, J1] = LDGSMMError(10, 1); 
+	auto [phi2, J2] = LDGSMMError(20, 1); 
+	double phi_ooa = log2(phi1/phi2); 
+	double J_ooa = log2(J1/J2); 
+	EXPECT_NEAR(phi_ooa, 2.0, 0.1); 
+	EXPECT_NEAR(J_ooa, 2.0, 0.2); 
+}
+
+TEST(ConsLDGSMM, MMSp2) {
+	auto [phi1, J1] = LDGSMMError(10, 2); 
+	auto [phi2, J2] = LDGSMMError(20, 2); 
 	double phi_ooa = log2(phi1/phi2); 
 	double J_ooa = log2(J1/J2); 
 	EXPECT_NEAR(phi_ooa, 3.0, 0.1); 

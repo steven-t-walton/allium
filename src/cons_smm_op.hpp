@@ -26,6 +26,26 @@ public:
 	const mfem::Array<int> &Offsets() const { return offsets; }
 };
 
+class ConsistentLDGSMMSourceOperator : public mfem::Operator {
+private:
+	mfem::ParFiniteElementSpace &fes, &vfes; 
+	const AngularQuadrature &quad; 
+	const TransportVectorExtents &psi_ext; 
+	double alpha; 	
+
+	ConsistentSMMSourceOperator base_source_op; 
+	MomentVectorExtents phi_ext; 
+	mutable mfem::Vector moments;
+
+	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>; 
+	HypreParMatrixPtr F1, F2;  
+public:
+	ConsistentLDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+		const AngularQuadrature &quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
+		double _alpha, const mfem::Vector &beta); 
+	void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
+};
+
 // hat(P)n - n/3 {{ phi }} - n/6/alpha [[ J.n ]]
 // An = Pn^+ - n/6 phi - n/6/alpha J.n 
 // -A(-n) = Pn^- - n/6 phi + n/6/alpha J.n
