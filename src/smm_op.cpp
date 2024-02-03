@@ -67,7 +67,6 @@ void InverseLDGDiffusionOperator::Mult(const mfem::Vector &b, mfem::Vector &x) c
 	mfem::BlockVector bb(b.GetData(), offsets); 
 	mfem::BlockVector bx(x.GetData(), offsets);
 
-	const auto &S = disc.SchurComplement(); 
 	phi_source = bb.GetBlock(1); 
 	disc.EliminateRHS(bb.GetBlock(0), phi_source); 
 	Sinv.Mult(phi_source, bx.GetBlock(1)); 
