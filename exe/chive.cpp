@@ -617,10 +617,14 @@ int main(int argc, char *argv[]) {
 
 			// direct solve 
 			else {
+			#ifdef MFEM_USE_SUPERLU
 				slu_op = new mfem::SuperLURowLocMatrix(S); 
 				auto *slu = new mfem::SuperLUSolver(*slu_op); 
 				slu->SetPrintStatistics(false); 
-				inner_solver = slu; 
+				inner_solver = slu;
+			#else 
+				MFEM_ABORT("superlu required for direct option"); 
+			#endif 
 			}
 
 			auto *inv_ldg = new InverseBlockDiffusionOperator(*block_disc, *inner_solver); 
@@ -651,10 +655,14 @@ int main(int argc, char *argv[]) {
 
 			// direct solve 
 			else {
+			#ifdef MFEM_USE_SUPERLU
 				slu_op = new mfem::SuperLURowLocMatrix(S); 
 				auto *slu = new mfem::SuperLUSolver(*slu_op); 
 				slu->SetPrintStatistics(false); 
-				inner_solver = slu; 
+				inner_solver = slu;
+			#else 
+				MFEM_ABORT("superlu required for direct option"); 
+			#endif 
 			}
 
 			auto *inv_ip = new InverseBlockDiffusionOperator(*block_disc, *inner_solver); 
