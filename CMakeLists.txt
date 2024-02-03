@@ -105,10 +105,6 @@ LIST(APPEND EXE
 	exe/chive.cpp
 )
 
-if (${MFEM_USE_SUPERLU}) 
-	LIST(APPEND EXE exe/p1.cpp)
-endif()
-
 if (${MFEM_USE_SUITESPARSE}) 
 	LIST(APPEND EXE exe/sweep.cpp)
 endif()
