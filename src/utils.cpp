@@ -4,13 +4,17 @@
 #include <iomanip>
 
 std::string FormatTimeString(double time) {
+	std::stringstream ss; 
+	if (time < 1) {
+		ss << std::setprecision(2) << time; 
+		return ss.str(); 
+	}
 	double remainder = std::fmod(time, 3600*24); 
 	int days = time / (3600*24); 
 	int hours = remainder / 3600; 
 	remainder = std::fmod(time, 3600); 
 	int minutes = remainder / 60; 
 	auto seconds = std::fmod(remainder, 60); 
-	std::stringstream ss; 
 	if (days > 0) {
 		ss << days << "-"; 
 	}
@@ -20,6 +24,6 @@ std::string FormatTimeString(double time) {
 	if (minutes > 0 or hours > 0 or days > 0) {
 		ss << std::setfill('0') << std::setw(2) << minutes << ":";
 	}
-	ss << std::setfill('0') << std::fixed << std::setprecision(2) << std::setw(5) << seconds; 
+	ss << std::setfill('0') << std::fixed << std::setprecision(2) << std::setw(5) << seconds; 		
 	return ss.str(); 
 }
