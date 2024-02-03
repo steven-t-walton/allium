@@ -54,8 +54,9 @@ sn = {
 	acceleration = {
 		type = "LDGSMM",
 		solver = "cg", 
-		abstol = 1e-12, 
-		max_it = 100
+		abstol = 1e-8, 
+		max_it = 100, 
+		consistent = true
 	},
 	tol = 1e-6, 
 	max_it = 100, 

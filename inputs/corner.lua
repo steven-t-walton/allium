@@ -70,6 +70,7 @@ ldgsmm = {
 	solver = "cg", 
 	abstol = 1e-7, 
 	max_it = 200, 
+	consistent = true
 }
 
 p1smm = {
@@ -82,8 +83,8 @@ sn = {
 	sn_order = 16, 
 	tol = 1e-5, 
 	max_it = 200, 
-	-- acceleration = ldgsmm,
-	preconditioner = ldgsa,
+	acceleration = p1smm,
+	-- preconditioner = ldgsa,
 	solver = "sli"
 }
 
