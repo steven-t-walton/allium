@@ -134,6 +134,15 @@ int main(int argc, char *argv[]) {
 		lua.script(lua_cmds); 
 	}
 
+	#ifdef ALLIUM_GIT_COMMIT 
+	out << YAML::Key << "git" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "branch" << YAML::Value << ALLIUM_GIT_BRANCH; 
+		out << YAML::Key << "commit" << YAML::Value << ALLIUM_GIT_COMMIT; 
+		#ifdef ALLIUM_GIT_TAG 
+		out << YAML::Key << "tag" << YAML::Value << ALLIUM_GIT_TAG; 
+		#endif
+	out << YAML::EndMap; 
+	#endif
 	out << YAML::Key << "input file" << YAML::Value << realpath(input_file.c_str(), nullptr); 
 
 	// --- extract list of materials --- 

@@ -11,6 +11,30 @@ if (NOT ${HAS_STD_SPAN})
 	message(FATAL_ERROR "compiler does not have std::span")
 endif()
 
+if (EXISTS ${PROJECT_SOURCE_DIR}/.git)
+	execute_process(
+		COMMAND git describe --all --long --abbrev=40 --dirty --always
+		WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+		OUTPUT_VARIABLE ALLIUM_GIT_STRING 
+		ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+	execute_process(
+		COMMAND git rev-parse HEAD 
+		WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+		OUTPUT_VARIABLE ALLIUM_GIT_COMMIT 
+		ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+	execute_process(
+		COMMAND git rev-parse --abbrev-ref HEAD
+		WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+		OUTPUT_VARIABLE ALLIUM_GIT_BRANCH
+		ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+	execute_process(
+		COMMAND git describe --exact-match --tags
+		WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+		OUTPUT_VARIABLE ALLIUM_GIT_TAG
+		ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+	message(STATUS "allium git string: ${ALLIUM_GIT_STRING}")
+endif()
+
 # --- default value for build type --- 
 if (NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
