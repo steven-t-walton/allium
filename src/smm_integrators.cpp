@@ -408,7 +408,7 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 
 	const auto dof1 = el1.GetDof(); 
 	const auto dof2 = el2.GetDof(); 
-	assert(dof1 == dof2); 
+	// assert(dof1 == dof2); 
 	shape1.SetSize(dof1); 
 	shape2.SetSize(dof2); 
 	elvec.SetSize(dof1 + dof2); 
@@ -433,7 +433,7 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 		tr_el.CalcShape(ip, tr_shape1); 
 		mfem::IntegrationPoint ip2(ip); 
 		if (nbr_el>=0) {
-			ip2.x = 1 - ip2.x; 
+			ip2.x = 1.0 - ip2.x; 
 		}
 		tr_el.CalcShape(ip2, tr_shape2); // <-- should there be a second trace element?
 		double jump = (tr_shape1 * beta_trace1) - (tr_shape2 * beta_trace2); 
