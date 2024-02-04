@@ -62,7 +62,7 @@ public:
 		width = psi_size; 
 
 		// same number of groups 
-		assert(extents_psi.extent(0) == extents_phi.extent(1)); 
+		assert(extents_psi.extent(0) == extents_phi.extent(0)); 
 		// same number of space dofs 
 		assert(extents_psi.extent(2) == extents_phi.extent(2)); 
 	}
