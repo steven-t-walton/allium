@@ -2,6 +2,7 @@
 #include <deque>
 
 // #define INFLOW_IN_SWEEP
+#define PREASSEMBLE
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow)
@@ -245,11 +246,36 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	}
 
 	delete[] requests; delete[] statuses; 
+
+#ifdef PREASSEMBLE
+	mass_matrices.SetSize(fes.GetNE()); 
+	grad_matrices.SetSize(fes.GetNE()*dim); 
+	auto grad_mat_view = Kokkos::mdspan(grad_matrices.GetData(), dim, fes.GetNE()); 
+	mfem::MassIntegrator mi(total); 
+	for (auto e=0; e<fes.GetNE(); e++) {
+		const auto &fe = *fes.GetFE(e); 
+		auto &trans = *mesh.GetElementTransformation(e);
+		mass_matrices[e] = new mfem::DenseMatrix; 
+		mi.AssembleElementMatrix(fe, trans, *mass_matrices[e]); 
+
+		mfem::Vector Omega(dim); 
+		for (auto d=0; d<dim; d++) {
+			grad_mat_view(d,e) = new mfem::DenseMatrix; 
+			Omega = 0.0; 
+			Omega(d) = 1.0; 
+			mfem::VectorConstantCoefficient Q(Omega); 
+			mfem::ConservativeConvectionIntegrator conv_int(Q, 1.0); 
+			conv_int.AssembleElementMatrix(fe, trans, *grad_mat_view(d,e)); 
+		}
+	}	
+#endif
 }
 
 InverseAdvectionOperator::~InverseAdvectionOperator()
 {
 	igraph_destroy(&graph); 
+	for (auto &ptr : mass_matrices) { delete ptr; }
+	for (auto &ptr : grad_matrices) { delete ptr; }
 }
 
 void InverseAdvectionOperator::WriteGraphToDot(std::string prefix) const 
@@ -265,6 +291,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	assert(source.Size() == Width()); 
 	assert(psi.Size() == Height()); 
 
+	const auto dim = mesh.Dimension(); 
 	const auto Ne = mesh.GetNE(); 
 	const auto Nomega = quad.Size(); 
 	const auto Ndof_fnbr = fes.GetFaceNbrVSize(); 
@@ -279,6 +306,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// mdspan views into data 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
 	TransportVectorView source_view(source.GetData(), psi_ext); 
+	auto grad_mat_view = Kokkos::mdspan(grad_matrices.GetData(), dim, fes.GetNE()); 
 
 	// allocate face neighbor data 
 	TransportVectorExtents psi_fnbr_ext(1, Nomega, Ndof_fnbr);
@@ -320,21 +348,33 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			const auto a = node % Nomega; 
 			const auto e = node / Nomega; 
 			const auto &Omega = quad.GetOmega(a); 
+			mfem::VectorConstantCoefficient Q(Omega); 
 			const auto &el = *fes.GetFE(e); 
 			auto &trans = *mesh.GetElementTransformation(e); 
 			fes.GetElementDofs(e, dofs); 
 
 			// -- assemble volumetric terms --
 			// volumetric streaming term 
+#ifdef PREASSEMBLE
+			mfem::DenseMatrix G(dofs.Size()); 
+			G = 0.0; 
+			for (auto d=0; d<dim; d++) {
+				G.Add(Omega(d), *grad_mat_view(d,e)); 
+			}
+#else 
 			mfem::DenseMatrix G; 
-			mfem::VectorConstantCoefficient Q(Omega); 
 			mfem::ConservativeConvectionIntegrator conv_int(Q, 1.0); 
 			conv_int.AssembleElementMatrix(el, trans, G); 
+#endif
 
 			// collision term 
+#ifdef PREASSEMBLE
+			mfem::DenseMatrix &Mt = *mass_matrices[e]; 
+#else
 			mfem::DenseMatrix Mt; 
 			mfem::MassIntegrator mt_int(total); 
 			mt_int.AssembleElementMatrix(el, trans, Mt); 
+#endif
 
 			// get source term 
 			mfem::Vector rhs(dofs.Size()); 

@@ -38,6 +38,8 @@ private:
 	mfem::Table downwind_send_table; 
 	mfem::Table downwind_recv_table; 
 
+	mfem::Array<mfem::DenseMatrix*> mass_matrices, grad_matrices;  
+
 	mutable mfem::Vector psi_fnbr; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
