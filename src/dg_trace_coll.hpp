@@ -33,12 +33,17 @@ public:
 	}
 
 	int DofForGeometry(mfem::Geometry::Type GeomType) const override {
-		if ((dim==1 and GeomType == mfem::Geometry::SEGMENT) or 
-			(dim==2 and GeomType == mfem::Geometry::SQUARE) or
-			(dim==3 and GeomType == mfem::Geometry::CUBE))
+		if (dim==1 and GeomType == mfem::Geometry::SEGMENT)
 		{
+			return 2; 
+		}
+		else if (dim==2 and (GeomType == mfem::Geometry::SQUARE or GeomType == mfem::Geometry::TRIANGLE)) {
 			const auto nf = mfem::Geometries.NumBdr(GeomType); 
-			return nf*(base_p+1); 			
+			return nf*(base_p+1); 						
+		} 
+		else if (dim==3 and GeomType == mfem::Geometry::CUBE) {
+			const auto nf = mfem::Geometries.NumBdr(GeomType); 
+			return nf*pow(base_p+1,2); 
 		}
 		return 0; 
 	}
