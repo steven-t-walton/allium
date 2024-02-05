@@ -274,8 +274,8 @@ std::tuple<double,double> P1SMMError(int Ne, int fe_order) {
 }
 
 TEST(P1SMM, MMSp1) {
-	auto [phi1, J1] = P1SMMError(10, 1); 
-	auto [phi2, J2] = P1SMMError(20, 1); 
+	auto [phi1, J1] = P1SMMError(5, 1); 
+	auto [phi2, J2] = P1SMMError(10, 1); 
 	double phi_ooa = log2(phi1/phi2); 
 	double J_ooa = log2(J1/J2); 
 	EXPECT_NEAR(phi_ooa, 2.0, 0.1); 
@@ -283,8 +283,8 @@ TEST(P1SMM, MMSp1) {
 }
 
 TEST(P1SMM, MMSp2) {
-	auto [phi1, J1] = P1SMMError(10, 2); 
-	auto [phi2, J2] = P1SMMError(20, 2); 
+	auto [phi1, J1] = P1SMMError(5, 2); 
+	auto [phi2, J2] = P1SMMError(10, 2); 
 	double phi_ooa = log2(phi1/phi2); 
 	double J_ooa = log2(J1/J2); 
 	EXPECT_NEAR(phi_ooa, 3.0, 0.1); 
