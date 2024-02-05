@@ -77,8 +77,8 @@ TEST_F(ProjectBetaTest, Quadratic) {
 	EXPECT_NEAR(ooa, 1.0, 0.2); 
 }
 
-TEST(CSMM, ZerothLFI) {
-	auto smesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, false, 1.0, 1.0, false); 
+TEST(ZerothLFI, TwoD) {
+	auto smesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
 	auto mesh = mfem::ParMesh(MPI_COMM_WORLD, smesh); 
 	const auto dim = mesh.Dimension(); 
 	auto fec = mfem::L2_FECollection(1, dim, mfem::BasisType::GaussLobatto); 
@@ -102,6 +102,45 @@ TEST(CSMM, ZerothLFI) {
 	mfem::ParGridFunction beta(&tr_fes), tensor(&tr_vfes); 
 	auto angle_space = [](const mfem::Vector &x, const mfem::Vector &Omega) {
 		return (sin(M_PI*x(0))*sin(M_PI*x(1)) + (Omega(0) + Omega(1))*sin(2*M_PI*x(0))*sin(2*M_PI*x(1)) + (Omega*Omega)*sin(3*M_PI*(x(0)+.05)/1.1)*sin(3*M_PI*(x(1)+.05)/1.1))/4/M_PI; 
+	};
+	FunctionGrayCoefficient angle_space_coef(angle_space); 
+	ProjectPsi(fes, quad, angle_space_coef, psi_view); 
+	ProjectClosuresToFaces(fes, quad, psi_view, alpha, beta, tensor); 
+
+	mfem::ParLinearForm fform(&fes); 
+	fform.AddInteriorFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta));
+	fform.Assemble(); 
+	// [[ beta ]] = 0 when GaussLobatto used 
+	EXPECT_NEAR(fform.Norml2(), 0.0, 1e-15); 
+}
+
+TEST(ZerothLFI, ThreeD) {
+	auto smesh = mfem::Mesh::MakeCartesian3D(2,2,2, mfem::Element::HEXAHEDRON, 1.0, 1.0, 1.0, false); 
+	auto mesh = mfem::ParMesh(MPI_COMM_WORLD, smesh); 
+	const auto dim = mesh.Dimension(); 
+	auto fec = mfem::L2_FECollection(1, dim, mfem::BasisType::GaussLobatto); 
+	auto fes = mfem::ParFiniteElementSpace(&mesh, &fec); 
+	auto vfes = mfem::ParFiniteElementSpace(&mesh, &fec, dim); 
+	LevelSymmetricQuadrature quad(8, dim); 
+	TransportVectorExtents psi_ext(1,quad.Size(),fes.GetVSize()); 
+	const auto psi_size = TotalExtent(psi_ext); 
+	mfem::Vector psi(psi_size), source(psi_size); 
+	TransportVectorView psi_view(psi.GetData(), psi_ext), source_view(source.GetData(), psi_ext); 
+	psi = 1.0; 
+	source = 0.0; 
+	mfem::Vector nor(dim); 
+	nor = 0.0; 
+	nor(0) = 1.0; 
+	double alpha = ComputeAlpha(quad, nor);
+
+	auto tr_fec = DGTrace_FECollection(1, dim); 
+	auto tr_fes = mfem::ParFiniteElementSpace(&mesh, &tr_fec); 
+	auto tr_vfes = mfem::ParFiniteElementSpace(&mesh, &tr_fec, dim); 
+	mfem::ParGridFunction beta(&tr_fes), tensor(&tr_vfes); 
+	auto angle_space = [](const mfem::Vector &x, const mfem::Vector &Omega) {
+		return (sin(M_PI*x(0))*sin(M_PI*x(1))*sin(M_PI*x(2))
+			+ (Omega(0) + Omega(1) + Omega(2))*sin(2*M_PI*x(0))*sin(2*M_PI*x(1))*sin(2*M_PI*x(1)) 
+			+ (Omega(0)*Omega(0)+Omega(1)*Omega(1))*sin(3*M_PI*(x(0)+.05)/1.1)*sin(3*M_PI*(x(1)+.05)/1.1)*sin(3*M_PI*(x(2)+.05)/1.1))/4/M_PI; 
 	};
 	FunctionGrayCoefficient angle_space_coef(angle_space); 
 	ProjectPsi(fes, quad, angle_space_coef, psi_view); 
