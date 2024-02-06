@@ -268,6 +268,37 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 			conv_int.AssembleElementMatrix(fe, trans, *grad_mat_view(d,e)); 
 		}
 	}	
+
+	face_matrices.SetSize(4*mesh.GetNumFaces()); 
+	for (auto i=0; i<face_matrices.Size(); i++) {
+		face_matrices[i] = new mfem::DenseMatrix; 
+	}
+	auto face_mat_view = Kokkos::mdspan(face_matrices.GetData(), mesh.GetNumFaces(), 2, 2); 
+	FaceMassMatricesIntegrator fmi; 
+	mfem::DenseMatrix elmat; 
+	for (auto f=0; f<mesh.GetNumFaces(); f++) {
+		const auto info = mesh.GetFaceInformation(f); 
+		mfem::FaceElementTransformations *face_trans; 
+		if (info.IsShared()) {
+			face_trans = mesh.GetSharedFaceTransformationsByLocalIndex(f, true); 
+		} else {
+			face_trans = mesh.GetFaceElementTransformations(f); 
+		}
+		const auto &el1 = *fes.GetFE(face_trans->Elem1No); 
+		const auto *el2 = &el1; 
+		if (face_trans->Elem2No >= 0) {
+			el2 = fes.GetFE(face_trans->Elem2No); 
+		}
+		fmi.AssembleFaceMatrix(el1, *el2, *face_trans, elmat);
+		const auto dof1 = el1.GetDof(); 
+		elmat.GetSubMatrix(0,dof1,0,dof1, *face_mat_view(f,0,0)); 
+		if (face_trans->Elem2No >= 0) {
+			const auto dof2 = el2->GetDof(); 
+			elmat.GetSubMatrix(0,dof1,dof1,dof1+dof2, *face_mat_view(f,0,1)); 
+			elmat.GetSubMatrix(dof1,dof1+dof2,0,dof1, *face_mat_view(f,1,0)); 
+			elmat.GetSubMatrix(dof1,dof1+dof2,dof1,dof1+dof2, *face_mat_view(f,1,1)); 			
+		}
+	}
 #endif
 }
 
@@ -276,6 +307,7 @@ InverseAdvectionOperator::~InverseAdvectionOperator()
 	igraph_destroy(&graph); 
 	for (auto &ptr : mass_matrices) { delete ptr; }
 	for (auto &ptr : grad_matrices) { delete ptr; }
+	for (auto &ptr : face_matrices) { delete ptr; }
 }
 
 void InverseAdvectionOperator::WriteGraphToDot(std::string prefix) const 
@@ -306,7 +338,11 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// mdspan views into data 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
 	TransportVectorView source_view(source.GetData(), psi_ext); 
+
+#ifdef PREASSEMBLE
 	auto grad_mat_view = Kokkos::mdspan(grad_matrices.GetData(), dim, fes.GetNE()); 
+	auto face_mat_view = Kokkos::mdspan(face_matrices.GetData(), mesh.GetNumFaces(), 2, 2); 
+#endif
 
 	// allocate face neighbor data 
 	TransportVectorExtents psi_fnbr_ext(1, Nomega, Ndof_fnbr);
@@ -380,6 +416,73 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			mfem::Vector rhs(dofs.Size()); 
 			for (auto i=0; i<dofs.Size(); i++) { rhs[i] = source_view(0,a,dofs[i]); }
 
+#ifdef PREASSEMBLE
+			mfem::Vector nor(dim); 
+			element_to_face->GetRow(e, faces);
+			mfem::DenseMatrix F(dofs.Size()); 
+			F = 0.0; 
+			for (auto f : faces) {
+				const auto info = mesh.GetFaceInformation(f); 
+				mfem::FaceElementTransformations *face_trans; 
+				if (info.IsShared()) {
+					face_trans = mesh.GetSharedFaceTransformationsByLocalIndex(f, true); 
+				} else {
+					face_trans = mesh.GetFaceElementTransformations(f); 
+				}
+				bool keep_order = e == face_trans->Elem1No; 
+				const auto ep = (keep_order) ? face_trans->Elem2No : face_trans->Elem1No; 
+				const auto &ref_cent = mfem::Geometries.GetCenter(face_trans->GetGeometryType()); 
+				face_trans->SetAllIntPoints(&ref_cent); 
+				if (dim==1) {
+					nor(0) = 2*face_trans->GetElement1IntPoint().x - 1.0;
+				} else {
+					mfem::CalcOrtho(face_trans->Jacobian(), nor); 				
+				}
+				// normalize, ensure outward normal 
+				nor.Set((keep_order ? 1.0 : -1.0)/nor.Norml2(), nor); 
+				const double dot = Omega * nor; 
+				const auto idx = keep_order ? 0 : 1; 
+				const auto nbr_idx = (idx + 1) % 2; 
+
+				// outflow 
+				if (dot > 0) {
+					const auto &elmat = *face_mat_view(f, idx, idx); 
+					F.Add(dot, elmat); 
+				}
+
+				// inflow 
+				else {
+					// interior face 
+					if (ep >= 0) {
+						const auto &elmat = *face_mat_view(f, idx, nbr_idx); 
+						mfem::Vector psi2; 
+						// face neighbor data 
+						if (info.IsShared()) {
+							fes.GetFaceNbrElementVDofs(ep-Ne, dofs2); 
+							psi2.SetSize(dofs2.Size()); 
+							for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_fnbr_view(0, a, dofs2[i]); }
+						}
+						// local data 
+						else {
+							fes.GetElementDofs(ep, dofs2); 
+							psi2.SetSize(dofs2.Size()); 
+							for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(0, a, dofs2[i]); }						
+						}
+						elmat.AddMult(psi2, rhs, -dot); 	
+					}
+					#ifdef INFLOW_IN_SWEEP
+					else {
+						auto be = face_to_bdr_el.at(face_trans->ElementNo); 
+						auto &bdr_face_trans = *mesh.GetBdrFaceTransformations(be); 
+						mfem::BoundaryFlowIntegrator bdr_flow(inflow, Q, 1.0, 0.5);
+						mfem::Vector elvec; 
+						bdr_flow.AssembleRHSElementVect(el, bdr_face_trans, elvec);  
+						rhs -= elvec; 
+					}
+					#endif
+				}
+			}
+#else 
 			// -- do face terms -- 
 			// get faces associated with mesh element e 
 			// face are UNIQUE => normal is not always outward 
@@ -443,6 +546,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				}
 				#endif
 			}  
+#endif
 
 			// form local system 
 			mfem::DenseMatrix A(G); 
@@ -697,6 +801,65 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 			#else
 			source_vec_view(0,a,i) = bform[i] + bform2[i]; 
 			#endif
+		}
+	}
+}
+
+void FaceMassMatricesIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
+		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat)
+{
+	const auto dof1 = el1.GetDof(); 
+	shape1.SetSize(dof1); 
+	int dof2 = 0; 
+	if (trans.Elem2No >= 0) {
+		dof2 = el2.GetDof(); 
+		shape2.SetSize(dof2); 
+	}	
+	const auto dof = dof1 + dof2; 
+	elmat.SetSize(dof);
+	elmat = 0.0; 
+
+	const auto *ir = IntRule;
+	if (ir == NULL) {
+		int order; 
+		if (trans.Elem2No >= 0) {
+			order = 2*std::max(el1.GetOrder(), el2.GetOrder()); 
+		}
+		else {
+			order = 2*el1.GetOrder(); 
+		}
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), order); 
+	} 
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const auto &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		double w = ip.weight * trans.Weight(); 
+
+		const auto &eip1 = trans.GetElement1IntPoint(); 
+		el1.CalcShape(eip1, shape1); 
+		for (auto i=0; i<dof1; i++) {
+			for (auto j=0; j<dof1; j++) {
+				elmat(i,j) += shape1(i) * shape1(j) * w; 
+			}
+		}
+
+		if (trans.Elem2No >= 0) {
+			const auto &eip2 = trans.GetElement2IntPoint(); 
+			el2.CalcShape(eip2, shape2); 
+			for (auto i=0; i<dof1; i++) {
+				for (auto j=0; j<dof2; j++) {
+					double val = shape1(i) * shape2(j) * w; 
+					elmat(i,j+dof1) += val; 
+					elmat(j+dof1,i) += val; 
+				}
+			}
+
+			for (auto i=0; i<dof2; i++) {
+				for (auto j=0; j<dof2; j++) {
+					elmat(i+dof1,j+dof1) += shape2(i) * shape2(j) * w; 
+				}
+			}
 		}
 	}
 }

@@ -38,7 +38,7 @@ private:
 	mfem::Table downwind_send_table; 
 	mfem::Table downwind_recv_table; 
 
-	mfem::Array<mfem::DenseMatrix*> mass_matrices, grad_matrices;  
+	mfem::Array<mfem::DenseMatrix*> mass_matrices, grad_matrices, face_matrices;  
 
 	mutable mfem::Vector psi_fnbr; 
 public:
@@ -70,3 +70,15 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const TransportVectorExtents &psi_ext, mfem::Coefficient &source, mfem::Coefficient &inflow, mfem::Vector &source_vec); 
+
+class FaceMassMatricesIntegrator : public mfem::BilinearFormIntegrator 
+{
+private:
+	mfem::Vector shape1, shape2; 
+public:
+	void AssembleElementMatrix(const mfem::FiniteElement&, mfem::ElementTransformation&, mfem::DenseMatrix&) {
+		MFEM_ABORT("only defined for faces"); 
+	}
+	void AssembleFaceMatrix(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
+		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat);
+};
