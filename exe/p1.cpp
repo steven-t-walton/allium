@@ -19,6 +19,19 @@ public:
 	void SetOperator(const mfem::Operator&) { } // no op 
 };
 
+void AbsoluteRowSum(const mfem::SparseMatrix &A, mfem::Vector &rowsum) {
+	const auto &I = A.GetI(); 
+	const auto &J = A.GetJ(); 
+	const auto &data = A.GetData(); 
+
+	rowsum = 0.0; 
+	for (int row=0; row<A.Height(); row++) {
+		for (int idx=I[row]; idx<I[row+1]; idx++) {
+			rowsum(row) += std::fabs(data[idx]); 
+		}
+	}
+}
+
 int main(int argc, char *argv[]) {
 	mfem::Mpi::Init(argc, argv); 
 	mfem::Hypre::Init(); 
@@ -121,10 +134,12 @@ int main(int argc, char *argv[]) {
 	// form approximate inverse of Mt via inverse of row sum 
 	// poor preconditioner for conjugate gradient applied to Mt 
 	// amg(S) not great either... 
+	// absolute row sum is better for preconditioning CG, same issue with full block prec though 
 	// mfem::SparseMatrix diag; 
 	// Mt->GetDiag(diag); // get processor local CSR 
 	// mfem::Vector row_sums(diag.Width()); 
-	// diag.GetRowSums(row_sums); 
+	// // diag.GetRowSums(row_sums); // sum rows  
+	// AbsoluteRowSum(diag, row_sums); // sum |A_ij| 
 	// row_sums.Reciprocal(); // element-wise 1/row_sums 
 	// mfem::SparseMatrix iMt_local(row_sums); 
 	// auto iMt = HypreParMatrixPtr(
