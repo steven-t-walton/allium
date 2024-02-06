@@ -353,10 +353,26 @@ int main(int argc, char *argv[]) {
 	sol::table driver = lua["driver"]; 
 	const int fe_order = driver["fe_order"]; 
 	const int sn_order = driver["sn_order"]; 
+	sol::optional<std::string> basis_type_avail = driver["basis_type"]; 
+	std::string basis_type_string; 
+	if (basis_type_avail) {
+		basis_type_string = basis_type_avail.value(); 
+	} 
+	// default to lobatto
+	// lobatto is better for the moment solver's preconditioners 
+	else {
+		basis_type_string = "lobatto"; 
+	}
 
 	// --- build solution space --- 
 	// DG space for transport solution 
-	mfem::L2_FECollection fec(fe_order, dim, mfem::BasisType::GaussLegendre); 
+	int basis_type; 
+	if (basis_type_string == "legendre") {
+		basis_type = mfem::BasisType::GaussLegendre; 
+	} else if (basis_type_string == "lobatto") {
+		basis_type = mfem::BasisType::GaussLobatto; 
+	} else { MFEM_ABORT("basis type " << basis_type_string << " not supported"); }
+	mfem::L2_FECollection fec(fe_order, dim, basis_type); 
 	mfem::ParFiniteElementSpace fes(&mesh, &fec); 
 	fes.ExchangeFaceNbrData(); // create parallel degree of freedom maps used in sweep 
 	const auto Ndof = fes.GetVSize(); 
@@ -436,6 +452,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "num angles" << YAML::Value << Nomega; 			
 		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
 		out << YAML::Key << "phi size" << YAML::Value << phi_size_global;
+		out << YAML::Key << "basis type" << YAML::Value << basis_type_string; 
 		if (accel_avail) {
 			solver["type"] = "fixed point"; // overwrite since this is the only one supported 
 		}
