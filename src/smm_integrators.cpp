@@ -377,26 +377,36 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 // undo the orientation misalignment on parallel interfaces 
 // this is achieved by reording the columns of the point matrix from orientation 0 to the orientation 
 // described in info.element[1] 
-// WARNING: assumes linear meshes 
-void ReorientPointMat(mfem::DenseMatrix &pm, mfem::Geometry::Type geom_type, const mfem::Mesh::FaceInformation &info) {
+// NOTE: this is intended to be used to map from the reference element to a different point in the 
+// reference element so this should still be useful and work correctly even on high-order meshes 
+void ReorientPointMat(const mfem::Geometry::Type geom_type, const int face_orient, mfem::DenseMatrix &pm) {
+	// nothing to do in 1D 
+	if (geom_type == mfem::Geometry::POINT) {
+		return; 
+	}
+
+	// face geometry is a segment 
+	// only two orientations exists for segments => just have to swap the columns 
 	if (geom_type == mfem::Geometry::SEGMENT) {
 		assert(pm.Height() == 1 and pm.Width() == 2); 
 		std::swap(pm(0,0), pm(0,1)); 
 		return; 
 	} 
 
-	const auto orient = info.element[1].orientation; 
+	// in 3D, faces are quads or tris which have 8 and 6 possible orientations, respectively 
+	// use mfem::Geometry::Constants to map from orientation 0 to the orientation in face_orient 
 	const int *map;
 	if (geom_type == mfem::Geometry::SQUARE) {
 		assert(pm.Height() == 2 and pm.Width() == 4); 		
-		map = mfem::Geometry::Constants<mfem::Geometry::SQUARE>::Orient[orient];
+		map = mfem::Geometry::Constants<mfem::Geometry::SQUARE>::Orient[face_orient];
 	} 
 
 	else if (geom_type == mfem::Geometry::TRIANGLE) {
 		assert(pm.Height() == 2 and pm.Width() == 3); 		
-		map = mfem::Geometry::Constants<mfem::Geometry::TRIANGLE>::Orient[orient]; 
+		map = mfem::Geometry::Constants<mfem::Geometry::TRIANGLE>::Orient[face_orient]; 
 	}
 
+	// permute columns corresponding to map 
 	mfem::DenseMatrix pm2(pm); 
 	for (auto i=0; i<pm.Width(); i++) {
 		for (auto j=0; j<pm.Height(); j++) {
@@ -444,7 +454,7 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 	mfem::IntegrationPointTransformation iptrans; 
 	iptrans.Transf.SetIdentityTransformation(trans.GetGeometryType()); 
 	if (nbr_el >= 0) {
-		ReorientPointMat(iptrans.Transf.GetPointMat(), trans.GetGeometryType(), info); 		
+		ReorientPointMat(trans.GetGeometryType(), info.element[1].orientation, iptrans.Transf.GetPointMat()); 		
 	}
 
 	const auto dof1 = el1.GetDof(); 
@@ -574,7 +584,7 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 	mfem::IntegrationPointTransformation iptrans; 
 	iptrans.Transf.SetIdentityTransformation(trans.GetGeometryType()); 
 	if (nbr_el >= 0) {
-		ReorientPointMat(iptrans.Transf.GetPointMat(), trans.GetGeometryType(), info); 		
+		ReorientPointMat(trans.GetGeometryType(), info.element[1].orientation, iptrans.Transf.GetPointMat()); 		
 	}
 
 	const auto dof1 = el1.GetDof(); 
