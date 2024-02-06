@@ -735,7 +735,7 @@ int main(int argc, char *argv[]) {
 		double norm; 
 		mfem::Array<int> inner_its; 
 		out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
-		for (it=0; it<max_it; it++) {
+		for (it=1; true; ) {
 			it_time.Clear(); 
 			it_time.Start(); 
 
@@ -756,7 +756,7 @@ int main(int argc, char *argv[]) {
 			it_time.Stop(); 
 			double time = it_time.RealTime(); 
 			out << YAML::BeginMap; 
-			out << YAML::Key << "it" << YAML::Value << it+1; 
+			out << YAML::Key << "it" << YAML::Value << it; 
 			std::stringstream ss; 
 			ss << std::scientific << std::setprecision(3) << norm; 
 			out << YAML::Key << "norm" << YAML::Value << ss.str(); 
@@ -772,10 +772,11 @@ int main(int argc, char *argv[]) {
 			out << YAML::EndMap; 
 			out << YAML::EndMap << YAML::Newline; 
 
-			if (norm < tolerance) break; 
+			if (norm < tolerance or it>=max_it) break; 
+			it++; 
 		}
 		out << YAML::EndSeq; 
-		out << YAML::Key << "outer iterations" << YAML::Value << it+1;
+		out << YAML::Key << "outer iterations" << YAML::Value << it;
 		if (inner_its.Size()) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
 			out << YAML::Key << "min inner" << YAML::Value << inner_its.Min(); 
