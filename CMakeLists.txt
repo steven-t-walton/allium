@@ -106,6 +106,10 @@ else()
 message(FATAL_ERROR "TRANSPORT_VECTOR_LAYOUT = ${TRANSPORT_VECTOR_LAYOUT_UPPER} not supported")
 endif()
 
+# options controlling performance of sweep 
+option(SWEEP_PREASSEMBLE_LOCAL_MATRICES "increase storage to reduce FE assembly in sweep" ON)
+option(SWEEP_BUFFER_SENDS "use a queue to pack messages in the sweep" ON)
+
 # create config file 
 set(CONFIG_LOCATION "${CMAKE_BINARY_DIR}/config")
 configure_file(data/config.hpp.in ${CONFIG_LOCATION}/config.hpp)

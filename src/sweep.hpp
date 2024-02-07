@@ -42,6 +42,10 @@ private:
 
 	mutable mfem::Vector psi_fnbr; 
 
+	// number of elements to sweep before sending a message 
+	// packs messages to reduce network saturation 
+	// at the expense of making downwind neighbors wait longer 
+	// to receive data 
 	int send_buffer_size = 8; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
@@ -49,11 +53,8 @@ public:
 	~InverseAdvectionOperator(); 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
 
-	void SetSendBufferSize(int s) { send_buffer_size = s; }
-
+	void SetSendBufferSize(int s); 
 	void WriteGraphToDot(std::string prefix) const; 
-	const mfem::Vector &GetFaceNbrData() const { return psi_fnbr; }
-	void ExchangeDownwindFaceNbrData(bool exchange=true) { exchange_downwind = exchange; }
 };
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 

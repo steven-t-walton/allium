@@ -19,17 +19,10 @@ bool SweepConstantSolution(mfem::Mesh &smesh, int fe_order) {
 	mfem::Vector source(psi_size), psi(psi_size); 
 	FormTransportSource(fes, quad, psi_ext, zero, inflow, source); 
 	InverseAdvectionOperator Linv(fes, quad, psi_ext, zero, inflow); 
-	Linv.ExchangeDownwindFaceNbrData(); 
 	Linv.Mult(source, psi); 
 	bool all_ones = true; 
 	for (const auto &i : psi) {
 		if (fabs(i - 1.0) > 1e-10) all_ones = false; 
-	}
-	if (mfem::Mpi::WorldSize() > 1) {
-		const auto &psi_fnbr = Linv.GetFaceNbrData(); 
-		for (const auto &i : psi_fnbr) {
-			if (fabs(i - 1.0) > 1e-10) all_ones = false; 
-		}
 	}
 	return all_ones; 
 }
