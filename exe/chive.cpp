@@ -444,6 +444,8 @@ int main(int argc, char *argv[]) {
 	auto *inner_it_solver = parse::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	// generic operator in case inner solver is SuperLU or product operator etc 
 	mfem::Operator *inner_solver = inner_it_solver; 
+	// sweep setup options 
+	sol::optional<sol::table> sweep_opts_avail = driver["sweep_opts"]; 
 
 	// --- output algorithmic options used --- 
 	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
@@ -465,6 +467,9 @@ int main(int argc, char *argv[]) {
 			if (prec_avail) {
 				out << prec_avail.value(); 
 			} else { out << "none"; }
+		}
+		if (sweep_opts_avail) {
+			out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value();
 		}
 	out << YAML::EndMap << YAML::Newline; 
 
@@ -491,8 +496,15 @@ int main(int argc, char *argv[]) {
 
 	// build sweep operator 
 	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
-	bool write_graph = lua["sn"]["write_graph"].get_or(false); 
-	if (write_graph) Linv.WriteGraphToDot("graph"); 
+	if (sweep_opts_avail) {
+		sol::table sweep_opts = sweep_opts_avail.value(); 
+		bool write_graph = sweep_opts["write_graph"].get_or(false); 
+		if (write_graph) 
+			Linv.WriteGraphToDot("graph"); 
+		sol::optional<int> send_buffer_size = sweep_opts["send_buffer_size"]; 
+		if (send_buffer_size) 
+			Linv.SetSendBufferSize(send_buffer_size.value()); 
+	}
 
 	// common parameters to discretization
 	mfem::Vector normal(dim); 

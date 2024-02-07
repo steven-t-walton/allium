@@ -41,11 +41,15 @@ private:
 	mfem::Array<mfem::DenseMatrix*> mass_matrices, grad_matrices, face_matrices;  
 
 	mutable mfem::Vector psi_fnbr; 
+
+	int send_buffer_size = 8; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 		const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow); 
 	~InverseAdvectionOperator(); 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
+
+	void SetSendBufferSize(int s) { send_buffer_size = s; }
 
 	void WriteGraphToDot(std::string prefix) const; 
 	const mfem::Vector &GetFaceNbrData() const { return psi_fnbr; }

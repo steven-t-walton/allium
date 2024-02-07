@@ -3,6 +3,7 @@
 
 // #define INFLOW_IN_SWEEP
 #define PREASSEMBLE
+#define BUFFER_SENDS
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow)
@@ -323,6 +324,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	assert(source.Size() == Width()); 
 	assert(psi.Size() == Height()); 
 
+	const auto num_face_nbrs = mesh.GetNFaceNeighbors(); 
 	const auto dim = mesh.Dimension(); 
 	const auto Ne = mesh.GetNE(); 
 	const auto Nomega = quad.Size(); 
@@ -368,6 +370,11 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 		}
 	}
 
+#ifdef BUFFER_SENDS
+	mfem::Array<mfem::Connection> send_list; 
+	send_list.Reserve(send_buffer_size); 
+	auto message_count = 0; 
+#endif
 	// --- do sweep --- 
 	// vertices traversed, only count owned elements 
 	int nsweep = 0; 
@@ -592,16 +599,126 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 			// MPI send data if available 
 			for (const auto &fn : send_fn_set) {
+			#ifdef BUFFER_SENDS
+				send_list.Append({fn, node}); 
+			#else 
 				auto nbr_rank = mesh.GetFaceNbrRank(fn); 
 				MPI_Request send_request; 
 				MPI_Isend(rhs.GetData(), dofs.Size(), MPI_DOUBLE, nbr_rank, node, MPI_COMM_WORLD, &send_request); 
 				MPI_Wait(&send_request, MPI_STATUS_IGNORE); 
+			#endif
 			}
+
+		#ifdef BUFFER_SENDS
+			if (send_list.Size() >= send_buffer_size or local.empty()) {
+				send_list.Sort(); send_list.Unique(); 
+				mfem::Table send_table(num_face_nbrs, send_list); 
+				for (auto fn=0; fn<num_face_nbrs; fn++) {
+					if (send_table.RowSize(fn) == 0) continue; 
+					const auto nbr_rank = mesh.GetFaceNbrRank(fn); 
+					auto buffer_size = 0;
+					auto nodes = std::span<const int>(send_table.GetRow(fn), send_table.RowSize(fn)); 
+					for (auto n : nodes) {
+						fes.GetElementDofs(n / Nomega, dofs); 
+						buffer_size += dofs.Size(); 
+					}
+
+					double buffer[buffer_size]; 
+					auto idx = 0;
+					for (auto n : nodes) {
+						const auto e = n / Nomega; 
+						const auto a = n % Nomega; 
+						fes.GetElementDofs(e, dofs); 
+						for (auto i=0; i<dofs.Size(); i++) {
+							buffer[idx++] = psi_view(0,a,dofs[i]); 
+						}
+					}
+
+					MPI_Request request[2]; 
+					MPI_Isend(send_table.GetRow(fn), send_table.RowSize(fn), MPI_INT, nbr_rank, message_count++, 
+						MPI_COMM_WORLD, &request[0]); 
+					MPI_Isend(buffer, buffer_size, MPI_DOUBLE, nbr_rank, message_count++, MPI_COMM_WORLD, &request[1]); 
+					MPI_Waitall(2, request, MPI_STATUS_IGNORE); 
+				}
+				send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
+			}
+		#endif
 		}
 
 		// --- receive data from other processors --- 
 		// loop until no messages remain 
 		while (true) {
+		#ifdef BUFFER_SENDS
+			int avail; 
+			MPI_Status status[2]; 
+			MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &avail, &status[0]);
+			if (avail==0) break; 
+
+			const auto tag = status[0].MPI_TAG; 
+			const auto source = status[0].MPI_SOURCE; 
+			MPI_Probe(source, (tag % 2 == 0) ? tag + 1 : tag - 1, MPI_COMM_WORLD, &status[1]); 
+
+			if (tag % 2 == 1) {
+				std::swap(status[0], status[1]); 
+			}
+
+			int node_count, data_count; 
+			MPI_Get_count(&status[0], MPI_INT, &node_count); 
+			MPI_Get_count(&status[1], MPI_DOUBLE, &data_count); 
+
+			int node_buffer[node_count]; 
+			double data_buffer[data_count]; 
+
+			MPI_Request request[2]; 
+			assert(status[0].MPI_SOURCE == status[1].MPI_SOURCE); 
+			MPI_Irecv(&node_buffer, node_count, MPI_INT, source, status[0].MPI_TAG, MPI_COMM_WORLD, &request[0]); 
+			MPI_Irecv(&data_buffer, data_count, MPI_DOUBLE, source, status[1].MPI_TAG, MPI_COMM_WORLD, &request[1]); 
+			MPI_Waitall(2, request, MPI_STATUSES_IGNORE); 
+
+			const auto fn = proc_to_fn.at(source); 
+			auto node_view = std::span<const int>(node_buffer, node_count); 
+			mfem::Array<int> I(node_count+1); 
+			I[0] = 0; 
+			for (int n=0; n<node_count; n++) {
+				const auto node = node_view[n]; 
+				// convert to global id so that it can be mapped to local fnbr id 
+				const auto global = mesh_face_nbr_offsets[fn] * Nomega + node;  
+				// convert tag (global idx) to a local index 
+				const auto e = global / Nomega; 
+				const auto a = global % Nomega; 
+				const auto local_e = global_to_fnbr.at(e) + Ne; 
+				const auto local_id = local_e*Nomega + a;		
+				fes.GetFaceNbrElementVDofs(local_e-Ne, dofs); 
+				I[n+1] = dofs.Size(); 
+			}	
+			I.PartialSum(); 
+
+			for (auto n=0; n<node_count; n++) {
+				const auto node = node_view[n]; 
+				// convert to global id so that it can be mapped to local fnbr id 
+				const auto global = mesh_face_nbr_offsets[fn] * Nomega + node;  
+				// convert tag (global idx) to a local index 
+				const auto e = global / Nomega; 
+				const auto a = global % Nomega; 
+				const auto local_e = global_to_fnbr.at(e) + Ne; 
+				const auto local_id = local_e*Nomega + a;		
+				fes.GetFaceNbrElementVDofs(local_e-Ne, dofs); 	
+				for (auto i=0; i<dofs.Size(); i++) { psi_fnbr_view(0,a,dofs[i]) = data_buffer[I[n] + i]; }
+
+				// mark data as recvd, traverse neighbors to add the locally owned tail to the queue 
+				// for use in the local sweep 
+				degrees[local_id] = -1; 
+				igraph_neighbors(&graph, &nbrs, local_id, IGRAPH_OUT); 
+				auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
+				for (const auto &nbr : nbrs_view) {
+					degrees[nbr] -= 1; 
+					if (degrees[nbr]==0) {
+						local.push_back(nbr); // add the locally owned id to the queue 
+					}
+				}				
+			}
+
+		#else
 			// probe to see if message available 
 			int avail; 
 			MPI_Status status; 
@@ -646,6 +763,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					local.push_back(nbr); // add the locally owned id to the queue 
 				}
 			}
+		#endif
 		}
 	}
 	// clean up data 
