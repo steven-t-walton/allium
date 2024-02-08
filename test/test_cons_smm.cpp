@@ -7,7 +7,7 @@
 #include "p1diffusion.hpp"
 #include "smm_op.hpp"
 
-TEST(CSMM, DGTraceColl) {
+TEST(DGTraceColl, Quad) {
 	auto mesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
 	const auto dim = mesh.Dimension(); 
 	auto fec = DGTrace_FECollection(1, dim); 
@@ -15,6 +15,18 @@ TEST(CSMM, DGTraceColl) {
 	const auto *fe = fes.GetTraceElement(0, mesh.GetFaceGeometry(0)); 
 	EXPECT_TRUE(fe); 
 	EXPECT_EQ(fe->GetDof(), 2); 
+	EXPECT_EQ(fes.GetVSize(), fes.GetNE()*8); 
+}
+
+TEST(DGTraceColl, Tri) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	auto fec = DGTrace_FECollection(1, dim); 
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
+	const auto *fe = fes.GetTraceElement(0, mesh.GetFaceGeometry(0)); 
+	EXPECT_TRUE(fe); 
+	EXPECT_EQ(fe->GetDof(), 2); 
+	EXPECT_EQ(fes.GetVSize(), fes.GetNE() * 6); 
 }
 
 class ProjectBetaTest : public testing::Test {

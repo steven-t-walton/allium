@@ -15,10 +15,12 @@ DGTrace_FECollection::DGTrace_FECollection(const int p, const int _dim, const in
 	else if (dim==2) {
 		Tr_Elements[mfem::Geometry::SEGMENT] = new mfem::L2_SegmentElement(p, btype); 
 		Elements[mfem::Geometry::SQUARE] = new mfem::L2_QuadrilateralElement(p,btype); 
+		Elements[mfem::Geometry::TRIANGLE] = new mfem::L2_TriangleElement(p,btype); 
 	}
 	else if (dim==3) {
 		Tr_Elements[mfem::Geometry::SQUARE] = new mfem::L2_QuadrilateralElement(p, btype); 
 		Tr_Elements[mfem::Geometry::TRIANGLE] = new mfem::L2_TriangleElement(p, btype); 
 		Elements[mfem::Geometry::CUBE] = new mfem::L2_HexahedronElement(p, btype); 
+		Elements[mfem::Geometry::TETRAHEDRON] = new mfem::L2_TetrahedronElement(p, btype); 
 	}
 }
