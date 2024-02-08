@@ -272,14 +272,33 @@ int main(int argc, char *argv[]) {
 	else {
 		sol::table ne = mesh_node["num_elements"]; 
 		sol::table extents = mesh_node["extents"]; 
+		sol::optional<std::string> element_type_avail = mesh_node["element_type"]; 
 		assert(ne.size() == extents.size()); 
 		auto num_dim = ne.size(); 
 		if (num_dim==1) {
 			smesh = mfem::Mesh::MakeCartesian1D(ne[1], extents[1]); 
 		} else if (num_dim==2) {
-			smesh = mfem::Mesh::MakeCartesian2D(ne[1], ne[2], mfem::Element::QUADRILATERAL, true, extents[1], extents[2], false); 
+			mfem::Element::Type eltype = mfem::Element::QUADRILATERAL; 
+			if (element_type_avail) {
+				std::string type = element_type_avail.value(); 
+				if (type == "quadrilateral") {
+					eltype = mfem::Element::QUADRILATERAL; 
+				} else if (type == "triangle") {
+					eltype = mfem::Element::TRIANGLE; 
+				} else { MFEM_ABORT("element type " << type << " not defined for dim = " << num_dim); }
+			}
+			smesh = mfem::Mesh::MakeCartesian2D(ne[1], ne[2], eltype, true, extents[1], extents[2], false); 
 		} else if (num_dim==3) {
-			smesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], mfem::Element::HEXAHEDRON, extents[1], extents[2], extents[3], false); 
+			mfem::Element::Type eltype = mfem::Element::HEXAHEDRON; 
+			if (element_type_avail) {
+				std::string type = element_type_avail.value(); 
+				if (type == "hexahedron") {
+					eltype = mfem::Element::HEXAHEDRON; 
+				} else if (type == "tetrahedron") {
+					eltype = mfem::Element::TETRAHEDRON; 
+				} else { MFEM_ABORT("element type " << type << " not defined for dim = " << num_dim); }
+			}
+			smesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], eltype, extents[1], extents[2], extents[3], false); 
 		} else { MFEM_ABORT("dim = " << num_dim << " not supported"); }
 	}
 	const auto dim = smesh.Dimension(); 
@@ -434,14 +453,17 @@ int main(int argc, char *argv[]) {
 	sol::optional<sol::table> prec_avail = driver["preconditioner"]; 
 	if (accel_avail and prec_avail) { MFEM_ABORT("cannot use both preconditioning and acceleration"); }
 	sol::table inner_solver_table; 
+	mfem::IterativeSolver *inner_it_solver = nullptr; 
 	if (accel_avail) {
 		inner_solver_table = accel_avail.value()["solver"]; 
+		// can be nullptr if direct solver specified 
+		inner_it_solver = parse::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	}
 	if (prec_avail) {
 		inner_solver_table = prec_avail.value()["solver"]; 
+		// can be nullptr if direct solver specified 
+		inner_it_solver = parse::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	}
-	// can be nullptr if direct solver specified 
-	auto *inner_it_solver = parse::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	// generic operator in case inner solver is SuperLU or product operator etc 
 	mfem::Operator *inner_solver = inner_it_solver; 
 	// sweep setup options 
@@ -544,9 +566,22 @@ int main(int argc, char *argv[]) {
 				Dform.Finalize(); 
 				dsa_mat = Dform.ParallelAssemble(); 
 
-				amg = new mfem::HypreBoomerAMG(*dsa_mat); 
-				inner_it_solver->SetOperator(*dsa_mat); 
-				inner_it_solver->SetPreconditioner(*amg); 
+				if (inner_it_solver) {
+					amg = new mfem::HypreBoomerAMG(*dsa_mat); 
+					inner_it_solver->SetOperator(*dsa_mat); 
+					inner_it_solver->SetPreconditioner(*amg); 					
+				}
+
+				else {
+				#ifdef MFEM_USE_SUPERLU
+					slu_op = new mfem::SuperLURowLocMatrix(*dsa_mat); 
+					auto *slu = new mfem::SuperLUSolver(*slu_op); 
+					slu->SetPrintStatistics(false); 
+					inner_solver = slu;
+				#else 
+					MFEM_ABORT("superlu required for direct option"); 
+				#endif 
+				}
 			} 
 			else if (type == "p1sa") {
 			#ifdef MFEM_USE_SUPERLU
@@ -570,9 +605,23 @@ int main(int argc, char *argv[]) {
 			else if (type == "ldgsa") {
 				mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
 				dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta); 
-				amg = new mfem::HypreBoomerAMG(*dsa_mat); 
-				inner_it_solver->SetOperator(*dsa_mat); 
-				inner_it_solver->SetPreconditioner(*amg); 
+
+				if (inner_it_solver) {
+					amg = new mfem::HypreBoomerAMG(*dsa_mat); 
+					inner_it_solver->SetOperator(*dsa_mat); 
+					inner_it_solver->SetPreconditioner(*amg); 					
+				}
+
+				else {
+				#ifdef MFEM_USE_SUPERLU
+					slu_op = new mfem::SuperLURowLocMatrix(*dsa_mat); 
+					auto *slu = new mfem::SuperLUSolver(*slu_op); 
+					slu->SetPrintStatistics(false); 
+					inner_solver = slu;
+				#else 
+					MFEM_ABORT("superlu required for direct option"); 
+				#endif 
+				}
 			}
 			else MFEM_ABORT("dsa type " << type << " not defined"); 
 
