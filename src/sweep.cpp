@@ -517,7 +517,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
 			std::set<int> send_fn_set; // store unique set of processors to send data to 
 			for (const auto &nbr : nbrs_view) {
-				degrees[nbr] -= 1; // reduce degree since node has been visited 
+				degrees[(int)nbr] -= 1; // reduce degree since node has been visited 
 				// if nbr is off-processor, add to send_set regardless of degree 
 				if (nbr >= Ne*Nomega) {
 					assert(node < Ne*Nomega); 
@@ -527,14 +527,14 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					auto nbr_nbrs_view = std::span(VECTOR(nbr_nbrs), igraph_vector_int_size(&nbr_nbrs)); 	
 					for (const auto &nbr_nbr : nbr_nbrs_view) {
 						if (nbr_nbr < Ne*Nomega) continue; // only send to off-proc neighbors 
-						auto nbr_id = nbr_nbr - Ne*Nomega; 
-						auto fn = fnbr_to_fn[nbr_id / Nomega]; 
+						const auto nbr_id = (int)nbr_nbr - Ne*Nomega; 
+						const auto fn = fnbr_to_fn[nbr_id / Nomega]; 
 						send_fn_set.insert(fn); 
 					}
 				} 
 				// neighbor is local, add to queue 
 				else {
-					if (degrees[nbr] == 0) {
+					if (degrees[(int)nbr] == 0) {
 						local.push_back(nbr); 						
 					}					
 				}
@@ -654,8 +654,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				igraph_neighbors(&graph, &nbrs, local_id, IGRAPH_OUT); 
 				auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
 				for (const auto &nbr : nbrs_view) {
-					degrees[nbr] -= 1; 
-					if (degrees[nbr]==0) {
+					degrees[(int)nbr] -= 1; 
+					if (degrees[(int)nbr]==0) {
 						local.push_back(nbr); // add the locally owned id to the queue 
 					}
 				}				
@@ -701,8 +701,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			igraph_neighbors(&graph, &nbrs, local_id, IGRAPH_OUT); 
 			auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
 			for (const auto &nbr : nbrs_view) {
-				degrees[nbr] -= 1; 
-				if (degrees[nbr]==0) {
+				degrees[(int)nbr] -= 1; 
+				if (degrees[(int)nbr]==0) {
 					local.push_back(nbr); // add the locally owned id to the queue 
 				}
 			}
