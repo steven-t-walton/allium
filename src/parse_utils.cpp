@@ -37,6 +37,7 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 		auto *gmres = new mfem::GMRESSolver(comm); 
 		sol::optional<int> kdim_avail = table["kdim"]; 
 		if (kdim_avail) { gmres->SetKDim(kdim_avail.value()); }
+		else { table["kdim"] = 50; }
 		s = gmres; 
 	}
 
