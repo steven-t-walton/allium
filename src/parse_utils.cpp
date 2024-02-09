@@ -91,6 +91,7 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg) 
 {
+	sol::optional<int> max_iter = table["max_iter"]; 
 	sol::optional<int> pre_sweeps = table["pre_sweeps"]; 
 	sol::optional<int> post_sweeps = table["post_sweeps"]; 
 	sol::optional<int> max_levels = table["max_levels"]; 
@@ -100,6 +101,9 @@ void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg)
 	sol::optional<int> interpolation = table["interpolation"]; 
 	sol::optional<int> coarsening = table["coarsening"]; 
 	sol::optional<int> strength_thresh = table["strength_threshold"]; 
+	if (max_iter) {
+		amg.SetMaxIter(max_iter.value()); 
+	}
 	if (pre_sweeps or post_sweeps) {
 		int pre = 1, post = 1; 
 		if (pre_sweeps) pre = pre_sweeps.value(); 
