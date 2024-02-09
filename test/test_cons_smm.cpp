@@ -304,7 +304,7 @@ TEST(P1SMM, MMSp2) {
 }
 #endif
 
-std::tuple<double,double> LDGSMMError(int Ne, int fe_order) {
+std::tuple<double,double> LDGSMMError(int Ne, int fe_order, bool scale_stabilization) {
 	double delta = 0.5; 
 	double gamma = 1.0; 
 	double base = 2.0; 
@@ -377,8 +377,9 @@ std::tuple<double,double> LDGSMMError(int Ne, int fe_order) {
 
 	mfem::Vector beta(dim); 
 	for (auto d=0; d<dim; d++) { beta(d) = d+1; }
-	ConsistentLDGSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha, beta, &total_coef);
-	LDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta, true); 
+	mfem::Coefficient *coef = scale_stabilization ? &total_coef : nullptr; 
+	ConsistentLDGSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha, beta, coef);
+	LDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta, scale_stabilization); 
 	const auto &S = ldg.SchurComplement(); 
 
 	mfem::CGSolver solver(MPI_COMM_WORLD); 
@@ -428,28 +429,39 @@ std::tuple<double,double> LDGSMMError(int Ne, int fe_order) {
 	mfem::VectorFunctionCoefficient Jexsol_coef(dim, J_func); 
 	double Jerr = J.ComputeL2Error(Jexsol_coef);
 
-	return {err, Jerr}; 
+	return {err, Jerr};
 }
 
-TEST(ConsLDGSMM, MMSp1) {
-	auto [phi1, J1] = LDGSMMError(10, 1); 
-	auto [phi2, J2] = LDGSMMError(20, 1); 
+class LDGStabilizationFixture : public testing::TestWithParam<bool> {
+
+};
+
+TEST_P(LDGStabilizationFixture, MMSp1) {
+	bool scale_stabilization = GetParam(); 
+	auto [phi1, J1] = LDGSMMError(10, 1, scale_stabilization); 
+	auto [phi2, J2] = LDGSMMError(20, 1, scale_stabilization); 
 	double phi_ooa = log2(phi1/phi2); 
 	double J_ooa = log2(J1/J2); 
 	EXPECT_NEAR(phi_ooa, 2.0, 0.1); 
 	EXPECT_NEAR(J_ooa, 2.0, 0.2); 
 }
 
-TEST(ConsLDGSMM, MMSp2) {
-	auto [phi1, J1] = LDGSMMError(10, 2); 
-	auto [phi2, J2] = LDGSMMError(20, 2); 
+TEST_P(LDGStabilizationFixture, MMSp2) {
+	bool scale_stabilization = GetParam(); 
+	auto [phi1, J1] = LDGSMMError(10, 2, scale_stabilization); 
+	auto [phi2, J2] = LDGSMMError(20, 2, scale_stabilization); 
 	double phi_ooa = log2(phi1/phi2); 
 	double J_ooa = log2(J1/J2); 
 	EXPECT_NEAR(phi_ooa, 3.0, 0.1); 
 	EXPECT_NEAR(J_ooa, 3.0, 0.2); 
 }
 
-std::tuple<double,double> IPSMMError(int Ne, int fe_order) {
+INSTANTIATE_TEST_SUITE_P(
+	ConsLDGSMM, 
+	LDGStabilizationFixture, 
+	testing::Values(false, true)); 
+
+std::tuple<double,double> IPSMMError(int Ne, int fe_order, bool scale_stabilization) {
 	double delta = 0.5; 
 	double gamma = 1.0; 
 	double base = 2.0; 
@@ -522,8 +534,10 @@ std::tuple<double,double> IPSMMError(int Ne, int fe_order) {
 
 	mfem::Vector beta(dim); 
 	for (auto d=0; d<dim; d++) { beta(d) = d+1; }
-	ConsistentIPSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha, total_coef);
-	IPDiffusionDiscretization ip(fes, vfes, total_coef, absorption_coef, alpha); 
+	ConsistentIPSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha, total_coef, 
+		-1.0, 
+		scale_stabilization, scale_stabilization);
+	IPDiffusionDiscretization ip(fes, vfes, total_coef, absorption_coef, alpha, -1.0, scale_stabilization, scale_stabilization); 
 	const auto &S = ip.SchurComplement(); 
 
 	mfem::CGSolver solver(MPI_COMM_WORLD); 
@@ -576,29 +590,33 @@ std::tuple<double,double> IPSMMError(int Ne, int fe_order) {
 	return {err, Jerr}; 
 }
 
-TEST(ConsIPSMM, MMSp1) {
-	auto [phi1, J1] = IPSMMError(10, 1); 
-	auto [phi2, J2] = IPSMMError(20, 1); 
+class IPStabilizationFixture : public testing::TestWithParam<bool> {
+
+};
+
+TEST_P(IPStabilizationFixture, MMSp1) {
+	const auto p = 1; 
+	bool scale_stabilization = GetParam(); 
+	auto [phi1, J1] = IPSMMError(10, p, scale_stabilization); 
+	auto [phi2, J2] = IPSMMError(20, p, scale_stabilization); 
 	double phi_ooa = log2(phi1/phi2); 
 	double J_ooa = log2(J1/J2); 
-	EXPECT_NEAR(phi_ooa, 2.0, 0.1); 
-	EXPECT_NEAR(J_ooa, 2.0, 0.2); 	
+	EXPECT_NEAR(phi_ooa, p+1, 0.1); 
+	EXPECT_NEAR(J_ooa, p+1, 0.2); 		
 }
 
-TEST(ConsIPSMM, MMSp2) {
-	auto [phi1, J1] = IPSMMError(10, 2); 
-	auto [phi2, J2] = IPSMMError(20, 2); 
+TEST_P(IPStabilizationFixture, MMSp2) {
+	const auto p = 2; 
+	bool scale_stabilization = GetParam(); 
+	auto [phi1, J1] = IPSMMError(10, p, scale_stabilization); 
+	auto [phi2, J2] = IPSMMError(20, p, scale_stabilization); 
 	double phi_ooa = log2(phi1/phi2); 
 	double J_ooa = log2(J1/J2); 
-	EXPECT_NEAR(phi_ooa, 3.0, 0.1); 
-	EXPECT_NEAR(J_ooa, 3.0, 0.2); 	
+	EXPECT_NEAR(phi_ooa, p+1, 0.1); 
+	EXPECT_NEAR(J_ooa, p+1, 0.2); 		
 }
 
-TEST(ConsIPSMM, MMSp3) {
-	auto [phi1, J1] = IPSMMError(10, 3); 
-	auto [phi2, J2] = IPSMMError(20, 3); 
-	double phi_ooa = log2(phi1/phi2); 
-	double J_ooa = log2(J1/J2); 
-	EXPECT_NEAR(phi_ooa, 4.0, 0.1); 
-	EXPECT_NEAR(J_ooa, 4.0, 0.2); 	
-}
+INSTANTIATE_TEST_SUITE_P(
+	ConsIPSMM, 
+	IPStabilizationFixture, 
+	testing::Values(false, true)); 
