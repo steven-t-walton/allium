@@ -377,8 +377,8 @@ std::tuple<double,double> LDGSMMError(int Ne, int fe_order) {
 
 	mfem::Vector beta(dim); 
 	for (auto d=0; d<dim; d++) { beta(d) = d+1; }
-	ConsistentLDGSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha, beta);
-	LDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta); 
+	ConsistentLDGSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha, beta, &total_coef);
+	LDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta, true); 
 	const auto &S = ldg.SchurComplement(); 
 
 	mfem::CGSolver solver(MPI_COMM_WORLD); 

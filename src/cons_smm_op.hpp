@@ -42,7 +42,7 @@ private:
 public:
 	ConsistentLDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 		const AngularQuadrature &quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-		double _alpha, const mfem::Vector &beta); 
+		double _alpha, const mfem::Vector &beta, mfem::Coefficient *total=nullptr); 
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
 };
 
@@ -62,7 +62,7 @@ private:
 public:
 	ConsistentIPSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 		const AngularQuadrature &quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-		double _alpha, mfem::Coefficient &total, double _kappa=-1.0); 
+		double _alpha, mfem::Coefficient &total, double _kappa=-1.0, bool mip=false, bool scale_ip_stabilization=true); 
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
 };
 

@@ -154,3 +154,26 @@ public:
 	void AssembleRHSElementVect(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 		mfem::FaceElementTransformations &trans, mfem::Vector &elvec); 	
 };
+
+class LDGTraceIntegrator : public mfem::BilinearFormIntegrator
+{
+protected:
+	const mfem::Vector *beta = nullptr;
+	mfem::Coefficient *coef = nullptr; 
+
+	mfem::Vector tr_shape1, tr_shape2, te_shape1, te_shape2; 
+	mfem::Vector nor; 
+	mfem::DenseMatrix A11, A12, A21, A22; 
+public:
+	LDGTraceIntegrator(const mfem::Vector *b=nullptr) { beta = b; }
+	LDGTraceIntegrator(mfem::Coefficient &c, const mfem::Vector *b=nullptr) 
+		: coef(&c), beta(b) 
+	{ }
+	void AssembleFaceMatrix(
+		const mfem::FiniteElement &tr_fe1,
+		const mfem::FiniteElement &tr_fe2,
+		const mfem::FiniteElement &te_fe1, 
+		const mfem::FiniteElement &te_fe2,
+		mfem::FaceElementTransformations &T, 
+		mfem::DenseMatrix &elmat);
+};

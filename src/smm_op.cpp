@@ -19,7 +19,8 @@ void BlockDiffusionDiscretization::BackSolve(const mfem::Vector &g, const mfem::
 }
 
 LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, const mfem::Vector &beta)
+	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, const mfem::Vector &beta, 
+	bool scale_ldg_stabilization)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
@@ -49,7 +50,12 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
 	mfem::ConstantCoefficient neg_one(-1.0); 
 	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
-	Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta)); 
+	mfem::RatioCoefficient diffco(1./3, total); 
+	if (scale_ldg_stabilization) {
+		Dform.AddInteriorFaceIntegrator(new LDGTraceIntegrator(diffco, &beta)); 
+	} else {
+		Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta)); 		
+	}
 	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5)); 
 	Dform.Assemble(); 
 	Dform.Finalize(); 
@@ -62,7 +68,8 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 }
 
 IPDiffusionDiscretization::IPDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, double kappa)
+	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, double kappa, 
+	bool mip, bool scale_ip_stabilization)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
@@ -88,7 +95,9 @@ IPDiffusionDiscretization::IPDiffusionDiscretization(mfem::ParFiniteElementSpace
 	mfem::ConstantCoefficient alpha_c(alpha/2); 
 	mfem::RatioCoefficient diffco(1./3, total); 
 	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
-	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(diffco, kappa, alpha/2)); 
+	mfem::Coefficient *coef = scale_ip_stabilization ? &diffco : nullptr; 
+	double limit = mip ? alpha/2 : 0.0; 
+	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(kappa, limit, coef)); 		
 	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
 	Maform.Assemble(); 
 	Maform.Finalize(); 

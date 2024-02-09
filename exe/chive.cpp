@@ -16,6 +16,11 @@
 #include "utils.hpp"
 #include "parse_utils.hpp"
 
+template<typename K, typename V> 
+void YAMLKeyValue(YAML::Emitter &out, K key, V value) {
+	out << YAML::Key << key << YAML::Value << value; 
+}
+
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
 
 class TransportIterationMonitor : public mfem::IterativeSolverMonitor
@@ -259,22 +264,26 @@ int main(int argc, char *argv[]) {
 	auto mesh_node = lua["mesh"]; 
 	sol::optional<std::string> fname = mesh_node["file"]; 
 	mfem::Mesh smesh; 
+	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
 	// load from a mesh file 
 	if (fname) {
 		smesh = mfem::Mesh::LoadFromFile(fname.value(), 1, 1);
-		sol::optional<int> refinements = mesh_node["refinements"]; 
-		if (refinements) {
-			for (int r=0; r<refinements; r++) smesh.UniformRefinement(); 			
-		}
+		int refinements = mesh_node["refinements"].get_or(0); 
+		for (int r=0; r<refinements; r++) smesh.UniformRefinement(); 			
+
+		out << YAML::Key << "file name" << YAML::Value << realpath(fname.value().c_str(), nullptr); 
+		out << YAML::Key << "uniform refinements" << YAML::Value << refinements; 
 	} 
 
 	// create a cartesian mesh from extents and elements/axis 
 	else {
 		sol::table ne = mesh_node["num_elements"]; 
 		sol::table extents = mesh_node["extents"]; 
-		sol::optional<std::string> element_type_avail = mesh_node["element_type"]; 
 		assert(ne.size() == extents.size()); 
 		auto num_dim = ne.size(); 
+		sol::optional<std::string> element_type_avail = mesh_node["element_type"]; 
+		std::string eltype_str = "segment"; 
+		if (element_type_avail) eltype_str = element_type_avail.value(); 
 		if (num_dim==1) {
 			smesh = mfem::Mesh::MakeCartesian1D(ne[1], extents[1]); 
 		} else if (num_dim==2) {
@@ -286,7 +295,7 @@ int main(int argc, char *argv[]) {
 				} else if (type == "triangle") {
 					eltype = mfem::Element::TRIANGLE; 
 				} else { MFEM_ABORT("element type " << type << " not defined for dim = " << num_dim); }
-			}
+			} else { eltype_str = "quadrilateral"; }
 			smesh = mfem::Mesh::MakeCartesian2D(ne[1], ne[2], eltype, true, extents[1], extents[2], false); 
 		} else if (num_dim==3) {
 			mfem::Element::Type eltype = mfem::Element::HEXAHEDRON; 
@@ -297,34 +306,28 @@ int main(int argc, char *argv[]) {
 				} else if (type == "tetrahedron") {
 					eltype = mfem::Element::TETRAHEDRON; 
 				} else { MFEM_ABORT("element type " << type << " not defined for dim = " << num_dim); }
-			}
+			} else { eltype_str = "hexahedron"; }
 			smesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], eltype, extents[1], extents[2], extents[3], false); 
 		} else { MFEM_ABORT("dim = " << num_dim << " not supported"); }
+
+		out << YAML::Key << "extents" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+		for (auto i=1; i<=extents.size(); i++) {
+			out << (double)extents[i]; 
+		} 
+		out << YAML::EndSeq; 
+
+		out << YAML::Key << "elements/axis" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+		for (auto i=1; i<=ne.size(); i++) {
+			out << (int)ne[i]; 
+		} 
+		out << YAML::EndSeq; 		
+		out << YAML::Key << "element type" << YAML::Value << eltype_str; 
 	}
 	const auto dim = smesh.Dimension(); 
 
 	// print mesh characteristics 
 	double hmin, hmax, kmin, kmax; 
 	smesh.GetCharacteristics(hmin, hmax, kmin, kmax); 
-	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
-	if (fname) {
-		out << YAML::Key << "file name" << YAML::Value << fname.value(); 
-		out << YAML::Key << "uniform refinements" << YAML::Value << (int)mesh_node["refinements"]; 
-	}
-	else {
-		out << YAML::Key << "extents" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
-		sol::table extents = mesh_node["extents"]; 
-		for (auto i=1; i<=extents.size(); i++) {
-			out << (double)extents[i]; 
-		} 
-		out << YAML::EndSeq; 
-		out << YAML::Key << "elements/axis" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
-		sol::table ne = mesh_node["num_elements"]; 
-		for (auto i=1; i<=ne.size(); i++) {
-			out << (int)ne[i]; 
-		} 
-		out << YAML::EndSeq; 		
-	}
 	out << YAML::Key << "dim" << YAML::Value << dim; 
 	out << YAML::Key << "elements" << YAML::Value << smesh.GetNE(); 
 	out << YAML::Key << "min mesh size" << YAML::Value << hmin; 
@@ -481,19 +484,9 @@ int main(int argc, char *argv[]) {
 			solver["type"] = "fixed point"; // overwrite since this is the only one supported 
 		}
 		out << YAML::Key << "solver" << YAML::Value << solver; 
-		if (accel_avail) {
-			out << YAML::Key << "acceleration" << YAML::Value << accel_avail.value(); 
-		} 
-		else {
-			out << YAML::Key << "preconditioner" << YAML::Value; 
-			if (prec_avail) {
-				out << prec_avail.value(); 
-			} else { out << "none"; }
-		}
 		if (sweep_opts_avail) {
 			out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value();
 		}
-	out << YAML::EndMap << YAML::Newline; 
 
 	// --- sweep setup --- 
 	// global scattering operator 
@@ -546,15 +539,18 @@ int main(int argc, char *argv[]) {
 
 		// build preconditioner from input spec 
 		if (prec_avail) {
+			out << YAML::Key << "preconditioner" << YAML::Value << YAML::BeginMap; 
 			sol::table prec_table = prec_avail.value(); 
 			std::string type = prec_table["type"]; 
 			std::transform(type.begin(), type.end(), type.begin(), ::tolower); 
+			out << YAML::Key << "type" << YAML::Value << type; 
 			if (type == "mip") {
 				// build MIP DSA operator
 				mfem::ParBilinearForm Dform(&fes); 
 				mfem::RatioCoefficient diffco(1./3, total); 
 				mfem::ConstantCoefficient alpha_c(alpha/2); 
 				double dsa_kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
+				out << YAML::Key << "kappa" << YAML::Value << dsa_kappa; 
 				Dform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
 				Dform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 				// Dform.AddInteriorFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
@@ -635,7 +631,15 @@ int main(int argc, char *argv[]) {
 			// create DSA operator 
 			// I + D^{-1} Ms 
 			prec = new DiffusionSyntheticAccelerationOperator(*inner_solver, Ms_form); 
+
+			out << YAML::Key << "solver" << YAML::Value << inner_solver_table; 
+			out << YAML::EndMap; // end preconditioner map 
 		}
+
+		else {
+			out << YAML::Key << "preconditioner" << YAML::Value << "none"; 
+		}
+		out << YAML::EndMap; // end driver map 
 
 		// build main transport iteration operator 
 		// applies I - DL^{-1} MS 
@@ -683,16 +687,20 @@ int main(int argc, char *argv[]) {
 
 		sol::table accel = accel_avail.value(); 
 		std::string type = accel["type"]; 
+		out << YAML::Key << "acceleration" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "type" << YAML::Value << type; 
 		std::transform(type.begin(), type.end(), type.begin(), ::toupper); 
 		if (type == "LDGSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
+			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
 			mfem::Operator *source_op; 
 			if (consistent) {
-				source_op = new ConsistentLDGSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, beta); 
+				source_op = new ConsistentLDGSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, beta, 
+					scale_stabilization ? &total : nullptr); 
 			} else {
 				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
 			}
-			block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta); 
+			block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta, scale_stabilization); 
 			const auto &S = block_disc->SchurComplement(); 
 
 			// iterative solve
@@ -720,17 +728,25 @@ int main(int argc, char *argv[]) {
 			// use allium version of triple product operator to ensure temp vectors 
 			// initialized to zero (for first initial guess when iterative_mode = true)
 			smm = new TripleProductOperator(ceo, inv_ldg, source_op, true, true, true); 
+
+			// output LDG specific options 
+			out << YAML::Key << "consistent" << YAML::Value << consistent; 
+			out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
+
 		} 
 		else if (type == "IPSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
-			double kappa = accel["kappa"].get_or(-1.0); 
+			double kappa = accel["kappa"].get_or(pow(fe_order+1,2)); 
+			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
+			bool pen_lower_bound = accel["penalty_lower_bound"].get_or(false); 
 			mfem::Operator *source_op; 
 			if (consistent) {
-				source_op = new ConsistentIPSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, total, kappa); 
+				source_op = new ConsistentIPSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, total, kappa, 
+					pen_lower_bound, scale_stabilization); 
 			} else {
 				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
 			}
-			block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa); 
+			block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, pen_lower_bound, scale_stabilization); 
 			const auto &S = block_disc->SchurComplement(); 
 
 			// iterative solve
@@ -758,6 +774,12 @@ int main(int argc, char *argv[]) {
 			// use allium version of triple product operator to ensure temp vectors 
 			// initialized to zero (for first initial guess when iterative_mode = true)
 			smm = new TripleProductOperator(ceo, inv_ip, source_op, true, true, true); 
+
+			// output IP specific options 
+			out << YAML::Key << "kappa" << YAML::Value << kappa; 
+			out << YAML::Key << "consistent" << YAML::Value << consistent; 
+			out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
+			out << YAML::Key << "penalty lower bound" << YAML::Value << pen_lower_bound; 
 		}
 		else if (type == "P1SMM") {
 		#ifdef MFEM_USE_SUPERLU
@@ -773,6 +795,8 @@ int main(int argc, char *argv[]) {
 			auto *ceo = new ComponentExtractionOperator(p1disc->RowOffsets(), 1); 
 			// build SM source, invert P1, extract phi 
 			smm = new mfem::TripleProductOperator(ceo, slu, source_op, true, true, true); 
+
+			out << YAML::Key << "consistent" << YAML::Value << true; 
 		#else
 			MFEM_ABORT("super LU required for P1"); 
 		#endif
@@ -782,9 +806,13 @@ int main(int argc, char *argv[]) {
 		// set AMG object 
 		if (amg) {
 			amg->SetPrintLevel(0); 
-			sol::optional<sol::table> amg_opts = accel["solver"]["amg_opts"]; 
-			if (amg_opts) parse::SetAMGOptions(amg_opts.value(), *amg); 			
+			sol::optional<sol::table> amg_opts = inner_solver_table["amg_opts"]; 
+			if (amg_opts) parse::SetAMGOptions(amg_opts.value(), *amg);	
 		}
+
+		out << YAML::Key << "solver" << YAML::Value << inner_solver_table; 
+		out << YAML::EndMap; // end acceleration map 
+		out << YAML::EndMap; // end driver map 
 
 		// grab iteration parameters 
 		const int max_it = solver["max_iter"]; 

@@ -27,13 +27,16 @@ public:
 class LDGDiffusionDiscretization : public BlockDiffusionDiscretization {
 public:
 	LDGDiffusionDiscretization(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-		mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha, const mfem::Vector &beta); 
+		mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha, const mfem::Vector &beta, 
+		bool scale_ldg_stabilization=false); 
 };
 
 class IPDiffusionDiscretization : public BlockDiffusionDiscretization {
 public:
 	IPDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, double kappa=-1.0); 
+		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, double kappa=-1.0, 
+		bool mip=false, 
+		bool scale_ip_stabilization=true); 
 };
 
 class InverseBlockDiffusionOperator : public mfem::Operator

@@ -82,7 +82,7 @@ void ConsistentSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &so
 
 ConsistentLDGSMMSourceOperator::ConsistentLDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-	double _alpha, const mfem::Vector &beta)
+	double _alpha, const mfem::Vector &beta, mfem::Coefficient *total)
 	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), 
 	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha)
 {
@@ -101,10 +101,18 @@ ConsistentLDGSMMSourceOperator::ConsistentLDGSMMSourceOperator(mfem::ParFiniteEl
 
 	mfem::ParMixedBilinearForm F2form(&vfes, &fes); 
 	F2form.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator(-1.0));
-	F2form.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta));
+	mfem::Coefficient *diffco = nullptr; 
+	if (total) {
+		diffco = new mfem::RatioCoefficient(1./3, *total); 
+		F2form.AddInteriorFaceIntegrator(new LDGTraceIntegrator(*diffco, &beta)); 
+	} else {
+		F2form.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta));		
+	}
 	F2form.Assemble(); 
 	F2form.Finalize(); 
 	F2 = HypreParMatrixPtr(F2form.ParallelAssemble());   
+
+	if (diffco) delete diffco; 
 }
 
 void ConsistentLDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
@@ -125,7 +133,7 @@ void ConsistentLDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector 
 
 ConsistentIPSMMSourceOperator::ConsistentIPSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-	double _alpha, mfem::Coefficient &total, double _kappa)
+	double _alpha, mfem::Coefficient &total, double _kappa, bool mip, bool scale_ip_stabilization)
 	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), kappa(_kappa),
 	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha)
 {
@@ -147,9 +155,11 @@ ConsistentIPSMMSourceOperator::ConsistentIPSMMSourceOperator(mfem::ParFiniteElem
 	F1 = HypreParMatrixPtr(F1form.ParallelAssemble()); 
 
 	mfem::ParBilinearForm F2form(&fes); 
-	mfem::RatioCoefficient diffco(1./3, total); 
 	F2form.AddInteriorFaceIntegrator(new PenaltyIntegrator(-alpha/2, false)); 
-	F2form.AddInteriorFaceIntegrator(new PenaltyIntegrator(diffco, kappa, alpha/2)); 
+	mfem::RatioCoefficient diffco(1./3, total); 
+	mfem::Coefficient *coef = scale_ip_stabilization ? &diffco : nullptr; 
+	double limit = mip ? alpha/2 : 0.0; 
+	F2form.AddInteriorFaceIntegrator(new PenaltyIntegrator(kappa, limit, coef)); 
 	F2form.Assemble(); 
 	F2form.Finalize(); 
 	F2 = HypreParMatrixPtr(F2form.ParallelAssemble());   
