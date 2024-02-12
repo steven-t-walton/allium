@@ -11,10 +11,11 @@ private:
 	int comp; 
 public:
 	ComponentExtractionOperator(const mfem::Array<int> &_offsets, int c) 
-		: offsets(_offsets), comp(c) {
-			height = offsets[comp+1] - offsets[comp]; 
-			width = offsets.Last(); 
-		}
+		: offsets(_offsets), comp(c) 
+	{
+		height = offsets[comp+1] - offsets[comp]; 
+		width = offsets.Last(); 
+	}
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const {
 		mfem::BlockVector bx(*const_cast<mfem::Vector*>(&x), 0, offsets); 
 		y = bx.GetBlock(comp);
@@ -23,6 +24,34 @@ public:
 		y = 0.0; 
 		mfem::BlockVector by(y.GetData(), offsets); 
 		by.GetBlock(comp) = x; 
+	}
+};
+
+class SubBlockExtractionOperator : public mfem::Operator 
+{
+private:
+	mfem::BlockVector &block_data; 
+	mfem::Array<int> offsets; 
+	int comp; 
+public:
+	SubBlockExtractionOperator(mfem::BlockVector &data, int c) 
+		: block_data(data), comp(c) 
+	{
+		offsets.SetSize(block_data.NumBlocks()+1); 
+		offsets[0] = 0; 
+		for (auto i=0; i<block_data.NumBlocks(); i++) {
+			offsets[i+1] = block_data.BlockSize(i); 
+		}
+		offsets.PartialSum(); 
+		height = block_data.BlockSize(comp); 
+		width = offsets.Last(); 
+	}
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const {
+		assert(x.Size() == width); 
+		assert(y.Size() == height); 
+		mfem::BlockVector bx(*const_cast<mfem::Vector*>(&x), offsets); 
+		block_data = bx; 
+		y = block_data.GetBlock(comp); 
 	}
 };
 

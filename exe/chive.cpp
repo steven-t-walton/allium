@@ -395,10 +395,9 @@ int main(int argc, char *argv[]) {
 		basis_type = mfem::BasisType::GaussLobatto; 
 	} else { MFEM_ABORT("basis type " << basis_type_string << " not supported"); }
 	mfem::L2_FECollection fec(fe_order, dim, basis_type); 
-	mfem::ParFiniteElementSpace fes(&mesh, &fec); 
+	mfem::ParFiniteElementSpace fes(&mesh, &fec); // scalar finite element space 
+	mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); // vector finite element space, dim copies of fes 
 	fes.ExchangeFaceNbrData(); // create parallel degree of freedom maps used in sweep 
-	const auto Ndof = fes.GetVSize(); 
-	const auto Ndof_fnbr = fes.GetFaceNbrVSize(); 
 
 	// piecewise constant used for plotting and storing cross section data 
 	mfem::L2_FECollection fec0(0, dim); 
@@ -441,9 +440,11 @@ int main(int argc, char *argv[]) {
 	TransportVectorExtents psi_ext(1, Nomega, fes.GetVSize());
 	const auto psi_size = TotalExtent(psi_ext); 
 	MomentVectorExtents phi_ext(1, 1, fes.GetVSize());
-	const auto phi_size = TotalExtent(phi_ext); 
-	// integrates over angle psi -> phi 
-	DiscreteToMoment D(quad, psi_ext, phi_ext); 
+	const auto phi_size = TotalExtent(phi_ext);
+	MomentVectorExtents moments_ext(1, dim+1, fes.GetVSize()); // scalar flux and dim components of current 
+	const auto moments_size = TotalExtent(moments_ext); 
+	DiscreteToMoment D(quad, psi_ext, phi_ext); // integrates over angle psi -> phi 
+	DiscreteToMoment Dlin_aniso(quad, psi_ext, moments_ext); // forms psi -> [phi,J] 
 
 	const auto psi_size_global = mesh.ReduceInt(psi_size); 
 	const auto phi_size_global = mesh.ReduceInt(phi_size); 
@@ -498,8 +499,9 @@ int main(int argc, char *argv[]) {
 	// allocate transport vector + views 
 	mfem::Vector psi(psi_size);
 	psi = 0.0; 
-	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	mfem::ParGridFunction phi(&fes), phi_old(&fes); 
+	mfem::Vector moment_solution(moments_size);  
+	mfem::ParGridFunction phi(&fes), phi_old(&fes), J(&vfes, moment_solution, phi_size);
+
 	// initial guess 
 	D.Mult(psi, phi); 
 
@@ -582,8 +584,6 @@ int main(int argc, char *argv[]) {
 			else if (type == "p1sa") {
 			#ifdef MFEM_USE_SUPERLU
 				if (inner_it_solver) { MFEM_ABORT("only direct available for P1"); }
-				// vector finite element space for current in P1SA 
-				mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
 				auto p1disc = std::unique_ptr<mfem::BlockOperator>(CreateP1DiffusionDiscretization(
 					fes, vfes, total, absorption, alpha)); 
 				auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
@@ -599,7 +599,6 @@ int main(int argc, char *argv[]) {
 			#endif
 			} 
 			else if (type == "ldgsa") {
-				mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
 				dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta); 
 
 				if (inner_it_solver) {
@@ -657,6 +656,16 @@ int main(int argc, char *argv[]) {
 		TransportIterationMonitor monitor(out, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
 		outer_solver->SetMonitor(monitor); 
 		outer_solver->Mult(schur_source, phi); 
+
+		// extra sweep to get psi 
+		Ms_form.Mult(phi, phi_old); 
+		D.MultTranspose(phi_old, psi); 
+		psi += source_vec; 
+		Linv.Mult(psi, psi); 
+		// compute phi and J 
+		Dlin_aniso.Mult(psi, moment_solution); 
+
+		// output iteration info 
 		out << YAML::Key << "outer iterations" << YAML::Value << outer_solver->GetNumIterations();
 		if (monitor.inner_it.Size()) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
@@ -677,7 +686,8 @@ int main(int argc, char *argv[]) {
 	else {
 		mfem::StopWatch it_time; 
 		// space for current 
-		mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); 
+		mfem::Array<int> offsets; 
+		mfem::BlockVector block_x; 
 		mfem::Operator *smm = nullptr; 
 		mfem::HypreBoomerAMG *amg = nullptr; 
 		BlockDiffusionDiscretization *block_disc = nullptr; 
@@ -723,11 +733,14 @@ int main(int argc, char *argv[]) {
 			}
 
 			auto *inv_ldg = new InverseBlockDiffusionOperator(*block_disc, *inner_solver); 
-			auto *ceo = new ComponentExtractionOperator(block_disc->GetOffsets(), 1);
+			offsets = block_disc->GetOffsets(); // copy offsets 
+			block_x.Update(offsets); // set size of block_x 
+			// extract scalar flux, storing [J,phi] in block_x 
+			auto *block_extract = new SubBlockExtractionOperator(block_x, 1); 
 			// psi -> SMM source -> diffusion solution -> extract phi from block vector 
 			// use allium version of triple product operator to ensure temp vectors 
 			// initialized to zero (for first initial guess when iterative_mode = true)
-			smm = new TripleProductOperator(ceo, inv_ldg, source_op, true, true, true); 
+			smm = new TripleProductOperator(block_extract, inv_ldg, source_op, true, true, true); 
 
 			// output LDG specific options 
 			out << YAML::Key << "consistent" << YAML::Value << consistent; 
@@ -769,11 +782,14 @@ int main(int argc, char *argv[]) {
 			}
 
 			auto *inv_ip = new InverseBlockDiffusionOperator(*block_disc, *inner_solver); 
-			auto *ceo = new ComponentExtractionOperator(block_disc->GetOffsets(), 1);
+			offsets = block_disc->GetOffsets(); // copy offsets 
+			block_x.Update(offsets); // set size of block_x 
+			// extract scalar flux, storing [J,phi] in block_x 
+			auto *block_extract = new SubBlockExtractionOperator(block_x, 1); 
 			// psi -> SMM source -> diffusion solution -> extract phi from block vector 
 			// use allium version of triple product operator to ensure temp vectors 
 			// initialized to zero (for first initial guess when iterative_mode = true)
-			smm = new TripleProductOperator(ceo, inv_ip, source_op, true, true, true); 
+			smm = new TripleProductOperator(block_extract, inv_ip, source_op, true, true, true); 
 
 			// output IP specific options 
 			out << YAML::Key << "kappa" << YAML::Value << kappa; 
@@ -784,6 +800,10 @@ int main(int argc, char *argv[]) {
 		else if (type == "P1SMM") {
 		#ifdef MFEM_USE_SUPERLU
 			if (inner_it_solver) { MFEM_ABORT("only direct supported for P1"); }
+			sol::optional<bool> consistent_avail = accel["consistent"]; 
+			if (consistent_avail) {
+				if (consistent_avail.value() == false) { MFEM_ABORT("only consistent supported for P1"); }
+			}
 			auto p1disc = std::unique_ptr<mfem::BlockOperator>(CreateP1DiffusionDiscretization(
 				fes, vfes, total, absorption, alpha)); 
 			auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
@@ -792,9 +812,12 @@ int main(int argc, char *argv[]) {
 			slu->SetPrintStatistics(false); 
 
 			auto *source_op = new ConsistentSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha); 
-			auto *ceo = new ComponentExtractionOperator(p1disc->RowOffsets(), 1); 
+			offsets = p1disc->RowOffsets(); // copy offsets 
+			block_x.Update(offsets); // set size of block_x 
+			// extract scalar flux, storing [J,phi] in block_x 
+			auto *block_extract = new SubBlockExtractionOperator(block_x, 1); 
 			// build SM source, invert P1, extract phi 
-			smm = new mfem::TripleProductOperator(ceo, slu, source_op, true, true, true); 
+			smm = new mfem::TripleProductOperator(block_extract, slu, source_op, true, true, true); 
 
 			out << YAML::Key << "consistent" << YAML::Value << true; 
 		#else
@@ -874,13 +897,25 @@ int main(int argc, char *argv[]) {
 			out << YAML::EndMap; 
 		}
 
-		mfem::ParGridFunction phi_sn(&fes); 
-		D.Mult(psi, phi_sn); 
+		// compute "consistency" between SN and moment solution 
+		// for scalar flux and current 
+		J.MakeRef(&vfes, block_x.GetBlock(0), 0); 
+		mfem::Vector x_sn(moments_size); 
+		Dlin_aniso.Mult(psi, x_sn); 
+		mfem::ParGridFunction phi_sn(&fes, x_sn, 0); 
+		mfem::ParGridFunction J_sn(&vfes, x_sn, fes.GetVSize()); 
 		mfem::GridFunctionCoefficient phi_snc(&phi_sn); 
-		double consistency = phi.ComputeL2Error(phi_snc); 
+		double consistency_phi = phi.ComputeL2Error(phi_snc); 
+		mfem::GridFunctionCoefficient J_snc(&J_sn); 
+		double consistency_J = J.ComputeL2Error(J_snc); 
 		std::stringstream ss; 
-		ss << std::setprecision(3) << std::scientific << consistency; 
-		out << YAML::Key << "consistency" << YAML::Value << ss.str(); 
+		out << YAML::Key << "consistency" << YAML::Value << YAML::BeginMap; 
+			ss << std::setprecision(3) << std::scientific << consistency_phi; 
+			out << YAML::Key << "scalar flux" << YAML::Value << ss.str(); 
+			ss.str(""); 
+			ss << consistency_J; 
+			out << YAML::Key << "current" << YAML::Value << ss.str(); 
+		out << YAML::EndMap; 
 
 		if (smm) delete smm; 
 		if (amg) delete amg; 
@@ -897,7 +932,12 @@ int main(int argc, char *argv[]) {
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
 
 	// --- compute error if exact solution provided --- 
-	sol::optional<sol::function> solution_func_avail = lua["solution"]; 
+	sol::optional<sol::function> solution_func_avail = lua["scalar_flux_solution"]; 
+	sol::optional<sol::function> current_func_avail = lua["current_solution"]; 
+	if (solution_func_avail or current_func_avail) {
+		out << YAML::Key << "L2 error" << YAML::Value << YAML::BeginMap; 
+	}
+
 	if (solution_func_avail) {
 		auto solution_func = solution_func_avail.value(); 
 		auto solution_lam = [&solution_func](const mfem::Vector &x) {
@@ -909,7 +949,25 @@ int main(int argc, char *argv[]) {
 		double l2 = phi.ComputeL2Error(phi_coef); 
 		std::stringstream ss; 
 		ss << std::setprecision(3) << std::scientific << l2; 
-		out << YAML::Key << "l2 error" << YAML::Value << ss.str(); 
+		out << YAML::Key << "phi" << YAML::Value << ss.str(); 
+	}
+
+	if (current_func_avail) {
+		auto solution_func = current_func_avail.value(); 
+		auto solution_lam = [&solution_func](const mfem::Vector &x) {
+			double pos[3]; 
+			for (auto d=0; d<x.Size(); d++) { pos[d] = x(d); }
+			return solution_func(pos[0], pos[1], pos[2]); 
+		}; 
+		mfem::FunctionCoefficient Jcoef(solution_lam); 
+		double l2 = J.ComputeL2Error(Jcoef); 
+		std::stringstream ss; 
+		ss << std::setprecision(3) << std::scientific << l2; 
+		out << YAML::Key << "current" << YAML::Value << ss.str(); 		
+	}
+
+	if (solution_func_avail or current_func_avail) {
+		out << YAML::EndMap; 
 	}
 
 	// --- output to paraview --- 
@@ -919,11 +977,12 @@ int main(int argc, char *argv[]) {
 		std::string output_name = output["name"]; 	
 		char output_name_resolve[PATH_MAX];
 		realpath(output_name.c_str(), output_name_resolve);  	
-		out << YAML::Key << "output base" << YAML::Value << output_name_resolve; 
+		out << YAML::Key << "output" << YAML::Value << output_name_resolve; 
 		mfem::ParGridFunction mesh_part(&fes0); 
 		for (int i=0; i<mesh_part.Size(); i++) { mesh_part[i] = rank; }
 		mfem::ParaViewDataCollection dc(output_name, &mesh); 
 		dc.RegisterField("phi", &phi); 
+		dc.RegisterField("J", &J); 
 		dc.RegisterField("partition", &mesh_part); 
 		dc.RegisterField("total", &total_gf); 
 		dc.RegisterField("scattering", &scattering_gf); 
