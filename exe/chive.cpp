@@ -751,7 +751,7 @@ int main(int argc, char *argv[]) {
 			bool consistent = accel["consistent"].get_or(false); 
 			double kappa = accel["kappa"].get_or(pow(fe_order+1,2)); 
 			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
-			bool pen_lower_bound = accel["penalty_lower_bound"].get_or(false); 
+			bool pen_lower_bound = accel["penalty_lower_bound"].get_or(true); 
 			mfem::Operator *source_op; 
 			if (consistent) {
 				source_op = new ConsistentIPSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, total, kappa, 
@@ -949,7 +949,7 @@ int main(int argc, char *argv[]) {
 		double l2 = phi.ComputeL2Error(phi_coef); 
 		std::stringstream ss; 
 		ss << std::setprecision(3) << std::scientific << l2; 
-		out << YAML::Key << "phi" << YAML::Value << ss.str(); 
+		out << YAML::Key << "scalar flux" << YAML::Value << ss.str(); 
 	}
 
 	if (current_func_avail) {
