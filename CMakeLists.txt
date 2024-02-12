@@ -155,7 +155,7 @@ if (${ENABLE_TESTS})
 	enable_testing()
 endif()
 if (${CMAKE_TESTING_ENABLED})
-	message(STATUS "testing enabled")
+	message(STATUS "unit tests enabled")
 	# find GoogleTest 
 	# specify location setting GTEST_ROOT to cmake install dir of gtest 
 	find_package(GTest REQUIRED)
@@ -164,5 +164,17 @@ if (${CMAKE_TESTING_ENABLED})
 	# add tests listed in test directory
 	add_subdirectory(test)
 else()
-	message(STATUS "testing disabled")
+	message(STATUS "unit tests disabled")
+endif()
+
+option(ENABLE_CHIVE_TESTS "integrated tests for the chive driver" OFF)
+if (${ENABLE_CHIVE_TESTS})
+	message(STATUS "chive tests enabled")
+	# requires python executable 
+	set(Python3_FIND_UNVERSIONED_NAMES "FIRST") 
+	find_package(Python3 REQUIRED COMPONENTS Interpreter)
+	message(STATUS "python3 exe: ${Python3_EXECUTABLE}")
+	add_subdirectory(test/chive)
+else()
+	message(STATUS "chive tests disabled")
 endif()
