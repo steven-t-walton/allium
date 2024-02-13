@@ -103,8 +103,9 @@ ConsistentLDGSMMSourceOperator::ConsistentLDGSMMSourceOperator(mfem::ParFiniteEl
 	F2form.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator(-1.0));
 	mfem::Coefficient *diffco = nullptr; 
 	if (total) {
-		diffco = new mfem::RatioCoefficient(1./3, *total); 
-		F2form.AddInteriorFaceIntegrator(new LDGTraceIntegrator(*diffco, &beta)); 
+		diffco = new mfem::RatioCoefficient(1.0/3, *total); 
+		double kappa = pow(fes.GetOrder(0)+1,2); 
+		F2form.AddInteriorFaceIntegrator(new LDGTraceIntegrator(*diffco, beta, kappa, alpha/2)); 
 	} else {
 		F2form.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta));		
 	}

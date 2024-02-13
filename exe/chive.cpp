@@ -459,12 +459,26 @@ int main(int argc, char *argv[]) {
 	sol::table inner_solver_table; 
 	mfem::IterativeSolver *inner_it_solver = nullptr; 
 	if (accel_avail) {
-		inner_solver_table = accel_avail.value()["solver"]; 
+		sol::optional<sol::table> inner_solver_table_avail = accel_avail.value()["solver"]; 
+		if (inner_solver_table_avail) {
+			inner_solver_table = inner_solver_table_avail.value();
+		}
+		// default to direct if solver table not provided 
+		else {
+			inner_solver_table = accel_avail.value().create_with("type", "direct"); 
+		}
 		// can be nullptr if direct solver specified 
 		inner_it_solver = parse::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	}
 	if (prec_avail) {
-		inner_solver_table = prec_avail.value()["solver"]; 
+		sol::optional<sol::table> inner_solver_table_avail = prec_avail.value()["solver"]; 
+		if (inner_solver_table_avail) {
+			inner_solver_table = inner_solver_table_avail.value(); 
+		} 
+		// default to direct if solver table not provided 
+		else {
+			inner_solver_table = prec_avail.value().create_with("type", "direct"); 
+		}
 		// can be nullptr if direct solver specified 
 		inner_it_solver = parse::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	}
@@ -703,6 +717,7 @@ int main(int argc, char *argv[]) {
 		if (type == "LDGSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
 			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
+			bool stab_bound = accel["bound_stabilization_below"].get_or(true); 
 			mfem::Operator *source_op; 
 			if (consistent) {
 				source_op = new ConsistentLDGSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, beta, 
@@ -745,21 +760,23 @@ int main(int argc, char *argv[]) {
 			// output LDG specific options 
 			out << YAML::Key << "consistent" << YAML::Value << consistent; 
 			out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
-
+			out << YAML::Key << "bound stabilization from below" << YAML::Value << stab_bound; 
 		} 
 		else if (type == "IPSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
 			double kappa = accel["kappa"].get_or(pow(fe_order+1,2)); 
+			// scale interior penalty coefficient by diffusion coefficient 
 			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
-			bool pen_lower_bound = accel["penalty_lower_bound"].get_or(true); 
+			// use kappa = alpha/2 if regular kappa goes below alpha/2 
+			bool stab_bound = accel["bound_stabilization_below"].get_or(true); 
 			mfem::Operator *source_op; 
 			if (consistent) {
 				source_op = new ConsistentIPSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, total, kappa, 
-					pen_lower_bound, scale_stabilization); 
+					stab_bound, scale_stabilization); 
 			} else {
 				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
 			}
-			block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, pen_lower_bound, scale_stabilization); 
+			block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, stab_bound, scale_stabilization); 
 			const auto &S = block_disc->SchurComplement(); 
 
 			// iterative solve
@@ -795,7 +812,7 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "kappa" << YAML::Value << kappa; 
 			out << YAML::Key << "consistent" << YAML::Value << consistent; 
 			out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
-			out << YAML::Key << "penalty lower bound" << YAML::Value << pen_lower_bound; 
+			out << YAML::Key << "bound stabilization from below" << YAML::Value << stab_bound; 
 		}
 		else if (type == "P1SMM") {
 		#ifdef MFEM_USE_SUPERLU

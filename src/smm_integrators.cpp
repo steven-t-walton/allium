@@ -697,13 +697,16 @@ void LDGTraceIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &tr_fe1,
 		if (beta and tr_ndof2) { sign = (*beta * nor >= 0 ? 1.0 : -1.0); }
 		else { sign = 0.0; }
 
-		if (coef) {
+		if (limit > 0) {
 			double c = coef->Eval(*T.Elem1, eip1); 
 			if (tr_ndof2) {
 				c += coef->Eval(*T.Elem2, eip2); 
 				c /= 2; 
 			}
-			sign *= c; 
+			double k = kappa * T.Weight() / T.Elem1->Weight() * c; 
+			if (k < limit) {
+				sign = 0.0; 
+			}
 		}
 
 		tr_fe1.CalcShape(eip1, tr_shape1);

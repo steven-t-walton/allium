@@ -50,9 +50,10 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
 	mfem::ConstantCoefficient neg_one(-1.0); 
 	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
-	mfem::RatioCoefficient diffco(1./3, total); 
+	mfem::RatioCoefficient diffco(1.0/3, total); 
 	if (scale_ldg_stabilization) {
-		Dform.AddInteriorFaceIntegrator(new LDGTraceIntegrator(diffco, &beta)); 
+		double kappa = pow(fes.GetOrder(0)+1, 2); 
+		Dform.AddInteriorFaceIntegrator(new LDGTraceIntegrator(diffco, beta, kappa, alpha/2)); 
 	} else {
 		Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta)); 		
 	}

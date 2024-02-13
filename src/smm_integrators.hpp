@@ -160,14 +160,15 @@ class LDGTraceIntegrator : public mfem::BilinearFormIntegrator
 protected:
 	const mfem::Vector *beta = nullptr;
 	mfem::Coefficient *coef = nullptr; 
+	double kappa = 0.0, limit = 0.0; 
 
 	mfem::Vector tr_shape1, tr_shape2, te_shape1, te_shape2; 
 	mfem::Vector nor; 
 	mfem::DenseMatrix A11, A12, A21, A22; 
 public:
 	LDGTraceIntegrator(const mfem::Vector *b=nullptr) { beta = b; }
-	LDGTraceIntegrator(mfem::Coefficient &c, const mfem::Vector *b=nullptr) 
-		: coef(&c), beta(b) 
+	LDGTraceIntegrator(mfem::Coefficient &c, const mfem::Vector &b, double k, double l) 
+		: coef(&c), beta(&b), kappa(k), limit(l)
 	{ }
 	void AssembleFaceMatrix(
 		const mfem::FiniteElement &tr_fe1,
