@@ -552,6 +552,7 @@ int main(int argc, char *argv[]) {
 	#ifdef MFEM_USE_SUPERLU
 		mfem::SuperLURowLocMatrix *slu_op = nullptr; // operator for direct solves 
 	#endif
+		BlockDiffusionDiscretization *block_disc = nullptr; 
 
 		// build preconditioner from input spec 
 		if (prec_avail) {
@@ -613,7 +614,8 @@ int main(int argc, char *argv[]) {
 			#endif
 			} 
 			else if (type == "ldgsa") {
-				dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta); 
+				bool scale_stabilization = prec_table["scale_stabilization"].get_or(false); 
+				dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta, scale_stabilization); 
 
 				if (inner_it_solver) {
 					amg = new mfem::HypreBoomerAMG(*dsa_mat); 
@@ -631,6 +633,65 @@ int main(int argc, char *argv[]) {
 					MFEM_ABORT("superlu required for direct option"); 
 				#endif 
 				}
+				out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
+			}
+			else if (type == "block ldgsa") {
+				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
+				block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
+					beta, scale_stabilization); 
+				const auto &S = block_disc->SchurComplement(); 
+
+				// iterative solve
+				if (inner_it_solver) {
+					amg = new mfem::HypreBoomerAMG(S); 
+					inner_it_solver->SetOperator(S); 
+					inner_it_solver->SetPreconditioner(*amg); 
+				} 
+
+				// direct solve 
+				else {
+				#ifdef MFEM_USE_SUPERLU
+					slu_op = new mfem::SuperLURowLocMatrix(S); 
+					auto *slu = new mfem::SuperLUSolver(*slu_op); 
+					slu->SetPrintStatistics(false); 
+					inner_solver = slu; 
+				#else 
+					MFEM_ABORT("superlu required for direct option"); 
+				#endif 
+				}
+
+				out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
+			}
+			else if (type == "block mip") {
+				double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
+				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
+				bool lower_bound = prec_table["bound_stabilization_below"].get_or(true); 
+				block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
+					kappa, lower_bound, scale_stabilization); 
+				const auto &S = block_disc->SchurComplement(); 
+
+				// iterative solve
+				if (inner_it_solver) {
+					amg = new mfem::HypreBoomerAMG(S); 
+					inner_it_solver->SetOperator(S); 
+					inner_it_solver->SetPreconditioner(*amg); 
+				} 
+
+				// direct solve 
+				else {
+				#ifdef MFEM_USE_SUPERLU
+					slu_op = new mfem::SuperLURowLocMatrix(S); 
+					auto *slu = new mfem::SuperLUSolver(*slu_op); 
+					slu->SetPrintStatistics(false); 
+					inner_solver = slu; 
+				#else 
+					MFEM_ABORT("superlu required for direct option"); 
+				#endif 
+				}
+
+				out << YAML::Key << "kappa" << YAML::Value << kappa; 
+				out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
+				out << YAML::Key << "bound stabilization from below" << YAML::Value << lower_bound; 
 			}
 			else MFEM_ABORT("dsa type " << type << " not defined"); 
 
@@ -694,6 +755,7 @@ int main(int argc, char *argv[]) {
 		if (slu_op) delete slu_op; 
 	#endif
 		if (dsa_mat) delete dsa_mat; 
+		if (block_disc) delete block_disc; 
 	}
 
 	// moment-based solve

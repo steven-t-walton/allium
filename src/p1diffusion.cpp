@@ -1,5 +1,6 @@
 #include "p1diffusion.hpp"
 #include "linalg.hpp"
+#include "smm_integrators.hpp"
 
 void PenaltyIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 	mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat)
@@ -349,7 +350,7 @@ mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop)
 }
 
 mfem::HypreParMatrix *CreateLDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, mfem::Vector *beta) 
+		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, mfem::Vector *beta, bool scale_stabilization) 
 {
 	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>; 
 	mfem::ParBilinearForm Mtform(&vfes);
@@ -373,6 +374,13 @@ mfem::HypreParMatrix *CreateLDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
 	mfem::ConstantCoefficient neg_one(-1.0); 
 	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
+	mfem::RatioCoefficient diffco(1.0/3, total); 
+	if (scale_stabilization) {
+		double kappa = pow(fes.GetOrder(0)+1, 2); 
+		Dform.AddInteriorFaceIntegrator(new LDGTraceIntegrator(diffco, *beta, kappa, alpha/2)); 
+	} else {
+		Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(beta)); 		
+	}
 	Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(beta)); 
 	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5)); 
 	Dform.Assemble(); 

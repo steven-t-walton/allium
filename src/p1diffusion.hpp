@@ -54,4 +54,5 @@ mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace
 mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop); 
 
 mfem::HypreParMatrix *CreateLDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.25, mfem::Vector *beta=nullptr); 
+	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.25, mfem::Vector *beta=nullptr, 
+	bool scale_stabilization=false); 
