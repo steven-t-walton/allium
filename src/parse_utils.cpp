@@ -1,4 +1,5 @@
 #include "parse_utils.hpp"
+#include "linalg.hpp"
 #include <algorithm>
 
 namespace parse 
@@ -51,10 +52,7 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 	}
 
 	else if (type == "sli") {
-		s = new mfem::SLISolver(comm); 
-		// if reltol not set SLISolver defaults to 
-		// fixed number of iterations 
-		s->SetRelTol(1e-15); 
+		s = new SLISolver(comm); 
 	}
 
 	else if (type == "bicg" or type == "bicgstab") {

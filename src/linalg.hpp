@@ -75,3 +75,16 @@ public:
 		A->MultTranspose(x, t2); B->MultTranspose(t2, t1); C->MultTranspose(t1, y); 
 	}
 };
+
+class SLISolver : public mfem::IterativeSolver {
+private:
+	mutable mfem::Vector r,z; 
+public:
+	SLISolver(MPI_Comm _comm) : mfem::IterativeSolver(_comm) { }
+	void SetOperator(const mfem::Operator &op) { 
+		mfem::IterativeSolver::SetOperator(op); 
+		r.SetSize(width); 
+		z.SetSize(width); 
+	}
+	void Mult(const mfem::Vector &b, mfem::Vector &x) const; 
+};

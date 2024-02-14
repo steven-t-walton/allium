@@ -44,3 +44,51 @@ TripleProductOperator::~TripleProductOperator()
 	if (ownB) delete B; 
 	if (ownC) delete C; 
 }
+
+void SLISolver::Mult(const mfem::Vector &b, mfem::Vector &x) const 
+{
+	if (!iterative_mode) {
+		x = 0.0; 
+	}
+
+	double norm, r0; 
+	int i; 
+	converged = false; 
+	for (i=1; true;) {
+		// compute residual 
+		oper->Mult(x, r); 
+		subtract(b, r, r); // r = b - Ax 
+		// apply preconditioner, compute norm of residual, update solution
+		if (prec) {
+			prec->Mult(r, z); // z = Br 
+			norm = sqrt(Dot(z,z)); 
+			add(x, 1.0, z, x); 
+		} else {
+			norm = sqrt(Dot(r,r)); 
+			add(x, 1.0, r, x); 
+		}
+
+		if (i==1) {
+			initial_norm = norm; 
+			r0 = std::max(norm*rel_tol, abs_tol); 
+		}
+
+		if (norm < r0) {
+			converged = true; 
+			final_iter = i; 
+		}
+
+		if (prec) {
+			Monitor(i, norm, x, z, converged); 			
+		} else {
+			Monitor(i, norm, x, r, converged); 
+		}
+
+		if (i >= max_iter or converged) {
+			break; 
+		}
+		i++; 
+	}
+	final_iter = i; 
+	final_norm = norm; 
+}
