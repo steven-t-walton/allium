@@ -26,28 +26,22 @@ using LuaPhaseFunction = std::function<double(double,double,double,double,double
 class TransportIterationMonitor : public mfem::IterativeSolverMonitor
 {
 private:
-	mfem::IterativeSolver const * const inner_solver; 
+	mfem::IterativeSolver const * const inner_solver = nullptr; 
+	const TransportOperator &T; 
+	const DiffusionSyntheticAccelerationOperator * const dsa; 
 	YAML::Emitter &out; 
 	mfem::StopWatch timer; 
 public:
 	mfem::Array<int> inner_it; 
 
-	TransportIterationMonitor(YAML::Emitter &yaml, const mfem::IterativeSolver * const inner) 
-		: out(yaml), inner_solver(inner) 
+	TransportIterationMonitor(YAML::Emitter &yaml, const TransportOperator &t, 
+		const DiffusionSyntheticAccelerationOperator * const d=nullptr, 
+		const mfem::IterativeSolver * const inner=nullptr) 
+		: out(yaml), T(t), dsa(d), inner_solver(inner) 
 	{
 		out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
 	}
 	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
-		// skip outputting initial norm
-		if (it==0) {
-			timer.Clear();
-			timer.Start();
-			return;  
-		}
-
-		timer.Stop(); 
-		double time = timer.RealTime(); 
-
 		out << YAML::BeginMap; 
 		out << YAML::Key << "it" << YAML::Value << it; 
 		std::stringstream ss; 
@@ -60,11 +54,12 @@ public:
 			out << YAML::Key << "inner norm" << YAML::Value << ss.str(); 
 			inner_it.Append(inner_solver->GetNumIterations()); 
 		}
-		out << YAML::Key << "time" << YAML::Value << time; 
+		out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
+			out << YAML::Key << "sweep" << YAML::Value << T.GetStopWatch().RealTime(); 
+			if (dsa)
+				out << YAML::Key << "preconditioner" << YAML::Value << dsa->GetStopWatch().RealTime(); 
+		out << YAML::EndMap; 
 		out << YAML::EndMap << YAML::Newline; 
-
-		timer.Clear();
-		timer.Start(); 
 
 		if (final) {
 			out << YAML::EndSeq; 
@@ -728,7 +723,7 @@ int main(int argc, char *argv[]) {
 
 		if (prec_avail) { outer_solver->SetPreconditioner(*prec); }
 		outer_solver->SetOperator(T); 
-		TransportIterationMonitor monitor(out, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
+		TransportIterationMonitor monitor(out, T, prec, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
 		outer_solver->SetMonitor(monitor); 
 		outer_solver->Mult(schur_source, phi); 
 
