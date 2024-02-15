@@ -63,6 +63,10 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 		return nullptr; 
 	}
 
+	else if (type == "fixed point" or type == "fp") {
+		s = new FixedPointIterationSolver(comm); 
+	}
+
 	else {
 		MFEM_ABORT("solver type " << type << " not supported"); 
 	}

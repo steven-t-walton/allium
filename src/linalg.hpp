@@ -76,6 +76,8 @@ public:
 	}
 };
 
+// re-implement mfem::SLISolver since they don't call monitor 
+// and don't count number of iterations correctly 
 class SLISolver : public mfem::IterativeSolver {
 private:
 	mutable mfem::Vector r,z; 
@@ -87,4 +89,21 @@ public:
 		z.SetSize(width); 
 	}
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const; 
+};
+
+class FixedPointIterationSolver : public mfem::IterativeSolver {
+private:
+	mutable mfem::Vector xold, r, z; 
+public:
+	FixedPointIterationSolver(MPI_Comm _comm) : mfem::IterativeSolver(_comm) { }
+	void Mult(const mfem::Vector &b, mfem::Vector &x) const; 
+	void SetOperator(const mfem::Operator &op) {
+		mfem::IterativeSolver::SetOperator(op); 
+		xold.SetSize(width); 
+		r.SetSize(width); 
+	}
+	void SetPreconditioner(mfem::Solver &s) {
+		mfem::IterativeSolver::SetPreconditioner(s); 
+		z.SetSize(width); 
+	}
 };

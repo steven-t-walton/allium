@@ -30,7 +30,6 @@ private:
 	const TransportOperator &T; 
 	const DiffusionSyntheticAccelerationOperator * const dsa; 
 	YAML::Emitter &out; 
-	mfem::StopWatch timer; 
 public:
 	mfem::Array<int> inner_it; 
 
@@ -55,15 +54,55 @@ public:
 			inner_it.Append(inner_solver->GetNumIterations()); 
 		}
 		out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "sweep" << YAML::Value << T.GetStopWatch().RealTime(); 
+			out << YAML::Key << "sweep" << YAML::Value << FormatTimeString(T.GetStopWatch().RealTime()); 
 			if (dsa)
-				out << YAML::Key << "preconditioner" << YAML::Value << dsa->GetStopWatch().RealTime(); 
+				out << YAML::Key << "preconditioner" << YAML::Value << FormatTimeString(dsa->GetStopWatch().RealTime()); 
 		out << YAML::EndMap; 
 		out << YAML::EndMap << YAML::Newline; 
 
 		if (final) {
 			out << YAML::EndSeq; 
 		}
+	}
+};
+
+class MomentMethodIterationMonitor : public mfem::IterativeSolverMonitor
+{
+private:
+	YAML::Emitter &out; 
+	MomentMethodFixedPointOperator &op; 
+	mfem::IterativeSolver const * const inner_solver = nullptr; 
+public:
+	mfem::Array<int> inner_it; 
+	MomentMethodIterationMonitor(YAML::Emitter &yaml, MomentMethodFixedPointOperator &_op, 
+		const mfem::IterativeSolver * const inner=nullptr)
+		: out(yaml), op(_op), inner_solver(inner)
+	{
+		out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
+	}
+	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
+		out << YAML::BeginMap; 
+		out << YAML::Key << "it" << YAML::Value << it; 
+		std::stringstream ss; 
+		ss << std::scientific << std::setprecision(3) << norm; 
+		out << YAML::Key << "norm" << YAML::Value << ss.str(); 
+		if (inner_solver) {
+			out << YAML::Key << "inner it" << YAML::Value << inner_solver->GetNumIterations(); 
+			std::stringstream ss; 
+			ss << std::scientific << std::setprecision(3) << inner_solver->GetFinalNorm(); 
+			out << YAML::Key << "inner norm" << YAML::Value << ss.str(); 
+			inner_it.Append(inner_solver->GetNumIterations()); 
+		}
+		out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
+			out << YAML::Key << "total" << YAML::Value << FormatTimeString(op.TotalTimer().RealTime()); 
+			out << YAML::Key << "sweep" << YAML::Value << FormatTimeString(op.SweepTimer().RealTime()); 
+			out << YAML::Key << "moment" << YAML::Value << FormatTimeString(op.MomentTimer().RealTime()); 
+		out << YAML::EndMap; 
+		out << YAML::EndMap << YAML::Newline; 
+
+		if (final) {
+			out << YAML::EndSeq; 
+		}		
 	}
 };
 
@@ -140,6 +179,9 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "commit" << YAML::Value << ALLIUM_GIT_COMMIT; 
 		#ifdef ALLIUM_GIT_TAG 
 		out << YAML::Key << "tag" << YAML::Value << ALLIUM_GIT_TAG; 
+		#endif
+		#ifdef MFEM_GIT_STRING
+		out << YAML::Key << "mfem" << YAML::Value << MFEM_GIT_STRING; 
 		#endif
 	out << YAML::EndMap; 
 	#endif
@@ -446,10 +488,13 @@ int main(int argc, char *argv[]) {
 
 	// --- create solver objects from Lua input --- 
 	sol::table solver = driver["solver"]; 
-	auto *outer_solver = parse::CreateIterativeSolver(solver, MPI_COMM_WORLD);
-	if (!outer_solver) { MFEM_ABORT("outer solver required"); }
 	sol::optional<sol::table> accel_avail = driver["acceleration"]; 
 	sol::optional<sol::table> prec_avail = driver["preconditioner"]; 
+	if (accel_avail) {
+		solver["type"] = "fixed point"; // overwrite since this is the only one supported 
+	}
+	auto *outer_solver = parse::CreateIterativeSolver(solver, MPI_COMM_WORLD);
+	if (!outer_solver) { MFEM_ABORT("outer solver required"); }
 	if (accel_avail and prec_avail) { MFEM_ABORT("cannot use both preconditioning and acceleration"); }
 	sol::table inner_solver_table; 
 	mfem::IterativeSolver *inner_it_solver = nullptr; 
@@ -490,9 +535,6 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
 		out << YAML::Key << "phi size" << YAML::Value << phi_size_global;
 		out << YAML::Key << "basis type" << YAML::Value << basis_type_string; 
-		if (accel_avail) {
-			solver["type"] = "fixed point"; // overwrite since this is the only one supported 
-		}
 		out << YAML::Key << "solver" << YAML::Value << solver; 
 		if (sweep_opts_avail) {
 			out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value();
@@ -509,7 +551,7 @@ int main(int argc, char *argv[]) {
 	mfem::Vector psi(psi_size);
 	psi = 0.0; 
 	mfem::Vector moment_solution(moments_size);  
-	mfem::ParGridFunction phi(&fes), phi_old(&fes), J(&vfes, moment_solution, phi_size);
+	mfem::ParGridFunction phi(&fes), J(&vfes, moment_solution, phi_size);
 
 	// initial guess 
 	D.Mult(psi, phi); 
@@ -728,8 +770,9 @@ int main(int argc, char *argv[]) {
 		outer_solver->Mult(schur_source, phi); 
 
 		// extra sweep to get psi 
-		Ms_form.Mult(phi, phi_old); 
-		D.MultTranspose(phi_old, psi); 
+		mfem::Vector scat_source(phi_size); 
+		Ms_form.Mult(phi, scat_source); 
+		D.MultTranspose(scat_source, psi); 
 		psi += source_vec; 
 		Linv.Mult(psi, psi); 
 		// compute phi and J 
@@ -755,7 +798,6 @@ int main(int argc, char *argv[]) {
 
 	// moment-based solve
 	else {
-		mfem::StopWatch it_time; 
 		// space for current 
 		mfem::Array<int> offsets; 
 		mfem::BlockVector block_x; 
@@ -911,63 +953,18 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap; // end acceleration map 
 		out << YAML::EndMap; // end driver map 
 
-		// grab iteration parameters 
-		const int max_it = solver["max_iter"]; 
-		const double tolerance = solver["abstol"]; 
-
-		phi_old = phi; 
-		mfem::Vector scat_source(phi_size); 
-		int it; 
-		double norm; 
-		mfem::Array<int> inner_its; 
-		out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
-		for (it=1; true; ) {
-			it_time.Clear(); 
-			it_time.Start(); 
-
-			Ms_form.Mult(phi_old, scat_source); 
-			D.MultTranspose(scat_source, psi); 
-			psi += source_vec; 
-			mfem::tic(); 
-			Linv.Mult(psi, psi); 
-			double sweep_time = mfem::toc(); 
-			mfem::tic(); 
-			smm->Mult(psi, phi); 
-			double moment_time = mfem::toc(); 
-
-			phi_old -= phi; 
-			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi_old, phi_old)); 
-			phi_old = phi; 
-
-			it_time.Stop(); 
-			double time = it_time.RealTime(); 
-			out << YAML::BeginMap; 
-			out << YAML::Key << "it" << YAML::Value << it; 
-			std::stringstream ss; 
-			ss << std::scientific << std::setprecision(3) << norm; 
-			out << YAML::Key << "norm" << YAML::Value << ss.str(); 
-			if (inner_it_solver) {
-				out << YAML::Key << "inner it" << YAML::Value << inner_it_solver->GetNumIterations(); 
-				out << YAML::Key << "inner norm" << YAML::Value << inner_it_solver->GetFinalNorm(); 				
-				inner_its.Append(inner_it_solver->GetNumIterations()); 
-			}
-			out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
-				out << YAML::Key << "total" << FormatTimeString(time); 
-				out << YAML::Key << "sweep" << FormatTimeString(sweep_time); 
-				out << YAML::Key << "moment" << FormatTimeString(moment_time); 
-			out << YAML::EndMap; 
-			out << YAML::EndMap << YAML::Newline; 
-
-			if (norm < tolerance or it>=max_it) break; 
-			it++; 
-		}
-		out << YAML::EndSeq; 
-		out << YAML::Key << "outer iterations" << YAML::Value << it;
-		if (inner_its.Size()) {
+		MomentMethodFixedPointOperator G(D, Linv, Ms_form, *smm, source_vec, psi); 
+		outer_solver->SetOperator(G); 
+		MomentMethodIterationMonitor monitor(out, G, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
+		outer_solver->SetMonitor(monitor); 
+		mfem::Vector blank; 
+		outer_solver->Mult(blank, phi); 
+		out << YAML::Key << "outer iterations" << YAML::Value << outer_solver->GetNumIterations();
+		if (monitor.inner_it.Size()) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "min inner" << YAML::Value << inner_its.Min(); 
-			out << YAML::Key << "max inner" << YAML::Value << inner_its.Max();
-			out << YAML::Key << "avg inner" << YAML::Value << (double)inner_its.Sum()/inner_its.Size(); 		
+			out << YAML::Key << "min inner" << YAML::Value << monitor.inner_it.Min(); 
+			out << YAML::Key << "max inner" << YAML::Value << monitor.inner_it.Max();
+			out << YAML::Key << "avg inner" << YAML::Value << (double)monitor.inner_it.Sum()/monitor.inner_it.Size(); 		
 			out << YAML::EndMap; 
 		}
 
