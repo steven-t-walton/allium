@@ -107,7 +107,7 @@ void FixedPointIterationSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 			x += z; // x = x + z 
 			subtract(x, xold, r); // preconditioned residual 
 		}
-		norm = sqrt(Dot(r,r)); 
+		norm = Norm(r); 
 		if (i==1) {
 			initial_norm = norm; 
 			r0 = std::max(norm*rel_tol, abs_tol); 
