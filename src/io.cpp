@@ -1,8 +1,9 @@
-#include "parse_utils.hpp"
+#include "io.hpp"
 #include "linalg.hpp"
 #include <algorithm>
+#include <regex>
 
-namespace parse 
+namespace io 
 {
 
 void PrintSolTable(YAML::Emitter &out, sol::table &table) 
@@ -64,7 +65,20 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 	}
 
 	else if (type == "fixed point" or type == "fp") {
-		s = new FixedPointIterationSolver(comm); 
+		s = new FixedPointIterationSolver(comm);
+	}
+
+	else if (type == "kinsol") {
+	#ifdef MFEM_USE_SUNDIALS 
+		auto *kn = new mfem::KINSolver(comm, KIN_FP, false); 
+		int kdim = table["kdim"].get_or(1); 
+		kn->SetMAA(kdim); 
+		table["kdim"] = kdim; 
+		s = kn; 
+		kn->SetPrintLevel(1); // default to 1 to call callback function 
+	#else 
+		MFEM_ABORT("MFEM not built with sundials"); 
+	#endif
 	}
 
 	else {
@@ -73,7 +87,7 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 
 	// load generic iterative solver options 
 	int print_level = table["print_level"].get_or(0); 
-	s->SetPrintLevel(print_level); 
+	s->SetPrintLevel( (dynamic_cast<mfem::KINSolver*>(s) ? 1 : print_level)); 
 	sol::optional<double> abstol = table["abstol"]; 
 	sol::optional<double> reltol = table["reltol"]; 
 	if (!abstol and !reltol) {
@@ -136,10 +150,62 @@ void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg)
 	}
 }
 
+void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data) 
+{
+	auto *data = static_cast<SundialsUserCallbackData*>(user_data); 
+	auto &out = *data->out; 
+	MFEM_ASSERT(data, "sundials user data not set properly"); 
+	std::regex nni_reg("nni =\\s+([0-9]+)\\s"); 
+	std::cmatch nni_match; 
+	if (std::regex_search(msg, nni_match, nni_reg)) {
+		auto &G = *data->G; 
+		// fnorm =      0.0005730787351824196
+		std::regex norm_reg("fnorm =\\s+(\\S+)"); 
+		std::cmatch norm_match; 
+		out << YAML::BeginMap; 
+		out << YAML::Key << "it" << YAML::Value << nni_match[1].str(); 
+		if (std::regex_search(msg, norm_match, norm_reg)) {
+			double norm = std::stod(norm_match[1].str());
+			std::stringstream ss; 
+			ss << std::setprecision(3) << std::scientific << norm;  
+			out << YAML::Key << "norm" << YAML::Value << ss.str(); 
+		}
+		if (data->inner_solver) {
+			out << YAML::Key << "inner solver" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "it" << YAML::Value << data->inner_solver->GetNumIterations(); 
+				std::stringstream ss; 
+				ss << std::scientific << std::setprecision(3) << std::scientific << data->inner_solver->GetFinalNorm(); 
+				out << YAML::Key << "norm" << YAML::Value << ss.str(); 
+			out << YAML::EndMap; 		
+			data->inner_it.Append(data->inner_solver->GetNumIterations());		
+		}
+		out << YAML::Key << "timings" << YAML::BeginMap; 
+		out << YAML::Key << "total" << YAML::Value << G.TotalTimer().RealTime(); 
+		out << YAML::Key << "sweep" << YAML::Value << G.SweepTimer().RealTime(); 
+		out << YAML::Key << "moment" << YAML::Value << G.MomentTimer().RealTime(); 
+		out << YAML::EndMap; 
+		out << YAML::EndMap; 
+		out << YAML::Newline; 		
+	}
+	else {
+		std::regex start_reg("scsteptol"); 
+		std::cmatch start_match; 
+		if (std::regex_search(msg, start_match, start_reg)) {
+			out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
+		}
+
+		std::regex end_reg("Return"); 
+		std::cmatch end_match; 
+		if (std::regex_search(msg, end_match, end_reg)) {
+			out << YAML::EndSeq; 
+		}
+	}
+}
+
 }
 
 YAML::Emitter &operator<<(YAML::Emitter &out, sol::table &table) 
 { 
-	parse::PrintSolTable(out, table); 
+	io::PrintSolTable(out, table); 
 	return out; 
 }

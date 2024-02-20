@@ -24,7 +24,7 @@ driver = {
 	fe_order = 1, 
 	sn_order = 4, 
 	solver = {
-		type = "sli", 
+		type = "fp", 
 		abstol = 1e-10, 
 		max_iter = 50, 
 	},

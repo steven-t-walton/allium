@@ -3,8 +3,9 @@
 #include "mfem.hpp"
 #include "sol/sol.hpp"
 #include "yaml-cpp/yaml.h"
+#include "smm_op.hpp"
 
-namespace parse 
+namespace io 
 {
 
 // iterate over table and print to yaml map 
@@ -18,6 +19,21 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm);
 
 // set AMG options like max levels, num sweeps, etc via a lua table 
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg); 
+
+struct SundialsUserCallbackData {
+	YAML::Emitter *out; 
+	const MomentMethodFixedPointOperator *G; 
+	const mfem::IterativeSolver * const inner_solver; 
+	mfem::Array<int> inner_it; 
+	SundialsUserCallbackData(YAML::Emitter &out, const MomentMethodFixedPointOperator &G, 
+		const mfem::IterativeSolver * const isolver) 
+		: out(&out), G(&G), inner_solver(isolver)
+	{
+
+	}
+};
+
+void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data); 
 
 }
 

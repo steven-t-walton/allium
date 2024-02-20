@@ -14,7 +14,8 @@
 #include "comment_stream.hpp"
 #include "linalg.hpp"
 #include "utils.hpp"
-#include "parse_utils.hpp"
+#include "io.hpp"
+#include <kinsol/kinsol.h>
 
 template<typename K, typename V> 
 void YAMLKeyValue(YAML::Emitter &out, K key, V value) {
@@ -30,6 +31,7 @@ private:
 	const TransportOperator &T; 
 	const DiffusionSyntheticAccelerationOperator * const dsa; 
 	YAML::Emitter &out; 
+	bool first = true; 
 public:
 	mfem::Array<int> inner_it; 
 
@@ -38,19 +40,24 @@ public:
 		const mfem::IterativeSolver * const inner=nullptr) 
 		: out(yaml), T(t), dsa(d), inner_solver(inner) 
 	{
-		out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
 	}
 	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
+		if (first) {
+			out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
+			first = false; 
+		}
 		out << YAML::BeginMap; 
 		out << YAML::Key << "it" << YAML::Value << it; 
 		std::stringstream ss; 
 		ss << std::scientific << std::setprecision(3) << norm; 
 		out << YAML::Key << "norm" << YAML::Value << ss.str(); 
 		if (inner_solver) {
-			out << YAML::Key << "inner it" << YAML::Value << inner_solver->GetNumIterations(); 
-			std::stringstream ss; 
-			ss << std::scientific << std::setprecision(3) << inner_solver->GetFinalNorm(); 
-			out << YAML::Key << "inner norm" << YAML::Value << ss.str(); 
+			out << YAML::Key << "inner solver" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "it" << YAML::Value << inner_solver->GetNumIterations(); 
+				std::stringstream ss; 
+				ss << std::scientific << std::setprecision(3) << inner_solver->GetFinalNorm(); 
+				out << YAML::Key << "norm" << YAML::Value << ss.str(); 
+			out << YAML::EndMap; 
 			inner_it.Append(inner_solver->GetNumIterations()); 
 		}
 		out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
@@ -62,6 +69,7 @@ public:
 
 		if (final) {
 			out << YAML::EndSeq; 
+			first = true; 
 		}
 	}
 };
@@ -78,19 +86,23 @@ public:
 		const mfem::IterativeSolver * const inner=nullptr)
 		: out(yaml), op(_op), inner_solver(inner)
 	{
-		out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
 	}
 	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
+		if (it==1) {
+			out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
+		}
 		out << YAML::BeginMap; 
 		out << YAML::Key << "it" << YAML::Value << it; 
 		std::stringstream ss; 
 		ss << std::scientific << std::setprecision(3) << norm; 
 		out << YAML::Key << "norm" << YAML::Value << ss.str(); 
 		if (inner_solver) {
-			out << YAML::Key << "inner it" << YAML::Value << inner_solver->GetNumIterations(); 
-			std::stringstream ss; 
-			ss << std::scientific << std::setprecision(3) << inner_solver->GetFinalNorm(); 
-			out << YAML::Key << "inner norm" << YAML::Value << ss.str(); 
+			out << YAML::Key << "inner solver" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "it" << YAML::Value << inner_solver->GetNumIterations(); 
+				std::stringstream ss; 
+				ss << std::scientific << std::setprecision(3) << inner_solver->GetFinalNorm(); 
+				out << YAML::Key << "norm" << YAML::Value << ss.str(); 
+			out << YAML::EndMap; 
 			inner_it.Append(inner_solver->GetNumIterations()); 
 		}
 		out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
@@ -490,10 +502,7 @@ int main(int argc, char *argv[]) {
 	sol::table solver = driver["solver"]; 
 	sol::optional<sol::table> accel_avail = driver["acceleration"]; 
 	sol::optional<sol::table> prec_avail = driver["preconditioner"]; 
-	if (accel_avail) {
-		solver["type"] = "fixed point"; // overwrite since this is the only one supported 
-	}
-	auto *outer_solver = parse::CreateIterativeSolver(solver, MPI_COMM_WORLD);
+	auto *outer_solver = io::CreateIterativeSolver(solver, MPI_COMM_WORLD);
 	if (!outer_solver) { MFEM_ABORT("outer solver required"); }
 	if (accel_avail and prec_avail) { MFEM_ABORT("cannot use both preconditioning and acceleration"); }
 	sol::table inner_solver_table; 
@@ -508,7 +517,7 @@ int main(int argc, char *argv[]) {
 			inner_solver_table = accel_avail.value().create_with("type", "direct"); 
 		}
 		// can be nullptr if direct solver specified 
-		inner_it_solver = parse::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
+		inner_it_solver = io::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	}
 	if (prec_avail) {
 		sol::optional<sol::table> inner_solver_table_avail = prec_avail.value()["solver"]; 
@@ -520,7 +529,7 @@ int main(int argc, char *argv[]) {
 			inner_solver_table = prec_avail.value().create_with("type", "direct"); 
 		}
 		// can be nullptr if direct solver specified 
-		inner_it_solver = parse::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
+		inner_it_solver = io::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	}
 	// generic operator in case inner solver is SuperLU or product operator etc 
 	mfem::Operator *inner_solver = inner_it_solver; 
@@ -736,7 +745,7 @@ int main(int argc, char *argv[]) {
 			if (amg) {
 				amg->SetPrintLevel(0); 
 				sol::optional<sol::table> amg_opts = prec_table["solver"]["amg_opts"]; 
-				if (amg_opts) parse::SetAMGOptions(amg_opts.value(), *amg); 				
+				if (amg_opts) io::SetAMGOptions(amg_opts.value(), *amg); 				
 			}
 
 			// create DSA operator 
@@ -946,7 +955,7 @@ int main(int argc, char *argv[]) {
 		if (amg) {
 			amg->SetPrintLevel(0); 
 			sol::optional<sol::table> amg_opts = inner_solver_table["amg_opts"]; 
-			if (amg_opts) parse::SetAMGOptions(amg_opts.value(), *amg);	
+			if (amg_opts) io::SetAMGOptions(amg_opts.value(), *amg);	
 		}
 
 		out << YAML::Key << "solver" << YAML::Value << inner_solver_table; 
@@ -955,16 +964,28 @@ int main(int argc, char *argv[]) {
 
 		MomentMethodFixedPointOperator G(D, Linv, Ms_form, *smm, source_vec, psi); 
 		outer_solver->SetOperator(G); 
+		io::SundialsUserCallbackData sundials_data(out, G, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
+		auto *sundials = dynamic_cast<mfem::SundialsSolver*>(outer_solver);
+		if (sundials) {
+			KINSetInfoHandlerFn(sundials->GetMem(), io::SundialsCallbackFunction, &sundials_data); 
+		}
+
 		MomentMethodIterationMonitor monitor(out, G, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
 		outer_solver->SetMonitor(monitor); 
 		mfem::Vector blank; 
 		outer_solver->Mult(blank, phi); 
 		out << YAML::Key << "outer iterations" << YAML::Value << outer_solver->GetNumIterations();
-		if (monitor.inner_it.Size()) {
+		mfem::Array<int> *inner_it = nullptr; 
+		if (sundials) {
+			inner_it = &sundials_data.inner_it; 
+		} else {
+			inner_it = &monitor.inner_it; 
+		}
+		if (inner_it->Size()) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "min inner" << YAML::Value << monitor.inner_it.Min(); 
-			out << YAML::Key << "max inner" << YAML::Value << monitor.inner_it.Max();
-			out << YAML::Key << "avg inner" << YAML::Value << (double)monitor.inner_it.Sum()/monitor.inner_it.Size(); 		
+			out << YAML::Key << "min inner" << YAML::Value << inner_it->Min(); 
+			out << YAML::Key << "max inner" << YAML::Value << inner_it->Max();
+			out << YAML::Key << "avg inner" << YAML::Value << (double)inner_it->Sum()/inner_it->Size(); 		
 			out << YAML::EndMap; 
 		}
 
