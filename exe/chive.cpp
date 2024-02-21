@@ -13,7 +13,6 @@
 #include "phase_coefficient.hpp"
 #include "comment_stream.hpp"
 #include "linalg.hpp"
-#include "utils.hpp"
 #include "io.hpp"
 #include <kinsol/kinsol.h>
 
@@ -61,9 +60,9 @@ public:
 			inner_it.Append(inner_solver->GetNumIterations()); 
 		}
 		out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "sweep" << YAML::Value << FormatTimeString(T.GetStopWatch().RealTime()); 
+			out << YAML::Key << "sweep" << YAML::Value << io::FormatTimeString(T.GetStopWatch().RealTime()); 
 			if (dsa)
-				out << YAML::Key << "preconditioner" << YAML::Value << FormatTimeString(dsa->GetStopWatch().RealTime()); 
+				out << YAML::Key << "preconditioner" << YAML::Value << io::FormatTimeString(dsa->GetStopWatch().RealTime()); 
 		out << YAML::EndMap; 
 		out << YAML::EndMap << YAML::Newline; 
 
@@ -106,9 +105,9 @@ public:
 			inner_it.Append(inner_solver->GetNumIterations()); 
 		}
 		out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "total" << YAML::Value << FormatTimeString(op.TotalTimer().RealTime()); 
-			out << YAML::Key << "sweep" << YAML::Value << FormatTimeString(op.SweepTimer().RealTime()); 
-			out << YAML::Key << "moment" << YAML::Value << FormatTimeString(op.MomentTimer().RealTime()); 
+			out << YAML::Key << "total" << YAML::Value << io::FormatTimeString(op.TotalTimer().RealTime()); 
+			out << YAML::Key << "sweep" << YAML::Value << io::FormatTimeString(op.SweepTimer().RealTime()); 
+			out << YAML::Key << "moment" << YAML::Value << io::FormatTimeString(op.MomentTimer().RealTime()); 
 		out << YAML::EndMap; 
 		out << YAML::EndMap << YAML::Newline; 
 
@@ -1105,7 +1104,7 @@ int main(int argc, char *argv[]) {
 	MPI_Barrier(MPI_COMM_WORLD); 
 	timer.Stop(); 
 	double time = timer.RealTime(); 
-	out << YAML::Key << "wall time" << YAML::Value << FormatTimeString(time); 
+	out << YAML::Key << "wall time" << YAML::Value << io::FormatTimeString(time); 
 
 	// --- end yaml output --- 
 	out << YAML::EndMap << YAML::Newline; 

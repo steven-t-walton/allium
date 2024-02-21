@@ -11,7 +11,6 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/linalg.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dg_trace_coll.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_op.hpp
-	${CMAKE_CURRENT_SOURCE_DIR}/utils.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/cons_smm_op.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/io.hpp
 )
@@ -28,7 +27,6 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/linalg.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dg_trace_coll.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_op.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/cons_smm_op.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/io.cpp
 )

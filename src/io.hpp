@@ -8,6 +8,8 @@
 namespace io 
 {
 
+std::string FormatTimeString(double time); 
+
 // iterate over table and print to yaml map 
 // tables in Lua do not have an order => this function 
 // kind of annoyingly prints values in random order :( 
