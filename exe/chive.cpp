@@ -272,18 +272,29 @@ int main(int argc, char *argv[]) {
 	auto nbattr = bdr_attr_list.size(); 
 	std::vector<sol::object> lua_bc_objs(nbattr); 
 	mfem::Array<PhaseSpaceCoefficient*> inflow_list(nbattr); 
+	int reflection_bdr_attr = -1; 
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
-		lua_bc_objs[i] = bcs[bdr_attr_list[i].c_str()]; 
-		if (lua_bc_objs[i].get_type() == sol::type::number) {
-			auto val = lua_bc_objs[i].as<double>(); 
-			inflow_list[i] = new ConstantPhaseSpaceCoefficient(val); 
-		} else if (lua_bc_objs[i].get_type() == sol::type::function) {
-			auto lua_func = lua_bc_objs[i].as<LuaPhaseFunction>();
-			auto func = [lua_func](const mfem::Vector &x, const mfem::Vector &Omega) {
-				return lua_func(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
-			};
-			inflow_list[i] = new FunctionGrayCoefficient(func);  
-		}
+		sol::table data = bcs[bdr_attr_list[i].c_str()]; 
+		std::string type = data["type"]; 
+		if (type == "inflow") {
+			sol::object value = data["value"]; 
+			lua_bc_objs[i] = value; // keep lua data in scope  
+			if (value.get_type() == sol::type::number) {
+				auto val = value.as<double>(); 
+				inflow_list[i] = new ConstantPhaseSpaceCoefficient(val); 
+			} else if (value.get_type() == sol::type::function) {
+				auto lua_func = value.as<LuaPhaseFunction>();
+				auto func = [lua_func](const mfem::Vector &x, const mfem::Vector &Omega) {
+					return lua_func(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
+				};
+				inflow_list[i] = new FunctionGrayCoefficient(func);  
+			}			
+		} else if (type == "reflective") {
+			if (reflection_bdr_attr<0) {
+				reflection_bdr_attr = i+1; 
+			}
+			inflow_list[i] = nullptr; 
+		} 
 	}
 
 	// print list to screen 
@@ -291,13 +302,16 @@ int main(int argc, char *argv[]) {
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
 		out << YAML::BeginMap; 
 		out << YAML::Key << "name" << YAML::Value << bdr_attr_list[i]; 
-		out << YAML::Key << "bdr attribute" << YAML::Value << i+1; 
-		out << YAML::Key << "inflow" << YAML::Value; 
-		if (lua_bc_objs[i].get_type() == sol::type::number) {
-			out << lua_bc_objs[i].as<double>(); 
-		} else {
-			out << "function"; 
+		out << YAML::Key << "type" << YAML::Value << ((inflow_list[i]) ? "inflow" : "reflective"); 
+		if (inflow_list[i]) {
+			out << YAML::Key << "value" << YAML::Value; 
+			if (lua_bc_objs[i].get_type() == sol::type::number) {
+				out << lua_bc_objs[i].as<double>(); 
+			} else {
+				out << "function"; 
+			}			
 		}
+		out << YAML::Key << "bdr attribute" << YAML::Value << i+1; 
 		out << YAML::EndMap; 
 	}
 	out << YAML::EndSeq; 
@@ -572,7 +586,7 @@ int main(int argc, char *argv[]) {
 	FormTransportSource(fes, quad, source, inflow, source_vec_view); 
 
 	// build sweep operator 
-	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
+	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow, reflection_bdr_attr); 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -608,6 +622,13 @@ int main(int argc, char *argv[]) {
 			std::transform(type.begin(), type.end(), type.begin(), ::tolower); 
 			out << YAML::Key << "type" << YAML::Value << type; 
 			if (type == "mip") {
+				mfem::Array<int> marshak_bdr_attr(mesh.bdr_attributes.Max()), dir_bdr_attr(mesh.bdr_attributes.Max()); 
+				marshak_bdr_attr = 1; 
+				dir_bdr_attr = 0; 
+				if (reflection_bdr_attr > 0) {
+					marshak_bdr_attr[reflection_bdr_attr] = 0; 
+					dir_bdr_attr[reflection_bdr_attr] = 1; 
+				} 
 				// build MIP DSA operator
 				mfem::ParBilinearForm Dform(&fes); 
 				mfem::RatioCoefficient diffco(1./3, total); 
@@ -617,10 +638,9 @@ int main(int argc, char *argv[]) {
 				Dform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
 				Dform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 				// Dform.AddInteriorFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
-				// Dform.AddBdrFaceIntegrator(new mfem::DGDiffusionIntegrator(diffco, -1, dsa_kappa)); 
 				Dform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha/2)); 
-				Dform.AddBdrFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha/2)); 
-				// Dform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+				Dform.AddBdrFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, dsa_kappa, alpha/2), marshak_bdr_attr); 
+				// Dform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attr); 
 				Dform.Assemble(); 
 				Dform.Finalize(); 
 				dsa_mat = Dform.ParallelAssemble(); 

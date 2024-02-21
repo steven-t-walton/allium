@@ -39,6 +39,8 @@ private:
 	mfem::Table downwind_recv_table; 
 
 	mfem::Array<mfem::DenseMatrix*> mass_matrices, grad_matrices, face_matrices;  
+	mfem::Vector normals; 
+	mfem::Array<int> edge_to_face_id; 
 
 	mutable mfem::Vector psi_fnbr; 
 
@@ -49,7 +51,8 @@ private:
 	int send_buffer_size = 8; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-		const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow); 
+		const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow, 
+		int reflection_bdr_attr=-1); 
 	~InverseAdvectionOperator(); 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
 

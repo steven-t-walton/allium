@@ -11,9 +11,13 @@ public:
 	AngularQuadrature(int _dim) : dim(_dim) { }
 	int Size() const { return weights.size(); }
 	const mfem::Vector &GetOmega(int angle) const { return Omegas[angle]; }
+	const auto &GetOmegas() const { return Omegas; }
 	double GetWeight(int angle) const { return weights[angle]; }
 	double SumWeights() const { return weights_sum; }
 	int Dimension() const { return dim; }
+	int GetReflectedAngleIndex(int angle, const mfem::Vector &nor) const; 
+private:
+	int GetIndexForAngle(const mfem::Vector &angle) const; 
 };
 
 class LevelSymmetricQuadrature : public AngularQuadrature {

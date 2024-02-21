@@ -5,7 +5,8 @@
 // #define INFLOW_IN_SWEEP
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-	const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow)
+	const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow, 
+	int reflection_bdr_attr)
 	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), psi_ext(_psi_ext), total(_total), inflow(_inflow)
 {
 	// set operator sizes to size of psi 
@@ -131,22 +132,25 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	// normal is assumed to be piecewise constant! Works for linear meshes only 
 	mfem::Array<igraph_integer_t> edges; // list of edges 
 	edges.Reserve(face_to_element->Size_of_connections()*Nomega*2);
-	mfem::Vector normal(dim); // normal vector 
+	edge_to_face_id.Reserve(edges.Capacity()); 
+	normals.SetSize(dim*mesh.GetNumFaces()); 
 	for (int r=0; r<face_to_element->Size(); r++) {
 		// get view into row of table 
 		auto row = std::span(face_to_element->GetRow(r), face_to_element->RowSize(r)); 
-		if (row.size()==2) { // two faces => interior face 
-			// compute normal 
-			auto ref_geom = mesh.GetFaceGeometry(r);
-			const auto &int_rule = mfem::IntRules.Get(ref_geom, 1); 
-			auto *trans = mesh.GetFaceElementTransformations(r); 
-			trans->SetAllIntPoints(&int_rule[0]); 
-			if (dim==1) {
-				normal(0) = 2*trans->GetElement1IntPoint().x - 1.0;
-			} else {
-				mfem::CalcOrtho(trans->Jacobian(), normal); 				
-			}
+		// compute normal 
+		const auto ref_geom = mesh.GetFaceGeometry(r);
+		const auto &int_rule = mfem::IntRules.Get(ref_geom, 1); 
+		auto *trans = mesh.GetFaceElementTransformations(r); 
+		trans->SetAllIntPoints(&int_rule[0]); 
+		mfem::Vector normal(normals, r*dim, dim); // normal vector 
+		if (dim==1) {
+			normal(0) = 2*trans->GetElement1IntPoint().x - 1.0;
+		} else {
+			mfem::CalcOrtho(trans->Jacobian(), normal); 				
+		}
+		normal *= 1.0/normal.Norml2(); 
 
+		if (row.size()==2) { // two elements => interior face 
 			// add directed edges based on Omega.n 
 			for (int a=0; a<Nomega; a++) {
 				auto e1 = row[0]; 
@@ -158,6 +162,27 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 				auto dof2 = (e2<Ne) ? e2*Nomega + a : Ne*Nomega + (e2 - Ne)*Nomega + a; 
 				edges.Append(dof1); 
 				edges.Append(dof2); 
+				edge_to_face_id.Append(r); 
+			}
+		}
+
+		else { // one element => boundary face 
+			const auto be = face_to_bdr_el.at(r); 
+			auto *btrans = mesh.GetBdrFaceTransformations(be); 
+			const auto attr = btrans->Attribute; 
+			if (attr == reflection_bdr_attr) {
+				for (int a=0; a<Nomega; a++) {
+					const auto &Omega = quad.GetOmega(a); 
+					double dot = normal * Omega; 
+					if (dot >= 0) { // outflow => need to add edge to reflected angle 
+						const auto reflect_idx = quad.GetReflectedAngleIndex(a, normal); 
+						const auto dof1 = row[0] * Nomega + a; 
+						const auto dof2 = row[0] * Nomega + reflect_idx; 
+						edges.Append(dof1); 
+						edges.Append(dof2); 
+						edge_to_face_id.Append(r); 
+					}
+				}
 			}
 		}
 	}
@@ -276,9 +301,10 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	mfem::Array<int> faces, dofs, dofs2; 
 
 	// igraph vectors to store neighbors in graph traversal 
-	igraph_vector_int_t nbrs, nbr_nbrs; 
+	igraph_vector_int_t nbrs, nbr_nbrs, edges; 
 	igraph_vector_int_init(&nbrs, 0); 
 	igraph_vector_int_init(&nbr_nbrs, 0); 
+	igraph_vector_int_init(&edges, 0);
 
 	// mdspan views into data 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
@@ -367,69 +393,66 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			for (auto i=0; i<dofs.Size(); i++) { rhs[i] = source_view(0,a,dofs[i]); }
 
 #ifdef SWEEP_PREASSEMBLE_LOCAL_MATRICES
-			mfem::Vector nor(dim); 
-			element_to_face->GetRow(e, faces);
 			mfem::DenseMatrix F(dofs.Size()); 
 			F = 0.0; 
-			for (auto f : faces) {
-				const auto info = mesh.GetFaceInformation(f); 
-				mfem::FaceElementTransformations *face_trans; 
-				if (info.IsShared()) {
-					face_trans = mesh.GetSharedFaceTransformationsByLocalIndex(f, true); 
-				} else {
-					face_trans = mesh.GetFaceElementTransformations(f); 
-				}
-				bool keep_order = e == face_trans->Elem1No; 
-				const auto ep = (keep_order) ? face_trans->Elem2No : face_trans->Elem1No; 
-				const auto &ref_cent = mfem::Geometries.GetCenter(face_trans->GetGeometryType()); 
-				face_trans->SetAllIntPoints(&ref_cent); 
-				if (dim==1) {
-					nor(0) = 2*face_trans->GetElement1IntPoint().x - 1.0;
-				} else {
-					mfem::CalcOrtho(face_trans->Jacobian(), nor); 				
-				}
-				// normalize, ensure outward normal 
-				nor.Set((keep_order ? 1.0 : -1.0)/nor.Norml2(), nor); 
+
+			mfem::Vector nor(dim); 
+			igraph_incident(&graph, &edges, node, IGRAPH_IN); 
+			auto edges_in_view = std::span(VECTOR(edges), igraph_vector_int_size(&edges)); 
+			for (const auto eid : edges_in_view) {
+				const auto nbr = IGRAPH_FROM(&graph, eid); 
+				const auto nbr_e = nbr / Nomega; 
+				const auto nbr_a = nbr % Nomega; 
+				const auto fid = edge_to_face_id[eid]; 
+				for (auto d=0; d<dim; d++) { nor(d) = normals(fid * dim + d); }
+				const auto info = mesh.GetFaceInformation(fid); 
+				bool keep_order = e == info.element[0].index; 
+				if (!keep_order) nor *= -1.0; 
 				const double dot = Omega * nor; 
 				const auto idx = keep_order ? 0 : 1; 
 				const auto nbr_idx = (idx + 1) % 2; 
+
+				if (nbr_e == e) {
+					mfem::Vector psi2; 
+					const auto &elmat = *face_mat_view(fid, idx, idx); 
+					fes.GetElementDofs(nbr_e, dofs2); 
+					psi2.SetSize(dofs2.Size()); 
+					for (auto i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(0, nbr_a, dofs2[i]); }
+					elmat.AddMult(psi2, rhs, -dot);
+				} 
+
+				else {
+					const auto &elmat = *face_mat_view(fid, idx, nbr_idx); 
+					mfem::Vector psi2; 
+					// face neighbor data 
+					if (info.IsShared()) {
+						fes.GetFaceNbrElementVDofs(nbr_e-Ne, dofs2); 
+						psi2.SetSize(dofs2.Size()); 
+						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_fnbr_view(0, a, dofs2[i]); }
+					}
+					// local data 
+					else {
+						fes.GetElementDofs(nbr_e, dofs2); 
+						psi2.SetSize(dofs2.Size()); 
+						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(0, a, dofs2[i]); }						
+					}
+					elmat.AddMult(psi2, rhs, -dot); 
+				}
+			}
+
+			element_to_face->GetRow(e, faces);
+			for (auto f : faces) {
+				const auto info = mesh.GetFaceInformation(f); 
+				bool keep_order = e == info.element[0].index; 
+				for (auto d=0; d<dim; d++) { nor(d) = normals(f*dim + d); }
+				if (!keep_order) nor *= -1.0; 
+				const double dot = Omega * nor; 
+				const auto idx = keep_order ? 0 : 1; 
 
 				// outflow 
 				if (dot > 0) {
 					const auto &elmat = *face_mat_view(f, idx, idx); 
 					F.Add(dot, elmat); 
-				}
-
-				// inflow 
-				else {
-					// interior face 
-					if (ep >= 0) {
-						const auto &elmat = *face_mat_view(f, idx, nbr_idx); 
-						mfem::Vector psi2; 
-						// face neighbor data 
-						if (info.IsShared()) {
-							fes.GetFaceNbrElementVDofs(ep-Ne, dofs2); 
-							psi2.SetSize(dofs2.Size()); 
-							for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_fnbr_view(0, a, dofs2[i]); }
-						}
-						// local data 
-						else {
-							fes.GetElementDofs(ep, dofs2); 
-							psi2.SetSize(dofs2.Size()); 
-							for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(0, a, dofs2[i]); }						
-						}
-						elmat.AddMult(psi2, rhs, -dot); 	
-					}
-					#ifdef INFLOW_IN_SWEEP
-					else {
-						auto be = face_to_bdr_el.at(face_trans->ElementNo); 
-						auto &bdr_face_trans = *mesh.GetBdrFaceTransformations(be); 
-						mfem::BoundaryFlowIntegrator bdr_flow(inflow, Q, 1.0, 0.5);
-						mfem::Vector elvec; 
-						bdr_flow.AssembleRHSElementVect(el, bdr_face_trans, elvec);  
-						rhs -= elvec; 
-					}
-					#endif
 				}
 			}
 #else 

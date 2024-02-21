@@ -9,13 +9,16 @@ PWPhaseSpaceCoefficient::PWPhaseSpaceCoefficient(const mfem::Array<int> &attrs, 
 
 void PWPhaseSpaceCoefficient::SetState(const mfem::Vector &Omega_in, int g) {
 	for (auto &it : map) {
-		it.second->SetState(Omega_in, g); 
+		if (it.second) 
+			it.second->SetState(Omega_in, g); 
 	}
 }
 
 double PWPhaseSpaceCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {
 	const auto attr = trans.Attribute; 
-	return map.at(attr)->Eval(trans, ip); 
+	auto *ptr = map.at(attr); 
+	if (ptr) return ptr->Eval(trans, ip); 
+	else return 0.0; 
 }
 
 double FunctionGrayCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {

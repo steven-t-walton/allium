@@ -58,6 +58,28 @@ TEST(AngularQuadrature, GaussLegendre1D) {
 	}
 }
 
+TEST(AngularQuadrature, Reflection2D) {
+	const auto dim = 2; 
+	LevelSymmetricQuadrature quad(4,dim); 
+	mfem::Vector nor(dim); 
+	nor = 1.0; 
+
+	for (int angle=0; angle<quad.Size(); angle++) {
+		auto r = quad.GetReflectedAngleIndex(angle, nor); 
+	}
+}
+
+TEST(AngularQuadrature, Reflection3D) {
+	const auto dim = 3; 
+	LevelSymmetricQuadrature quad(4,dim); 
+	mfem::Vector nor(dim); 
+	nor = 1.0; 
+
+	for (int angle=0; angle<quad.Size(); angle++) {
+		auto r = quad.GetReflectedAngleIndex(angle, nor); 
+	}
+}
+
 TEST(DiscreteToMoment, Isotropic) {
 	LevelSymmetricQuadrature quad(4, 2); 
 	TransportVectorExtents psi_ext(1,quad.Size(), 1); 
