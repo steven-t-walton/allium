@@ -54,6 +54,7 @@ void SLISolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
 	double norm, r0; 
 	int i; 
 	converged = false; 
+	bool done = false; 
 	for (i=1; true;) {
 		// compute residual 
 		oper->Mult(x, r); 
@@ -77,16 +78,19 @@ void SLISolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
 			converged = true; 
 			final_iter = i; 
 		}
+		if (i >= max_iter or converged) {
+			done = true; 
+		}
+
 
 		if (prec) {
-			Monitor(i, norm, x, z, converged); 			
+			Monitor(i, norm, x, z, done); 			
 		} else {
-			Monitor(i, norm, x, r, converged); 
+			Monitor(i, norm, x, r, done); 
 		}
 
-		if (i >= max_iter or converged) {
-			break; 
-		}
+		if (done) { break; }
+
 		i++; 
 	}
 	final_iter = i; 
