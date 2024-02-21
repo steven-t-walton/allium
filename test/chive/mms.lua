@@ -44,7 +44,10 @@ function material_map(x,y,z)
 end 
 
 boundary_conditions = {
-	inflow = inflow_function
+	inflow = {
+		type = "inflow", 
+		value = inflow_function
+	}
 }
 
 function boundary_map(x,y,z)
