@@ -22,60 +22,15 @@ int AngularQuadrature::GetIndexForAngle(const mfem::Vector &angle) const
 	return std::distance(Omegas.begin(), it); 
 }
 
-void GetTangentVectors(const mfem::Vector &nor, mfem::DenseMatrix &tau) {
-	const auto dim = nor.Size(); 
-	if (dim != 2 and dim != 3) { MFEM_ABORT("only defined for dim=2 or dim=3"); }
-	tau.SetSize(dim, dim-1); 
-	if (dim==2) {
-		tau(0,0) = nor(1); 
-		tau(1,0) = -nor(0); 
-	}
-
-	else if (dim==3) {
-		mfem::Vector arb(dim); 
-		arb = 0.0; 
-		if (std::fabs(nor(0)) > 1e-14 or std::fabs(nor(1)) > 1e-14) {
-			arb(0) = nor(1); arb(1) = -nor(0); 
-		} else {
-			arb(1) = nor(2); arb(2) = -nor(1); 
-		}
-
-		mfem::Vector tau1(dim), tau2(dim); 
-		arb.cross3D(nor, tau1); 
-		tau1.cross3D(nor, tau2); 
-
-		double dot1 = tau1 * nor; 
-		double dot2 = tau2 * nor; 
-		MFEM_ASSERT(std::fabs(dot1) < 1e-14 and std::fabs(dot2) < 1e-14, "tangents not orthogonal to normal"); 
-		tau.SetCol(0, tau1); 
-		tau.SetCol(1, tau2); 
-	}
-}
-
 int AngularQuadrature::GetReflectedAngleIndex(int angle, const mfem::Vector &nor) const 
 {
 	const auto &Omega = GetOmega(angle); 
-	mfem::Vector rhs(dim); 
-	if (dim==1) {
-		rhs(0) = -Omega(0); 
+	mfem::Vector Omegap(Omega); 
+	double dot2 = 2*(Omega*nor); 
+	for (auto d=0; d<dim; d++) {
+		Omegap(d) -= dot2 * nor(d); 
 	}
-
-	else {
-		mfem::DenseMatrix tau; 
-		GetTangentVectors(nor, tau); 
-		mfem::DenseMatrix A(dim,dim); 
-		A.SetRow(0, nor); 
-		rhs(0) = -(Omega*nor); 
-
-		mfem::Vector t; 
-		for (auto d=0; d<dim-1; d++) {
-			tau.GetColumn(d, t); 
-			A.SetRow(d+1, t); 
-			rhs(d+1) = Omega * t; 
-		}
-		mfem::LinearSolve(A, rhs.GetData()); 		
-	}
-	return GetIndexForAngle(rhs); 
+	return GetIndexForAngle(Omegap); 
 }
 
 LevelSymmetricQuadrature::LevelSymmetricQuadrature(int _order, int _dim) 
