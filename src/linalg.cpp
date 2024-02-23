@@ -102,6 +102,7 @@ void FixedPointIterationSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 	double norm, r0; 
 	int i; 
 	converged = false; 
+	bool done = false; 
 	for (i=1; true; ) {
 		xold = x; 
 		oper->Mult(xold, x); 
@@ -122,10 +123,12 @@ void FixedPointIterationSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 			final_iter = i; 
 		}
 
-		Monitor(i, norm, x, r, converged); 
 		if (i >= max_iter or converged) {
-			break; 
+			done = true; 
 		}
+		Monitor(i, norm, x, r, done); 
+
+		if (done) { break; }
 		i++; 
 	}
 	final_iter = i; 
