@@ -227,6 +227,11 @@ void SundialsCallbackFunction(const char *module, const char *function, char *ms
 	}
 }
 
+void SundialsErrorFunction(int error_code, const char *module, const char *function, char *msg, void *user_data)
+{
+	
+} 
+
 }
 
 YAML::Emitter &operator<<(YAML::Emitter &out, sol::table &table) 
