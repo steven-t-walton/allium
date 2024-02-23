@@ -174,10 +174,10 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 				for (int a=0; a<Nomega; a++) {
 					const auto &Omega = quad.GetOmega(a); 
 					double dot = normal * Omega; 
-					if (dot >= 0) { // outflow => need to add edge to reflected angle 
+					if (dot < 0) { // outflow => need to add edge to reflected angle 
 						const auto reflect_idx = quad.GetReflectedAngleIndex(a, normal); 
-						const auto dof1 = row[0] * Nomega + a; 
-						const auto dof2 = row[0] * Nomega + reflect_idx; 
+						const auto dof1 = row[0] * Nomega + reflect_idx; 
+						const auto dof2 = row[0] * Nomega + a; 
 						edges.Append(dof1); 
 						edges.Append(dof2); 
 						edge_to_face_id.Append(r); 
@@ -415,9 +415,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				if (nbr_e == e) {
 					mfem::Vector psi2; 
 					const auto &elmat = *face_mat_view(fid, idx, idx); 
-					fes.GetElementDofs(nbr_e, dofs2); 
-					psi2.SetSize(dofs2.Size()); 
-					for (auto i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(0, nbr_a, dofs2[i]); }
+					psi2.SetSize(dofs.Size()); 
+					for (auto i=0; i<dofs.Size(); i++) { psi2(i) = psi_view(0, nbr_a, dofs[i]); }
 					elmat.AddMult(psi2, rhs, -dot);
 				} 
 
