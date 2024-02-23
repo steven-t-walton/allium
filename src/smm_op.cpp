@@ -20,19 +20,30 @@ void BlockDiffusionDiscretization::BackSolve(const mfem::Vector &g, const mfem::
 
 LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, const mfem::Vector &beta, 
-	bool scale_ldg_stabilization)
+	bool scale_ldg_stabilization, int reflect_bdr_attr)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
 	offsets[1] = vfes.GetVSize(); 
 	offsets[2] = fes.GetVSize(); 
 	offsets.PartialSum(); 
-	const auto dim = fes.GetMesh()->Dimension(); 
+
+	const auto &mesh = *fes.GetParMesh(); 
+	const auto &mesh_bdr_attributes = mesh.bdr_attributes; 
+	mfem::Array<int> marshak_bdr_attrs(mesh_bdr_attributes.Max()), reflect_bdr_attrs(mesh_bdr_attributes.Max()); 
+	marshak_bdr_attrs = 1; 
+	reflect_bdr_attrs = 0; 
+	if (reflect_bdr_attr > 0) {
+		marshak_bdr_attrs[reflect_bdr_attr-1] = 0; 
+		reflect_bdr_attrs[reflect_bdr_attr-1] = 1; 
+	}
+	const auto dim = mesh.Dimension(); 
 
 	mfem::ParBilinearForm Mtform(&vfes);
 	mfem::ProductCoefficient total3(3.0, total); 
 	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3)); 
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha)); 
+	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
+	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	auto Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
@@ -42,7 +53,7 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	mfem::ConstantCoefficient alpha_c(alpha/2); 
 	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha/2, false)); 
-	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
 	Maform.Assemble(); 
 	Maform.Finalize(); 
 	Ma = HypreParMatrixPtr(Maform.ParallelAssemble());
@@ -57,7 +68,7 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	} else {
 		Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta)); 		
 	}
-	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5)); 
+	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
 	Dform.Assemble(); 
 	Dform.Finalize(); 
 	D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
@@ -70,23 +81,34 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 
 IPDiffusionDiscretization::IPDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, double kappa, 
-	bool mip, bool scale_ip_stabilization)
+	bool mip, bool scale_ip_stabilization, int reflect_bdr_attr)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
 	offsets[1] = vfes.GetVSize(); 
 	offsets[2] = fes.GetVSize(); 
 	offsets.PartialSum(); 
-	const auto dim = fes.GetMesh()->Dimension(); 
 
 	if (kappa < 0) {
 		kappa *= -1.0 * pow(fes.GetOrder(0)+1, 2); 
 	}
 
+	const auto &mesh = *fes.GetParMesh(); 
+	const auto &mesh_bdr_attributes = mesh.bdr_attributes; 
+	mfem::Array<int> marshak_bdr_attrs(mesh_bdr_attributes.Max()), reflect_bdr_attrs(mesh_bdr_attributes.Max()); 
+	marshak_bdr_attrs = 1; 
+	reflect_bdr_attrs = 0; 
+	if (reflect_bdr_attr > 0) {
+		marshak_bdr_attrs[reflect_bdr_attr-1] = 0; 
+		reflect_bdr_attrs[reflect_bdr_attr-1] = 1; 
+	}
+	const auto dim = mesh.Dimension(); 
+
 	mfem::ParBilinearForm Mtform(&vfes);
 	mfem::ProductCoefficient total3(3.0, total); 
 	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3)); 
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha)); 
+	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
+	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	auto Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
@@ -99,7 +121,7 @@ IPDiffusionDiscretization::IPDiffusionDiscretization(mfem::ParFiniteElementSpace
 	mfem::Coefficient *coef = scale_ip_stabilization ? &diffco : nullptr; 
 	double limit = mip ? alpha/2 : 0.0; 
 	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(kappa, limit, coef)); 		
-	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
 	Maform.Assemble(); 
 	Maform.Finalize(); 
 	Ma = HypreParMatrixPtr(Maform.ParallelAssemble());
@@ -108,7 +130,7 @@ IPDiffusionDiscretization::IPDiffusionDiscretization(mfem::ParFiniteElementSpace
 	mfem::ConstantCoefficient neg_one(-1.0); 
 	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
 	Dform.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator); 
-	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5)); 
+	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
 	Dform.Assemble(); 
 	Dform.Finalize(); 
 	D = HypreParMatrixPtr(Dform.ParallelAssemble()); 

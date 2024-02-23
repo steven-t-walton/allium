@@ -432,6 +432,7 @@ int main(int argc, char *argv[]) {
 	// --- create parallel mesh --- 
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
 	mesh.ExchangeFaceNbrData(); // create parallel communication data needed for sweep 
+	mesh.SetAttributes(); 
 
 	// --- load algorithmic parameters --- 
 	sol::table driver = lua["driver"]; 
@@ -521,6 +522,10 @@ int main(int argc, char *argv[]) {
 	sol::table inner_solver_table; 
 	mfem::IterativeSolver *inner_it_solver = nullptr; 
 	if (accel_avail) {
+		if (not(dynamic_cast<FixedPointIterationSolver*>(outer_solver) 
+			or dynamic_cast<mfem::KINSolver*>(outer_solver))) {
+			MFEM_ABORT("must use fixed point-type solvers for moment methods"); 
+		}
 		sol::optional<sol::table> inner_solver_table_avail = accel_avail.value()["solver"]; 
 		if (inner_solver_table_avail) {
 			inner_solver_table = inner_solver_table_avail.value();
@@ -533,6 +538,10 @@ int main(int argc, char *argv[]) {
 		inner_it_solver = io::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	}
 	if (prec_avail) {
+		if (dynamic_cast<FixedPointIterationSolver*>(outer_solver) 
+			or dynamic_cast<mfem::KINSolver*>(outer_solver)) {
+			MFEM_ABORT("cannot use fixed point-type solvers for transport iteration"); 
+		}
 		sol::optional<sol::table> inner_solver_table_avail = prec_avail.value()["solver"]; 
 		if (inner_solver_table_avail) {
 			inner_solver_table = inner_solver_table_avail.value(); 
@@ -543,6 +552,12 @@ int main(int argc, char *argv[]) {
 		}
 		// can be nullptr if direct solver specified 
 		inner_it_solver = io::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
+	}
+	if (!accel_avail) {
+		if (dynamic_cast<FixedPointIterationSolver*>(outer_solver) 
+			or dynamic_cast<mfem::KINSolver*>(outer_solver)) {
+			MFEM_ABORT("cannot use fixed point-type solvers for transport iteration"); 
+		}
 	}
 	// generic operator in case inner solver is SuperLU or product operator etc 
 	mfem::Operator *inner_solver = inner_it_solver; 
@@ -625,8 +640,8 @@ int main(int argc, char *argv[]) {
 				marshak_bdr_attr = 1; 
 				dir_bdr_attr = 0; 
 				if (reflection_bdr_attr > 0) {
-					marshak_bdr_attr[reflection_bdr_attr] = 0; 
-					dir_bdr_attr[reflection_bdr_attr] = 1; 
+					marshak_bdr_attr[reflection_bdr_attr-1] = 0; 
+					dir_bdr_attr[reflection_bdr_attr-1] = 1; 
 				} 
 				// build MIP DSA operator
 				mfem::ParBilinearForm Dform(&fes); 
@@ -665,7 +680,7 @@ int main(int argc, char *argv[]) {
 			#ifdef MFEM_USE_SUPERLU
 				if (inner_it_solver) { MFEM_ABORT("only direct available for P1"); }
 				auto p1disc = std::unique_ptr<mfem::BlockOperator>(CreateP1DiffusionDiscretization(
-					fes, vfes, total, absorption, alpha)); 
+					fes, vfes, total, absorption, alpha, reflection_bdr_attr)); 
 				auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
 				slu_op = new mfem::SuperLURowLocMatrix(*mono); 
 				auto *slu = new mfem::SuperLUSolver(*slu_op); 
@@ -680,7 +695,8 @@ int main(int argc, char *argv[]) {
 			} 
 			else if (type == "ldgsa") {
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(false); 
-				dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta, scale_stabilization); 
+				dsa_mat = CreateLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, &beta, scale_stabilization, 
+					reflection_bdr_attr); 
 
 				if (inner_it_solver) {
 					amg = new mfem::HypreBoomerAMG(*dsa_mat); 
@@ -703,7 +719,7 @@ int main(int argc, char *argv[]) {
 			else if (type == "block ldgsa") {
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
 				block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
-					beta, scale_stabilization); 
+					beta, scale_stabilization, reflection_bdr_attr); 
 				const auto &S = block_disc->SchurComplement(); 
 
 				// iterative solve
@@ -732,7 +748,7 @@ int main(int argc, char *argv[]) {
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
 				bool lower_bound = prec_table["bound_stabilization_below"].get_or(true); 
 				block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
-					kappa, lower_bound, scale_stabilization); 
+					kappa, lower_bound, scale_stabilization, reflection_bdr_attr); 
 				const auto &S = block_disc->SchurComplement(); 
 
 				// iterative solve
@@ -852,7 +868,8 @@ int main(int argc, char *argv[]) {
 			} else {
 				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
 			}
-			block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta, scale_stabilization); 
+			block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta, 
+				scale_stabilization, reflection_bdr_attr); 
 			const auto &S = block_disc->SchurComplement(); 
 
 			// iterative solve
@@ -903,7 +920,8 @@ int main(int argc, char *argv[]) {
 			} else {
 				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
 			}
-			block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, stab_bound, scale_stabilization); 
+			block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, stab_bound, 
+				scale_stabilization, reflection_bdr_attr); 
 			const auto &S = block_disc->SchurComplement(); 
 
 			// iterative solve
@@ -949,13 +967,13 @@ int main(int argc, char *argv[]) {
 				if (consistent_avail.value() == false) { MFEM_ABORT("only consistent supported for P1"); }
 			}
 			auto p1disc = std::unique_ptr<mfem::BlockOperator>(CreateP1DiffusionDiscretization(
-				fes, vfes, total, absorption, alpha)); 
+				fes, vfes, total, absorption, alpha, reflection_bdr_attr)); 
 			auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
 			slu_op = new mfem::SuperLURowLocMatrix(*mono); 
 			auto *slu = new mfem::SuperLUSolver(*slu_op); 
 			slu->SetPrintStatistics(false); 
 
-			auto *source_op = new ConsistentSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha); 
+			auto *source_op = new ConsistentSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, reflection_bdr_attr); 
 			offsets = p1disc->RowOffsets(); // copy offsets 
 			block_x.Update(offsets); // set size of block_x 
 			// extract scalar flux, storing [J,phi] in block_x 
@@ -987,6 +1005,7 @@ int main(int argc, char *argv[]) {
 		auto *sundials = dynamic_cast<mfem::SundialsSolver*>(outer_solver);
 		if (sundials) {
 			KINSetInfoHandlerFn(sundials->GetMem(), io::SundialsCallbackFunction, &sundials_data); 
+			KINSetErrHandlerFn(sundials->GetMem(), io::SundialsErrorFunction, &sundials_data); 
 		}
 
 		MomentMethodIterationMonitor monitor(out, G, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 

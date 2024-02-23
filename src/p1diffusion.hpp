@@ -49,10 +49,10 @@ public:
 };
 
 mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.5); 
+		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.5, int reflect_bdr_attr=-1); 
 
 mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop); 
 
 mfem::HypreParMatrix *CreateLDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.25, mfem::Vector *beta=nullptr, 
-	bool scale_stabilization=false); 
+	bool scale_stabilization=false, int reflect_bdr_attr=-1); 
