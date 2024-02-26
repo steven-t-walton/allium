@@ -63,6 +63,9 @@ endif()
 if (NOT ${MFEM_USE_SUNDIALS})
 	message(WARNING "Anderson acceleration disabled when MFEM built without Sundials")
 endif()
+if (NOT ${MFEM_USE_GSLIB}) 
+	message(WARNING "some functionality disabled when MFEM built without GSLIB")
+endif()
 
 # find igraph 
 find_package(igraph REQUIRED)

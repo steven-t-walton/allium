@@ -1103,11 +1103,12 @@ int main(int argc, char *argv[]) {
 	// --- output to paraview --- 
 	sol::optional<sol::table> output_avail = lua["output"]; 
 	if (output_avail) {
+		out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
 		sol::table output = output_avail.value();
 		std::string output_name = output["name"]; 	
 		char output_name_resolve[PATH_MAX];
 		realpath(output_name.c_str(), output_name_resolve);  	
-		out << YAML::Key << "output" << YAML::Value << output_name_resolve; 
+		out << YAML::Key << "paraview location" << YAML::Value << output_name_resolve; 
 		mfem::ParGridFunction mesh_part(&fes0); 
 		for (int i=0; i<mesh_part.Size(); i++) { mesh_part[i] = rank; }
 		mfem::ParaViewDataCollection dc(output_name, &mesh); 
@@ -1117,6 +1118,141 @@ int main(int argc, char *argv[]) {
 		dc.RegisterField("total", &total_gf); 
 		dc.RegisterField("scattering", &scattering_gf); 
 		dc.Save(); 
+
+		sol::optional<sol::table> tracer_avail = output["tracer"]; 
+		if (tracer_avail) {
+		#ifdef MFEM_USE_GSLIB 
+			sol::table tracer = tracer_avail.value(); 
+			auto ntracers = tracer.size(); 
+			mfem::Vector pos(dim*ntracers); 
+			for (int i=0; i<ntracers; i++) {
+				sol::table tracer_pts = tracer[i+1]; 
+				for (int d=0; d<tracer_pts.size(); d++) {
+					pos(dim*i + d) = tracer_pts[d+1]; 
+				}
+			}
+			mfem::FindPointsGSLIB finder(MPI_COMM_WORLD);
+			mesh.EnsureNodes();  
+			finder.Setup(mesh); 
+			finder.FindPoints(pos, mfem::Ordering::byVDIM); 
+			const auto &gscodes = finder.GetCode(); 
+			mfem::Vector phi_tracer, Jtracer; 
+			finder.Interpolate(phi, phi_tracer); 
+			finder.Interpolate(J, Jtracer); 
+			out.SetDoublePrecision(16); 
+			out << YAML::Key << "tracer" << YAML::Value << YAML::BeginSeq; 
+			for (auto i=0; i<ntracers; i++) {
+				if (gscodes[i] == 2) {
+					if (mfem::Mpi::Root()) MFEM_WARNING("point " << i << " not found");
+					continue; 
+				}
+				out << YAML::BeginMap << YAML::Value << "position" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+				for (auto d=0; d<dim; d++) { out << pos(dim*i+d); }
+				out << YAML::EndSeq; 
+				out << YAML::Key << "phi" << YAML::Value << phi_tracer(i); 
+				out << YAML::Key << "current" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+				for (auto d=0; d<dim; d++) { out << Jtracer(ntracers*d + i); }
+				out << YAML::EndSeq; 
+				out << YAML::EndMap; 
+			}
+			out << YAML::EndSeq; 
+			finder.FreeData(); 
+			out.SetDoublePrecision(3); 
+		#else 
+			if (root) MFEM_WARNING("gslib required for tracer output"); 
+		#endif
+		}
+
+		sol::optional<sol::table> lineout_avail = output["lineout"]; 
+		if (lineout_avail) {
+		#ifdef MFEM_USE_GSLIB
+			out.SetDoublePrecision(16); 
+			sol::table lineout = lineout_avail.value(); 
+			int nlines = lineout.size(); 
+			out << YAML::Key << "lineout" << YAML::Value << YAML::BeginSeq; 
+			for (int nline=1; nline<=nlines; nline++) {
+				mfem::Vector start(dim), end(dim), dir(dim);
+				sol::table start_table = lineout[nline]["start_point"]; 
+				sol::table end_table = lineout[nline]["end_point"]; 
+				int npoints = lineout[nline]["num_points"];  
+				for (int d=0; d<dim; d++) {
+					start(d) = start_table[d+1]; 
+					end(d) = end_table[d+1]; 
+				}
+				subtract(end, start, dir); 
+				double L = dir.Norml2();
+				dir *= 1.0 / (npoints-1); 
+				double h = 1.0 / (npoints-1);  
+				mfem::Vector pts(npoints * dim); 
+				mfem::Vector t(npoints); 
+				auto pts_view = Kokkos::mdspan(pts.GetData(), npoints, dim); 
+				for (int n=0; n<npoints; n++) {
+					t(n) = h*n; 
+					for (int d=0; d<dim; d++) {
+						pts_view(n,d) = start(d) + dir(d) * n; 
+					}
+				}
+				mfem::FindPointsGSLIB finder(MPI_COMM_WORLD);
+				mesh.EnsureNodes();  
+				finder.Setup(mesh); 
+				finder.FindPoints(pts, mfem::Ordering::byVDIM); 
+				const auto &gscodes = finder.GetCode(); 
+				mfem::Vector phi_line, J_line; 
+				finder.Interpolate(phi, phi_line);
+				finder.Interpolate(J, J_line);  
+
+				out << YAML::BeginMap; 
+				// output direction of lineout 
+				out << YAML::Key << "dir" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+				for (auto d=0; d<dim; d++) { out << dir(d) / dir.Norml2(); }
+				out << YAML::EndSeq; 
+
+				// output parameterization of lineout t in [0,1] 
+				out << YAML::Key << "t" << YAML::Value << YAML::BeginSeq; 
+				for (auto n=0; n<npoints; n++) {
+					if (gscodes[n] == 2) {
+						if (root) MFEM_WARNING("lineout point " << n << " not found"); 
+						continue; 
+					}
+					out << t(n);
+				}
+				out << YAML::EndSeq; 
+				// output locations
+				std::array<std::string,3> axis_labels = {"x", "y", "z"}; 
+				for (auto d=0; d<dim; d++) {
+					out << YAML::Key << axis_labels[d] << YAML::Value << YAML::BeginSeq; 
+					for (auto i=0; i<npoints; i++) {
+						if (gscodes[i] == 2) continue; 
+						out << pts_view(i,d); 
+					}
+					out << YAML::EndSeq; 
+				}
+				// solution values 
+				out << YAML::Key << "scalar flux" << YAML::Value << YAML::BeginSeq; 
+				for (auto n=0; n<npoints; n++) {
+					if (gscodes[n] == 2) continue; 
+					out << phi_line(n); 
+				}
+				out << YAML::EndSeq;
+				out << YAML::Key << "current" << YAML::Value << YAML::BeginSeq;  
+				for (auto n=0; n<npoints; n++) {
+					if (gscodes[n] == 2) continue; 
+					out << YAML::Flow << YAML::BeginSeq; 
+					for (auto d=0; d<dim; d++) {
+						out << J_line(d * npoints + n); 
+					}
+					out << YAML::EndSeq; 
+				}
+				out << YAML::EndSeq; 
+				out << YAML::EndMap; 
+			}
+			out << YAML::EndSeq; 
+			out.SetDoublePrecision(3); 
+		#else 
+			if (root) MFEM_WARNING("gslib required for lineouts"); 
+		#endif
+		}
+		out << YAML::EndMap; // end output map 
 	}
 
 	// output wall clock time 
