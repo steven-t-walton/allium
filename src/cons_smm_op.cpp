@@ -5,8 +5,9 @@
 #include "mip.hpp"
 
 ConsistentSMMSourceOperator::ConsistentSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-		const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, double _alpha)
-	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha) 
+		const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, 
+		ConstTransportVectorView source_vec, double _alpha, int _reflect_bdr_attr)
+	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), reflect_bdr_attr(_reflect_bdr_attr)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
@@ -51,6 +52,16 @@ ConsistentSMMSourceOperator::ConsistentSMMSourceOperator(mfem::ParFiniteElementS
 	trace_vfes = std::make_unique<mfem::ParFiniteElementSpace>(&mesh, trace_coll.get(), dim); 
 	beta.SetSpace(trace_fes.get());
 	tensor.SetSpace(trace_vfes.get());  
+
+	const auto &mesh_bdr_attributes = mesh.bdr_attributes; 
+	marshak_bdr_attrs.SetSize(mesh_bdr_attributes.Max());
+	reflect_bdr_attrs.SetSize(mesh_bdr_attributes.Max()); 
+	marshak_bdr_attrs = 1; 
+	reflect_bdr_attrs = 0; 
+	if (reflect_bdr_attr > 0) {
+		marshak_bdr_attrs[reflect_bdr_attr-1] = 0; 
+		reflect_bdr_attrs[reflect_bdr_attr-1] = 1; 
+	}
 }
 
 void ConsistentSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
@@ -58,21 +69,17 @@ void ConsistentSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &so
 	mfem::BlockVector bv(source.GetData(), offsets); 
 	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 
 	SMMCorrectionTensorCoefficient T(fes, quad, psi_view);
-	ProjectClosuresToFaces(fes, quad, psi_view, alpha, beta, tensor); 
+	ProjectClosuresToFaces(fes, quad, psi_view, alpha, beta, tensor, reflect_bdr_attr); 
 
 	mfem::ParLinearForm fform(&fes, bv.GetBlock(1).GetData()); 
 	fform.AddInteriorFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta));
-	fform.AddBdrFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta)); 
-	// fform.AddInteriorFaceIntegrator(new CSMMFaceIntegrator0(fes, quad, psi_view, alpha)); 
-	// fform.AddBdrFaceIntegrator(new CSMMFaceIntegrator0(fes, quad, psi_view, alpha)); 
+	fform.AddBdrFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta), marshak_bdr_attrs); 
 	fform.Assemble(); 
 
 	mfem::ParLinearForm gform(&vfes, bv.GetBlock(0).GetData()); 
 	gform.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(T)); 
 	gform.AddInteriorFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
 	gform.AddBdrFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
-	// gform.AddBdrFaceIntegrator(new CSMMFaceIntegrator1(fes, quad, psi_view, alpha)); 
-	// gform.AddInteriorFaceIntegrator(new CSMMFaceIntegrator1(fes, quad, psi_view, alpha)); 
 	gform.Assemble(); 
 	gform *= 3.0; 
 
@@ -82,9 +89,9 @@ void ConsistentSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &so
 
 ConsistentLDGSMMSourceOperator::ConsistentLDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-	double _alpha, const mfem::Vector &beta, mfem::Coefficient *total)
+	double _alpha, const mfem::Vector &beta, mfem::Coefficient *total, int reflect_bdr_attr)
 	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), 
-	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha)
+	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha, reflect_bdr_attr)
 {
 	height = base_source_op.Height(); 
 	width = base_source_op.Width(); 
@@ -134,9 +141,9 @@ void ConsistentLDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector 
 
 ConsistentIPSMMSourceOperator::ConsistentIPSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-	double _alpha, mfem::Coefficient &total, double _kappa, bool mip, bool scale_ip_stabilization)
+	double _alpha, mfem::Coefficient &total, double _kappa, bool mip, bool scale_ip_stabilization, int reflect_bdr_attr)
 	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), kappa(_kappa),
-	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha)
+	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha, reflect_bdr_attr)
 {
 	height = base_source_op.Height(); 
 	width = base_source_op.Width(); 
@@ -182,9 +189,13 @@ void ConsistentIPSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &
 }
 
 void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const AngularQuadrature &quad, ConstTransportVectorView psi, 
-	double alpha, mfem::ParGridFunction &beta, mfem::ParGridFunction &tensor)
+	double alpha, mfem::ParGridFunction &beta, mfem::ParGridFunction &tensor, int reflect_bdr_attr)
 {
 	auto &mesh = *fes.GetParMesh(); 
+	std::unordered_map<int,int> face_to_bdr_el; 
+	for (auto i=0; i<mesh.GetNBE(); i++) {
+		face_to_bdr_el[mesh.GetBdrElementFaceIndex(i)] = i; 
+	}
 	std::unique_ptr<const mfem::Table> face_to_element(mesh.GetFaceToAllElementTable()); 
 	std::unique_ptr<const mfem::Table> element_to_face(mfem::Transpose(*face_to_element));  
 	const auto dim = mesh.Dimension(); 
@@ -201,11 +212,16 @@ void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const Angula
 		tensor_fes.GetElementVDofs(e, tensor_dof); 
 		const auto *faces = element_to_face->GetRow(e); 
 		for (auto f=0; f<element_to_face->RowSize(e); f++) {
+			bool reflect = false; 
 			const auto face = faces[f]; 
 			const auto &info = mesh.GetFaceInformation(face); 
 			mfem::FaceElementTransformations *trans; 
 			if (info.IsShared()) {
 				trans = mesh.GetSharedFaceTransformationsByLocalIndex(face, true); 
+			} if (info.IsBoundary()) {
+				const auto be = face_to_bdr_el[face]; 
+				trans = mesh.GetBdrFaceTransformations(be); 
+				reflect = trans->Attribute == reflect_bdr_attr; 
 			} else {
 				trans = mesh.GetFaceElementTransformations(face); 
 			}			
@@ -214,17 +230,19 @@ void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const Angula
 			const auto &tr_el = *beta_fes.GetTraceElement(face, mesh.GetFaceGeometry(face)); 
 			const auto &ir = tr_el.GetNodes(); 
 
+			const auto ip = mfem::Geometries.GetCenter(trans->GetGeometryType()); 
+			trans->SetAllIntPoints(&ip); 
+			if (dim==1) {
+				nor(0) = 2*trans->GetElement1IntPoint().x - 1.0;
+			} else {
+				mfem::CalcOrtho(trans->Jacobian(), nor); 				
+			}
+			nor.Set((keep_order ? 1.0 : -1.0)/nor.Norml2(), nor); 
+
 			mfem::IntegrationPoint eip; 
 			for (auto n=0; n<ir.GetNPoints(); n++) {
 				const auto &ip = ir.IntPoint(n); 
 				trans->SetAllIntPoints(&ip); 
-				if (dim==1) {
-					nor(0) = 2*trans->GetElement1IntPoint().x - 1.0;
-				} else {
-					mfem::CalcOrtho(trans->Jacobian(), nor); 				
-				}
-				nor.Set((keep_order ? 1.0 : -1.0)/nor.Norml2(), nor); 
-
 				if (keep_order) {
 					eip = trans->GetElement1IntPoint(); 
 				} else {
@@ -233,28 +251,35 @@ void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const Angula
 
 				psi_el.CalcShape(eip, shape); 
 
-				double val = 0.0, phi = 0.0, Jn = 0.0; 
-				mfem::Vector ten_val(dim); 
-				ten_val = 0.0; 
+				double b = 0.0, phi = 0.0, Jn = 0.0, dot2 = 0.0; 
+				mfem::Vector Pout(dim); 
+				Pout = 0.0; 
 				for (auto a=0; a<quad.Size(); a++) {
 					const auto &Omega = quad.GetOmega(a); 
 					double w = quad.GetWeight(a); 
 					double dot = Omega * nor; 
 					for (auto i=0; i<psi_dof.Size(); i++) { psi_local[i] = psi(0,a,psi_dof[i]); }
 					double psi_at_ip = shape * psi_local; 
-					val += (std::fabs(Omega * nor) - alpha) * psi_at_ip * w; 
-					phi += psi_at_ip * w; 
-					Jn += dot * psi_at_ip * w; 
+					b += (std::fabs(Omega * nor) - alpha) * psi_at_ip * w; // \int |Omega.n| psi dOmega 
+					phi += psi_at_ip * w; // \int psi dOmega 
+					Jn += dot * psi_at_ip * w; // \int Omega.n psi dOmega 
 					if (dot > 0) {
+						dot2 += dot*dot * psi_at_ip * w; // \int_{Omega.n>0} (Omega.n)^2 psi dOmega 
 						for (auto d=0; d<dim; d++) {
-							ten_val(d) += Omega(d) * dot * psi_at_ip * w; 
+							Pout(d) += Omega(d) * dot * psi_at_ip * w; // int_{Omega.n>0} Omega \otimes Omega n psi dOmega 
 						}
 					}
 				}
-				beta(beta_dof[local_face_id*tr_el.GetDof() + n]) = val; 
+				beta(beta_dof[local_face_id*tr_el.GetDof() + n]) = reflect ? 0.0 : b/2; 
 				for (auto d=0; d<dim; d++) {
+					double val; 
+					if (reflect) {
+						val = 2.0*dot2*nor(d) - nor(d)/3*phi - nor(d)/3/alpha*Jn;
+					} else {
+						val = Pout(d) - nor(d)/6*phi - nor(d)/6/alpha*Jn;
+					}
 					tensor(tensor_dof[local_face_id*tr_el.GetDof()*dim + n + d*tr_el.GetDof()]) 
-						= ten_val(d) - nor(d)/6*phi - nor(d)/6/alpha*Jn; 
+						= val; 
 				}
 			}
 		}

@@ -417,7 +417,7 @@ int main(int argc, char *argv[]) {
 	sol::function bdr_func = lua["boundary_map"]; 
 	for (int e=0; e<smesh.GetNBE(); e++) {
 		const mfem::Element &el = *smesh.GetBdrElement(e); 
-		int geom = smesh.GetBdrElementBaseGeometry(e);
+		int geom = smesh.GetBdrElementGeometry(e);
 		mfem::ElementTransformation &trans = *smesh.GetBdrElementTransformation(e); 
 		double c[3]; 
 		mfem::Vector cvec(c, dim);  
@@ -864,7 +864,7 @@ int main(int argc, char *argv[]) {
 			mfem::Operator *source_op; 
 			if (consistent) {
 				source_op = new ConsistentLDGSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, beta, 
-					scale_stabilization ? &total : nullptr); 
+					scale_stabilization ? &total : nullptr, reflection_bdr_attr); 
 			} else {
 				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
 			}
@@ -916,7 +916,7 @@ int main(int argc, char *argv[]) {
 			mfem::Operator *source_op; 
 			if (consistent) {
 				source_op = new ConsistentIPSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, total, kappa, 
-					stab_bound, scale_stabilization); 
+					stab_bound, scale_stabilization, reflection_bdr_attr); 
 			} else {
 				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
 			}
@@ -1105,19 +1105,25 @@ int main(int argc, char *argv[]) {
 	if (output_avail) {
 		out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
 		sol::table output = output_avail.value();
-		std::string output_name = output["name"]; 	
-		char output_name_resolve[PATH_MAX];
-		realpath(output_name.c_str(), output_name_resolve);  	
-		out << YAML::Key << "paraview location" << YAML::Value << output_name_resolve; 
-		mfem::ParGridFunction mesh_part(&fes0); 
-		for (int i=0; i<mesh_part.Size(); i++) { mesh_part[i] = rank; }
-		mfem::ParaViewDataCollection dc(output_name, &mesh); 
-		dc.RegisterField("phi", &phi); 
-		dc.RegisterField("J", &J); 
-		dc.RegisterField("partition", &mesh_part); 
-		dc.RegisterField("total", &total_gf); 
-		dc.RegisterField("scattering", &scattering_gf); 
-		dc.Save(); 
+
+		// write to paraview 
+		sol::optional<std::string> paraview_avail = output["paraview"]; 
+		if (paraview_avail) {
+			std::string output_name = paraview_avail.value(); 
+			char output_name_resolve[PATH_MAX];
+			realpath(output_name.c_str(), output_name_resolve);  	
+			out << YAML::Key << "paraview location" << YAML::Value << output_name_resolve; 
+			mfem::ParGridFunction mesh_part(&fes0); 
+			for (int i=0; i<mesh_part.Size(); i++) { mesh_part[i] = rank; }
+			mfem::ParaViewDataCollection dc(output_name, &mesh); 
+			dc.RegisterField("phi", &phi); 
+			dc.RegisterField("J", &J); 
+			dc.RegisterField("partition", &mesh_part); 
+			dc.RegisterField("total", &total_gf); 
+			dc.RegisterField("scattering", &scattering_gf); 
+			dc.Save(); 			
+		}
+
 
 		sol::optional<sol::table> tracer_avail = output["tracer"]; 
 		if (tracer_avail) {
@@ -1149,7 +1155,7 @@ int main(int argc, char *argv[]) {
 				out << YAML::BeginMap << YAML::Value << "position" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
 				for (auto d=0; d<dim; d++) { out << pos(dim*i+d); }
 				out << YAML::EndSeq; 
-				out << YAML::Key << "phi" << YAML::Value << phi_tracer(i); 
+				out << YAML::Key << "scalar flux" << YAML::Value << phi_tracer(i); 
 				out << YAML::Key << "current" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
 				for (auto d=0; d<dim; d++) { out << Jtracer(ntracers*d + i); }
 				out << YAML::EndSeq; 

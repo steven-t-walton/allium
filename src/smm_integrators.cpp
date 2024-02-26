@@ -366,7 +366,7 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 		el.CalcShape(eip, shape1); 
 		tr_el.CalcShape(ip, tr_shape1); 
 		double val = trans.Weight() * ip.weight * (tr_shape1 * beta_trace1); 
-		elvec.Add(-val/2, shape1); 
+		elvec.Add(-val, shape1); 
 	}
 }
 
@@ -486,8 +486,8 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 		tr_el.CalcShape(ip2, tr_shape2); // <-- should there be a second trace element?
 		double jump = (tr_shape1 * beta_trace1) - (tr_shape2 * beta_trace2); 
 		double val = trans.Weight() * ip.weight * jump; 
-		elvec1.Add(-val/2, shape1); 
-		elvec2.Add(val/2, shape2); 
+		elvec1.Add(-val, shape1); 
+		elvec2.Add(val, shape2); 
 	}
 }
 
