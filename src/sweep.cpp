@@ -139,9 +139,9 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 		auto row = std::span(face_to_element->GetRow(r), face_to_element->RowSize(r)); 
 		// compute normal 
 		const auto ref_geom = mesh.GetFaceGeometry(r);
-		const auto &int_rule = mfem::IntRules.Get(ref_geom, 1); 
+		const auto &ip = mfem::Geometries.GetCenter(ref_geom); 
 		auto *trans = mesh.GetFaceElementTransformations(r); 
-		trans->SetAllIntPoints(&int_rule[0]); 
+		trans->SetAllIntPoints(&ip);
 		mfem::Vector normal(normals, r*dim, dim); // normal vector 
 		if (dim==1) {
 			normal(0) = 2*trans->GetElement1IntPoint().x - 1.0;
