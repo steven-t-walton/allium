@@ -79,10 +79,10 @@ TEST_F(ProjectBetaTest, Quadratic) {
 	};
 	FunctionGrayCoefficient angular_coef(angular); 
 	ProjectClosures(angular_coef, 8); 
-	beta -= 0.041666666666666664; 
+	beta -= 0.041666666666666664/2; 
 	double E1 = beta.Norml2(); 
 	ProjectClosures(angular_coef, 16); 
-	beta -= 0.041666666666666664; 
+	beta -= 0.041666666666666664/2; 
 	double E2 = beta.Norml2(); 
 	int N1 = 40, N2 = 144; 
 	auto ooa = log(E1/E2)/log(N2/N1); 
@@ -151,7 +151,7 @@ TEST(ZerothLFI, ThreeD) {
 	mfem::ParGridFunction beta(&tr_fes), tensor(&tr_vfes); 
 	auto angle_space = [](const mfem::Vector &x, const mfem::Vector &Omega) {
 		return (sin(M_PI*x(0))*sin(M_PI*x(1))*sin(M_PI*x(2))
-			+ (Omega(0) + Omega(1) + Omega(2))*sin(2*M_PI*x(0))*sin(2*M_PI*x(1))*sin(2*M_PI*x(1)) 
+			+ (Omega(0) + Omega(1) + Omega(2))*sin(2*M_PI*x(0))*sin(2*M_PI*x(1))*sin(2*M_PI*x(2)) 
 			+ (Omega(0)*Omega(0)+Omega(1)*Omega(1))*sin(3*M_PI*(x(0)+.05)/1.1)*sin(3*M_PI*(x(1)+.05)/1.1)*sin(3*M_PI*(x(2)+.05)/1.1))/4/M_PI; 
 	};
 	FunctionGrayCoefficient angle_space_coef(angle_space); 
