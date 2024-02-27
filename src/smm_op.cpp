@@ -156,8 +156,8 @@ void InverseBlockDiffusionOperator::Mult(const mfem::Vector &b, mfem::Vector &x)
 BlockDiffusionSMMSourceOperator::BlockDiffusionSMMSourceOperator(
 	mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, PhaseSpaceCoefficient &source_coef, 
-	PhaseSpaceCoefficient &inflow_coef, double _alpha)
-	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha)
+	PhaseSpaceCoefficient &inflow_coef, double _alpha, int reflect_bdr_attr)
+	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), reflect_bdr_attr(reflect_bdr_attr)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
@@ -167,6 +167,17 @@ BlockDiffusionSMMSourceOperator::BlockDiffusionSMMSourceOperator(
 
 	width = TotalExtent(psi_ext); 
 	height = offsets.Last(); 
+
+	const auto &mesh = *fes.GetParMesh(); 
+	const auto &bdr_attrs = mesh.bdr_attributes; 
+	marshak_bdr_attrs.SetSize(bdr_attrs.Max()); 
+	reflect_bdr_attrs.SetSize(bdr_attrs.Max()); 
+	marshak_bdr_attrs = 1; 
+	reflect_bdr_attrs = 0; 
+	if (reflect_bdr_attr > 0) {
+		marshak_bdr_attrs[reflect_bdr_attr] = 0; 
+		reflect_bdr_attrs[reflect_bdr_attr] = 1; 
+	} 
 
 	const auto dim = fes.GetMesh()->Dimension(); 
 	Q0.SetSize(fes.GetVSize()); 
@@ -217,7 +228,7 @@ void BlockDiffusionSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector
 	mfem::ParLinearForm fform(&fes, bv.GetBlock(1).GetData()); 
 	mfem::ProductCoefficient bdr_coef_f(-0.5, beta); 
 	// fform.AddBdrFaceIntegrator(new mfem::BoundaryLFIntegrator(bdr_coef_f, 2, 1)); 
-	fform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryLFIntegrator(bdr_coef_f, *fes.FEColl(), 2, 1)); 
+	fform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryLFIntegrator(bdr_coef_f, *fes.FEColl(), 2, 1), marshak_bdr_attrs); 
 	fform.Assemble(); 
 
 	mfem::ParLinearForm gform(&vfes, bv.GetBlock(0).GetData()); 

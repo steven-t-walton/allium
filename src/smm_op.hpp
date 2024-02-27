@@ -59,13 +59,15 @@ private:
 	const AngularQuadrature &quad; 
 	const TransportVectorExtents &psi_ext; 
 	double alpha; 
+	int reflect_bdr_attr; 
+	mutable mfem::Array<int> marshak_bdr_attrs, reflect_bdr_attrs; 
 
 	mfem::Array<int> offsets; 
 	mfem::Vector Q0, Q1; 
 public:
 	BlockDiffusionSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 		const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, 
-		PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, double _alpha); 
+		PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, double _alpha, int reflection_bdr_attr=-1); 
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
 	const mfem::Array<int> &GetOffsets() const { return offsets; }
 };
