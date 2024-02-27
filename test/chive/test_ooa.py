@@ -26,9 +26,9 @@ err_phi1, err_J1 = Run(args.Ne)
 err_phi2, err_J2 = Run(2*args.Ne)
 
 phi_ooa = math.log2(err_phi1 / err_phi2)
-print(f'phi = {phi_ooa:.3f}')
+print(f'phi = {phi_ooa:.3f} ({err_phi1:.3e}, {err_phi2:.3e})')
 assert(math.fabs(phi_ooa - args.phi_order) < 0.2)
 
 J_ooa = math.log2(err_J1 / err_J2)
-print(f'J = {J_ooa:.3f}')
+print(f'J = {J_ooa:.3f} ({err_J1:.3e}, {err_J2:.3e})')
 assert(math.fabs(J_ooa - args.J_order) < 0.2)

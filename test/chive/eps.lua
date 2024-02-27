@@ -16,11 +16,18 @@ boundary_conditions = {
 	vacuum = {
 		type = "inflow", 
 		value = 0
+	}, 
+	reflective = {
+		type = "reflective"
 	}
 }
 
 function boundary_map(x,y,z)
-	return "vacuum"
+	if (x==1.0 or y==1.0) then 
+		return "reflective"
+	else
+		return "vacuum"
+	end
 end 
 
 driver = {

@@ -47,17 +47,21 @@ boundary_conditions = {
 	inflow = {
 		type = "inflow", 
 		value = inflow_function
+	},
+	reflect = {
+		type = "reflective"
 	}
 }
 
 function boundary_map(x,y,z)
-	return "inflow"
+	if (x==0.5) then return "reflect" else return "inflow" end
+	-- return "inflow"
 end 
 
 Ne = 20
 mesh = {
-	num_elements = {Ne,Ne},
-	extents = {1,1} 
+	num_elements = {Ne//2,Ne},
+	extents = {0.5,1} 
 }
 
 driver = {
@@ -68,4 +72,8 @@ driver = {
 		abstol = 1e-10, 
 		max_iter = 50
 	}
+}
+
+output = {
+	paraview = "solution"
 }
