@@ -866,7 +866,7 @@ int main(int argc, char *argv[]) {
 				source_op = new ConsistentLDGSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, beta, 
 					scale_stabilization ? &total : nullptr, reflection_bdr_attr); 
 			} else {
-				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
+				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha, reflection_bdr_attr); 				
 			}
 			block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta, 
 				scale_stabilization, reflection_bdr_attr); 
@@ -1029,7 +1029,7 @@ int main(int argc, char *argv[]) {
 
 		// compute "consistency" between SN and moment solution 
 		// for scalar flux and current 
-		J.MakeRef(&vfes, block_x.GetBlock(0), 0); 
+		J = block_x.GetBlock(0); 
 		mfem::Vector x_sn(moments_size); 
 		Dlin_aniso.Mult(psi, x_sn); 
 		mfem::ParGridFunction phi_sn(&fes, x_sn, 0); 
@@ -1208,39 +1208,28 @@ int main(int argc, char *argv[]) {
 				finder.Interpolate(J, J_line);  
 
 				out << YAML::BeginMap; 
-				// output direction of lineout 
-				out << YAML::Key << "dir" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
-				for (auto d=0; d<dim; d++) { out << dir(d) / dir.Norml2(); }
-				out << YAML::EndSeq; 
-
-				// output parameterization of lineout t in [0,1] 
-				out << YAML::Key << "t" << YAML::Value << YAML::BeginSeq; 
-				for (auto n=0; n<npoints; n++) {
-					if (gscodes[n] == 2) {
-						if (root) MFEM_WARNING("lineout point " << n << " not found"); 
+				// output locations
+				out << YAML::Key << "x" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+				for (auto i=0; i<npoints; i++) {
+					if (gscodes[i] == 2) {
+						if (root) MFEM_WARNING("lineout point " << i << " not found"); 
 						continue; 
 					}
-					out << t(n);
-				}
-				out << YAML::EndSeq; 
-				// output locations
-				std::array<std::string,3> axis_labels = {"x", "y", "z"}; 
-				for (auto d=0; d<dim; d++) {
-					out << YAML::Key << axis_labels[d] << YAML::Value << YAML::BeginSeq; 
-					for (auto i=0; i<npoints; i++) {
-						if (gscodes[i] == 2) continue; 
-						out << pts_view(i,d); 
+					out << YAML::Flow << YAML::BeginSeq; 
+					for (auto d=0; d<dim; d++) {
+						out << pts_view(i,d); 						
 					}
 					out << YAML::EndSeq; 
 				}
+				out << YAML::EndSeq; 
 				// solution values 
-				out << YAML::Key << "scalar flux" << YAML::Value << YAML::BeginSeq; 
+				out << YAML::Key << "scalar flux" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
 				for (auto n=0; n<npoints; n++) {
 					if (gscodes[n] == 2) continue; 
 					out << phi_line(n); 
 				}
 				out << YAML::EndSeq;
-				out << YAML::Key << "current" << YAML::Value << YAML::BeginSeq;  
+				out << YAML::Key << "current" << YAML::Value << YAML::Flow << YAML::BeginSeq;  
 				for (auto n=0; n<npoints; n++) {
 					if (gscodes[n] == 2) continue; 
 					out << YAML::Flow << YAML::BeginSeq; 
