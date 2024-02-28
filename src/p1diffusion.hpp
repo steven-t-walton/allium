@@ -12,9 +12,9 @@ private:
 
 	mfem::Vector shape1, shape2, nor; 
 public:
-	PenaltyIntegrator(double _kappa, bool _scale) 
-		: kappa(_kappa), scale(_scale) {
-	}
+	PenaltyIntegrator(double _kappa, bool _scale, mfem::Coefficient *d=nullptr) 
+		: kappa(_kappa), scale(_scale), D(d)
+	{ }
 	PenaltyIntegrator(double _kappa, double _limit, mfem::Coefficient *d=nullptr) 
 		: kappa(_kappa), scale(true), limit(_limit), D(d)
 	{ }
