@@ -8,7 +8,7 @@
 #include "p1diffusion.hpp"
 #include "sweep.hpp"
 #include "transport_op.hpp"
-#include "smm_op.hpp"
+#include "block_smm_op.hpp"
 #include "cons_smm_op.hpp"
 #include "phase_coefficient.hpp"
 #include "comment_stream.hpp"
@@ -718,7 +718,7 @@ int main(int argc, char *argv[]) {
 			}
 			else if (type == "block ldgsa") {
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
-				block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
+				block_disc = new BlockLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
 					beta, scale_stabilization, reflection_bdr_attr); 
 				const auto &S = block_disc->SchurComplement(); 
 
@@ -747,7 +747,7 @@ int main(int argc, char *argv[]) {
 				double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
 				bool lower_bound = prec_table["bound_stabilization_below"].get_or(true); 
-				block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
+				block_disc = new BlockIPDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
 					kappa, lower_bound, scale_stabilization, reflection_bdr_attr); 
 				const auto &S = block_disc->SchurComplement(); 
 
@@ -868,7 +868,7 @@ int main(int argc, char *argv[]) {
 			} else {
 				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha, reflection_bdr_attr); 				
 			}
-			block_disc = new LDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta, 
+			block_disc = new BlockLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta, 
 				scale_stabilization, reflection_bdr_attr); 
 			const auto &S = block_disc->SchurComplement(); 
 
@@ -920,7 +920,7 @@ int main(int argc, char *argv[]) {
 			} else {
 				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha); 				
 			}
-			block_disc = new IPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, stab_bound, 
+			block_disc = new BlockIPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, stab_bound, 
 				scale_stabilization, reflection_bdr_attr); 
 			const auto &S = block_disc->SchurComplement(); 
 

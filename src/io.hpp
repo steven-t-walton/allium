@@ -3,7 +3,7 @@
 #include "mfem.hpp"
 #include "sol/sol.hpp"
 #include "yaml-cpp/yaml.h"
-#include "smm_op.hpp"
+#include "block_smm_op.hpp"
 
 namespace io 
 {

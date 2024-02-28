@@ -5,7 +5,7 @@
 #include "transport_op.hpp"
 #include "sweep.hpp"
 #include "p1diffusion.hpp"
-#include "smm_op.hpp"
+#include "block_smm_op.hpp"
 
 TEST(DGTraceColl, Quad) {
 	auto mesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
@@ -379,7 +379,7 @@ std::tuple<double,double> LDGSMMError(int Ne, int fe_order, bool scale_stabiliza
 	for (auto d=0; d<dim; d++) { beta(d) = d+1; }
 	mfem::Coefficient *coef = scale_stabilization ? &total_coef : nullptr; 
 	ConsistentLDGSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha, beta, coef);
-	LDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta, scale_stabilization); 
+	BlockLDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta, scale_stabilization); 
 	const auto &S = ldg.SchurComplement(); 
 
 	mfem::CGSolver solver(MPI_COMM_WORLD); 
@@ -537,7 +537,7 @@ std::tuple<double,double> IPSMMError(int Ne, int fe_order, bool scale_stabilizat
 	ConsistentIPSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_view, alpha, total_coef, 
 		-1.0, 
 		scale_stabilization, scale_stabilization);
-	IPDiffusionDiscretization ip(fes, vfes, total_coef, absorption_coef, alpha, -1.0, scale_stabilization, scale_stabilization); 
+	BlockIPDiffusionDiscretization ip(fes, vfes, total_coef, absorption_coef, alpha, -1.0, scale_stabilization, scale_stabilization); 
 	const auto &S = ip.SchurComplement(); 
 
 	mfem::CGSolver solver(MPI_COMM_WORLD); 

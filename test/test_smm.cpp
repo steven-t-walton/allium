@@ -3,7 +3,7 @@
 #include "smm_integrators.hpp"
 #include "phase_coefficient.hpp"
 #include "linalg.hpp"
-#include "smm_op.hpp"
+#include "block_smm_op.hpp"
 #include "sweep.hpp"
 #include "transport_op.hpp"
 
@@ -194,7 +194,7 @@ std::tuple<double,double> IndependentLDGSMMError(int Ne, int fe_order) {
 	BlockDiffusionSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_coef, psi_coef, alpha); 
 	mfem::Vector beta(dim); 
 	for (auto d=0; d<dim; d++) { beta(d) = d+1; }
-	LDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta); 
+	BlockLDGDiffusionDiscretization ldg(fes, vfes, total_coef, absorption_coef, alpha, beta); 
 	const auto &S = ldg.SchurComplement(); 
 
 	// solve schur complement 
@@ -344,7 +344,7 @@ std::tuple<double,double> IPSMMError(int Ne, int fe_order) {
 	BlockDiffusionSMMSourceOperator source_op(fes, vfes, quad, psi_ext, source_coef, psi_coef, alpha); 
 	mfem::Vector beta(dim); 
 	for (auto d=0; d<dim; d++) { beta(d) = d+1; }
-	IPDiffusionDiscretization ip(fes, vfes, total_coef, absorption_coef, alpha); 
+	BlockIPDiffusionDiscretization ip(fes, vfes, total_coef, absorption_coef, alpha); 
 	const auto &S = ip.SchurComplement(); 
 
 	// solve schur complement 

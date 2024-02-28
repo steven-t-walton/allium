@@ -1,4 +1,4 @@
-#include "smm_op.hpp"
+#include "block_smm_op.hpp"
 #include "p1diffusion.hpp"
 #include "linalg.hpp"
 #include "mip.hpp"
@@ -18,7 +18,7 @@ void BlockDiffusionDiscretization::BackSolve(const mfem::Vector &g, const mfem::
 	iMt->Mult(tmp_elim_vec, J); 
 }
 
-LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+BlockLDGDiffusionDiscretization::BlockLDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, const mfem::Vector &beta, 
 	bool scale_ldg_stabilization, int reflect_bdr_attr)
 {
@@ -79,7 +79,7 @@ LDGDiffusionDiscretization::LDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	S = HypreParMatrixPtr(mfem::ParAdd(DiMtDT.get(), Ma.get())); 
 }
 
-IPDiffusionDiscretization::IPDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+BlockIPDiffusionDiscretization::BlockIPDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, double kappa, 
 	bool mip, bool scale_ip_stabilization, int reflect_bdr_attr)
 {
