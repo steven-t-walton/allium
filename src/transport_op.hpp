@@ -58,6 +58,41 @@ public:
 	auto &GetStopWatch() const { return timer; }
 };
 
+class MomentMethodFixedPointOperator : public mfem::Operator {
+private:
+	const mfem::Operator &D, &Linv, &S, &moment; 
+	const mfem::Vector &source;  
+	mutable mfem::Vector psi;
+	mutable mfem::StopWatch total_timer, sweep_timer, moment_timer; 
+public:
+	MomentMethodFixedPointOperator(const mfem::Operator &_D, const mfem::Operator &_Linv, 
+		const mfem::Operator &_S, const mfem::Operator &_moment, const mfem::Vector &_source, mfem::Vector &_psi)
+		: D(_D), Linv(_Linv), S(_S), moment(_moment), source(_source), mfem::Operator(_moment.Height())
+	{
+		psi.MakeRef(_psi, 0, _psi.Size()); 
+	}
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const {
+		total_timer.Clear(); total_timer.Start(); 
+		S.Mult(x, y); 
+		D.MultTranspose(y, psi); 
+		psi += source; 
+
+		sweep_timer.Clear(); sweep_timer.Start(); 
+		Linv.Mult(psi, psi); 
+		sweep_timer.Stop(); 
+
+		moment_timer.Clear(); moment_timer.Start(); 
+		moment.Mult(psi, y); 
+		moment_timer.Stop(); 
+
+		total_timer.Stop(); 
+	}
+
+	auto &TotalTimer() const { return total_timer; }
+	auto &SweepTimer() const { return sweep_timer; }
+	auto &MomentTimer() const { return moment_timer; }
+};
+
 class DiscreteToMoment : public mfem::Operator {
 private:
 	const AngularQuadrature &quad; 
