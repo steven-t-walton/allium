@@ -190,6 +190,110 @@ void DGJumpAverageIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &tr_f
 	elmat *= alpha; 
 }
 
+void DGVectorJumpAverageIntegrator::AssembleFaceMatrix(
+	const mfem::FiniteElement &tr_fe1, const mfem::FiniteElement &tr_fe2,
+	const mfem::FiniteElement &te_fe1, const mfem::FiniteElement &te_fe2, 
+	mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat)
+{
+	int dim, te_ndof1, te_ndof2, te_ndofs, tr_ndof1, tr_ndof2, tr_ndofs; 
+	dim = tr_fe1.GetDim(); 
+	nor.SetSize(dim); 
+	tr_ndof1 = tr_fe1.GetDof(); 
+	te_ndof1 = te_fe1.GetDof(); 
+	tr_shape1.SetSize(tr_ndof1); 
+	te_shape1.SetSize(te_ndof1); 
+
+	if (trans.Elem2No >= 0) {
+		tr_ndof2 = tr_fe2.GetDof(); 
+		te_ndof2 = te_fe2.GetDof(); 
+		tr_shape2.SetSize(tr_ndof2); 
+		te_shape2.SetSize(te_ndof2); 
+	} 
+	else {
+		te_ndof2 = 0; 
+		tr_ndof2 = 0; 
+	}
+
+	te_ndofs = te_ndof1 + te_ndof2; 
+	tr_ndofs = tr_ndof1 + tr_ndof2; 
+
+	elmat.SetSize(dim*te_ndofs, tr_ndofs); 
+	elmat = 0.0; 
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		int order;
+		if (te_ndof2)
+		{
+		   order = 2*std::max(te_fe1.GetOrder(), te_fe2.GetOrder());
+		}
+		else
+		{
+		   order = 2*te_fe1.GetOrder();
+		}
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), order);
+	}
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const mfem::IntegrationPoint &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		const mfem::IntegrationPoint &eip1 = trans.GetElement1IntPoint(); 
+		const mfem::IntegrationPoint &eip2 = trans.GetElement2IntPoint(); 	
+
+		double w = ip.weight; 
+		if (te_ndof2) w /= 2; 
+
+		te_fe1.CalcShape(eip1, te_shape1); 
+		tr_fe1.CalcShape(eip1, tr_shape1); 
+
+		if (dim==1) {
+			nor(0) = 2*trans.GetElement1IntPoint().x - 1.0;
+		} else {
+			mfem::CalcOrtho(trans.Jacobian(), nor); 
+		}
+
+		// [v.n] { phi }
+		for (int d=0; d<dim; d++) {
+			for (int i=0; i<te_ndof1; i++) {
+				for (int j=0; j<tr_ndof1; j++) {
+					elmat(i+d*te_ndof1,j) += te_shape1(i) * nor(d) * tr_shape1(j) * w; 
+				}
+			}
+		}
+
+		if (te_ndof2) {
+			te_fe2.CalcShape(eip2, te_shape2); 
+			tr_fe2.CalcShape(eip2, tr_shape2); 
+
+			for (int d=0; d<dim; d++) {
+				for (int i=0; i<te_ndof1; i++) {
+					for (int j=0; j<tr_ndof2; j++) {
+						elmat(i+d*te_ndof1, tr_ndof1+j) += te_shape1(i) * nor(d) * tr_shape2(j) * w; 
+					}
+				}
+			}
+
+			for (int d=0; d<dim; d++) {
+				for (int i=0; i<te_ndof2; i++) {
+					for (int j=0; j<tr_ndof1; j++) {
+						elmat(i+dim*te_ndof1+d*te_ndof2, j) -= te_shape2(i) * nor(d) * tr_shape1(j) * w; 
+					}
+				}
+			}
+
+			for (int d=0; d<dim; d++) {
+				for (int i=0; i<te_ndof2; i++) {
+					for (int j=0; j<tr_ndof2; j++) {
+						elmat(i+dim*te_ndof1+d*te_ndof2, j+tr_ndof1) -= te_shape2(i) * nor(d) * tr_shape2(j) * w; 
+					}
+				}
+			}
+		}
+	}
+	elmat *= alpha; 
+}
+
 void DGVectorJumpJumpIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 	mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat)
 {
@@ -387,15 +491,13 @@ mfem::HypreParMatrix *CreateLDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	mfem::ParBilinearForm Mtform(&vfes);
 	mfem::ProductCoefficient total3(3.0, total); 
 	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3));
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	auto Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
 	auto iMt = HypreParMatrixPtr(ElementByElementBlockInverse(vfes, *Mt)); 
 
 	mfem::ParBilinearForm Maform(&fes); 
-	mfem::ConstantCoefficient alpha_c(alpha/2); 
+	mfem::ConstantCoefficient alpha_c(alpha); 
 	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha/2, false)); 
 	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
@@ -413,8 +515,6 @@ mfem::HypreParMatrix *CreateLDGDiffusionDiscretization(mfem::ParFiniteElementSpa
 	} else {
 		Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(beta)); 		
 	}
-	Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(beta)); 
-	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
 	Dform.Assemble(); 
 	Dform.Finalize(); 
 	auto D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
