@@ -4,20 +4,9 @@
 #include "p1diffusion.hpp"
 #include "mip.hpp"
 
-ConsistentSMMSourceOperator::ConsistentSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-		const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, 
-		ConstTransportVectorView source_vec, double _alpha, int _reflect_bdr_attr)
-	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), reflect_bdr_attr(_reflect_bdr_attr)
+void FormTransportSourceMoments(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	const AngularQuadrature &quad, ConstTransportVectorView source_vec, mfem::Vector &Q0, mfem::Vector &Q1)
 {
-	offsets.SetSize(3); 
-	offsets[0] = 0; 
-	offsets[1] = vfes.GetVSize(); 
-	offsets[2] = fes.GetVSize(); 
-	offsets.PartialSum(); 
-
-	width = TotalExtent(psi_ext); 
-	height = offsets.Last(); 
-
 	const auto dim = fes.GetMesh()->Dimension(); 
 	Q0.SetSize(fes.GetVSize()); 
 	Q0 = 0.0; 
@@ -40,14 +29,36 @@ ConsistentSMMSourceOperator::ConsistentSMMSourceOperator(mfem::ParFiniteElementS
 			}
 		}
 	}
+}
+
+ConsistentSMMSourceOperatorBase::ConsistentSMMSourceOperatorBase(
+	mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, 
+	ConstTransportVectorView source_vec, double _alpha, int _reflect_bdr_attr)
+	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), reflect_bdr_attr(_reflect_bdr_attr)
+{
+	offsets.SetSize(3); 
+	offsets[0] = 0; 
+	offsets[1] = vfes.GetVSize(); 
+	offsets[2] = fes.GetVSize(); 
+	offsets.PartialSum(); 
+
+	width = TotalExtent(psi_ext); 
+	height = offsets.Last(); 
+	const auto dim = fes.GetMesh()->Dimension(); 
+
+	FormTransportSourceMoments(fes, vfes, quad, source_vec, Q0, Q1); 
 	Q1 *= 3.0; 
 
-	auto face_to_element = std::unique_ptr<const mfem::Table>(fes.GetParMesh()->GetFaceToAllElementTable()); 
+	auto &mesh = *fes.GetParMesh(); 
+	auto face_to_element = std::unique_ptr<const mfem::Table>(mesh.GetFaceToAllElementTable()); 
 	element_to_face = std::unique_ptr<const mfem::Table>(mfem::Transpose(*face_to_element)); 
+	for (auto i=0; i<mesh.GetNBE(); i++) {
+		face_to_bdr_el[mesh.GetBdrElementFaceIndex(i)] = i; 
+	}
 
 	if (fes.IsVariableOrder()) { MFEM_ABORT("variable order not supported for consistent SMM"); }
 	trace_coll = std::make_unique<DGTrace_FECollection>(fes.GetOrder(0), dim); 
-	auto &mesh = *fes.GetParMesh(); 
 	trace_fes = std::make_unique<mfem::ParFiniteElementSpace>(&mesh, trace_coll.get()); 
 	trace_vfes = std::make_unique<mfem::ParFiniteElementSpace>(&mesh, trace_coll.get(), dim); 
 	beta.SetSpace(trace_fes.get());
@@ -64,12 +75,13 @@ ConsistentSMMSourceOperator::ConsistentSMMSourceOperator(mfem::ParFiniteElementS
 	}
 }
 
-void ConsistentSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+void ConsistentSMMSourceOperatorBase::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
 {
 	mfem::BlockVector bv(source.GetData(), offsets); 
 	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 
 	SMMCorrectionTensorCoefficient T(fes, quad, psi_view);
-	ProjectClosuresToFaces(fes, quad, psi_view, alpha, beta, tensor, reflect_bdr_attr); 
+	SecondMomentTensorCoefficient P(fes, quad, psi_view); 
+	ComputeHalfRangeInterfaceTerms(psi_view, beta, tensor); 
 
 	mfem::ParLinearForm fform(&fes, bv.GetBlock(1).GetData()); 
 	fform.AddInteriorFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta));
@@ -77,7 +89,7 @@ void ConsistentSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &so
 	fform.Assemble(); 
 
 	mfem::ParLinearForm gform(&vfes, bv.GetBlock(0).GetData()); 
-	gform.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(T)); 
+	gform.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(P)); 
 	gform.AddInteriorFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
 	gform.AddBdrFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
 	gform.Assemble(); 
@@ -87,117 +99,10 @@ void ConsistentSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &so
 	gform += Q1; 
 }
 
-ConsistentLDGSMMSourceOperator::ConsistentLDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-	double _alpha, const mfem::Vector &beta, mfem::Coefficient *total, int reflect_bdr_attr)
-	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), 
-	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha, reflect_bdr_attr)
-{
-	height = base_source_op.Height(); 
-	width = base_source_op.Width(); 
-
-	const auto dim = quad.Dimension(); 
-	phi_ext = MomentVectorExtents(1,dim+1,fes.GetVSize()); 
-	moments.SetSize(TotalExtent(phi_ext)); 
-
-	mfem::ParBilinearForm F1form(&vfes); 
-	F1form.AddInteriorFaceIntegrator(new DGVectorJumpJumpIntegrator(-1.0/2/alpha)); 
-	F1form.Assemble(); 
-	F1form.Finalize(); 
-	F1 = HypreParMatrixPtr(F1form.ParallelAssemble()); 
-
-	mfem::ParMixedBilinearForm F2form(&vfes, &fes); 
-	F2form.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator(-1.0));
-	mfem::Coefficient *diffco = nullptr; 
-	if (total) {
-		diffco = new mfem::RatioCoefficient(1.0/3, *total); 
-		double kappa = pow(fes.GetOrder(0)+1,2); 
-		F2form.AddInteriorFaceIntegrator(new LDGTraceIntegrator(*diffco, beta, kappa, alpha/2)); 
-	} else {
-		F2form.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta));		
-	}
-	F2form.Assemble(); 
-	F2form.Finalize(); 
-	F2 = HypreParMatrixPtr(F2form.ParallelAssemble());   
-
-	if (diffco) delete diffco; 
-}
-
-void ConsistentLDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
-{
-	base_source_op.Mult(psi, source); 
-
-	mfem::BlockVector bv(source.GetData(), base_source_op.Offsets()); 
-
-	const auto dim = quad.Dimension(); 
-	DiscreteToMoment D(quad, psi_ext, phi_ext); 
-	D.Mult(psi, moments); 
-	mfem::Vector phi(moments, 0, fes.GetVSize()); 
-	mfem::Vector J(moments, fes.GetVSize(), dim*fes.GetVSize()); 
-	F1->Mult(1.0, J, 1.0, bv.GetBlock(0)); 
-	F2->Mult(1.0, J, 1.0, bv.GetBlock(1)); 
-	F2->MultTranspose(-1.0, phi, 1.0, bv.GetBlock(0)); 
-}
-
-ConsistentIPSMMSourceOperator::ConsistentIPSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-	double _alpha, mfem::Coefficient &total, double _kappa, bool mip, bool scale_ip_stabilization, int reflect_bdr_attr)
-	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), kappa(_kappa),
-	  base_source_op(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha, reflect_bdr_attr)
-{
-	height = base_source_op.Height(); 
-	width = base_source_op.Width(); 
-
-	if (kappa < 0.0) {
-		kappa *= -1.0 * pow(fes.GetOrder(0)+1, 2); 
-	} 
-
-	const auto dim = quad.Dimension(); 
-	phi_ext = MomentVectorExtents(1,dim+1,fes.GetVSize()); 
-	moments.SetSize(TotalExtent(phi_ext)); 
-
-	mfem::ParBilinearForm F1form(&vfes); 
-	F1form.AddInteriorFaceIntegrator(new DGVectorJumpJumpIntegrator(-1.0/2/alpha)); 
-	F1form.Assemble(); 
-	F1form.Finalize(); 
-	F1 = HypreParMatrixPtr(F1form.ParallelAssemble()); 
-
-	mfem::ParBilinearForm F2form(&fes); 
-	F2form.AddInteriorFaceIntegrator(new PenaltyIntegrator(-alpha/2, false)); 
-	mfem::RatioCoefficient diffco(1./3, total); 
-	mfem::Coefficient *coef = scale_ip_stabilization ? &diffco : nullptr; 
-	double limit = mip ? alpha/2 : 0.0; 
-	F2form.AddInteriorFaceIntegrator(new PenaltyIntegrator(kappa, limit, coef)); 
-	F2form.Assemble(); 
-	F2form.Finalize(); 
-	F2 = HypreParMatrixPtr(F2form.ParallelAssemble());   
-}
-
-void ConsistentIPSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
-{
-	base_source_op.Mult(psi, source); 
-
-	mfem::BlockVector bv(source.GetData(), base_source_op.Offsets()); 
-
-	const auto dim = quad.Dimension(); 
-	DiscreteToMoment D(quad, psi_ext, phi_ext); 
-	D.Mult(psi, moments); 
-	mfem::Vector phi(moments, 0, fes.GetVSize()); 
-	mfem::Vector J(moments, fes.GetVSize(), dim*fes.GetVSize()); 
-	F1->Mult(1.0, J, 1.0, bv.GetBlock(0)); 
-	F2->Mult(1.0, phi, 1.0, bv.GetBlock(1)); 
-}
-
-void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const AngularQuadrature &quad, ConstTransportVectorView psi, 
-	double alpha, mfem::ParGridFunction &beta, mfem::ParGridFunction &tensor, int reflect_bdr_attr)
+void ConsistentSMMSourceOperatorBase::ComputeHalfRangeInterfaceTerms(ConstTransportVectorView psi, 
+	mfem::ParGridFunction &beta, mfem::ParGridFunction &tensor) const
 {
 	auto &mesh = *fes.GetParMesh(); 
-	std::unordered_map<int,int> face_to_bdr_el; 
-	for (auto i=0; i<mesh.GetNBE(); i++) {
-		face_to_bdr_el[mesh.GetBdrElementFaceIndex(i)] = i; 
-	}
-	std::unique_ptr<const mfem::Table> face_to_element(mesh.GetFaceToAllElementTable()); 
-	std::unique_ptr<const mfem::Table> element_to_face(mfem::Transpose(*face_to_element));  
 	const auto dim = mesh.Dimension(); 
 	const auto &beta_fes = *beta.FESpace(); 
 	const auto &tensor_fes = *tensor.FESpace(); 
@@ -212,16 +117,17 @@ void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const Angula
 		tensor_fes.GetElementVDofs(e, tensor_dof); 
 		const auto *faces = element_to_face->GetRow(e); 
 		for (auto f=0; f<element_to_face->RowSize(e); f++) {
-			bool reflect = false; 
+			bool reflect = false, bdr = false; 
 			const auto face = faces[f]; 
 			const auto &info = mesh.GetFaceInformation(face); 
 			mfem::FaceElementTransformations *trans; 
 			if (info.IsShared()) {
 				trans = mesh.GetSharedFaceTransformationsByLocalIndex(face, true); 
 			} if (info.IsBoundary()) {
-				const auto be = face_to_bdr_el[face]; 
+				const auto be = face_to_bdr_el.at(face); 
 				trans = mesh.GetBdrFaceTransformations(be); 
 				reflect = trans->Attribute == reflect_bdr_attr; 
+				bdr = true; 
 			} else {
 				trans = mesh.GetFaceElementTransformations(face); 
 			}			
@@ -251,33 +157,31 @@ void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const Angula
 
 				psi_el.CalcShape(eip, shape); 
 
-				double b = 0.0, phi = 0.0, Jn = 0.0, dot2 = 0.0; 
+				double Jout = 0.0, dot2 = 0.0; 
 				mfem::Vector Pout(dim); 
 				Pout = 0.0; 
 				for (auto a=0; a<quad.Size(); a++) {
 					const auto &Omega = quad.GetOmega(a); 
 					double w = quad.GetWeight(a); 
 					double dot = Omega * nor; 
-					for (auto i=0; i<psi_dof.Size(); i++) { psi_local[i] = psi(0,a,psi_dof[i]); }
-					double psi_at_ip = shape * psi_local; 
-					b += (std::fabs(Omega * nor) - alpha) * psi_at_ip * w; // \int |Omega.n| psi dOmega 
-					phi += psi_at_ip * w; // \int psi dOmega 
-					Jn += dot * psi_at_ip * w; // \int Omega.n psi dOmega 
 					if (dot > 0) {
+						for (auto i=0; i<psi_dof.Size(); i++) { psi_local[i] = psi(0,a,psi_dof[i]); }
+						double psi_at_ip = shape * psi_local; 
 						dot2 += dot*dot * psi_at_ip * w; // \int_{Omega.n>0} (Omega.n)^2 psi dOmega 
 						for (auto d=0; d<dim; d++) {
 							Pout(d) += Omega(d) * dot * psi_at_ip * w; // int_{Omega.n>0} Omega \otimes Omega n psi dOmega 
 						}
+						Jout += dot * psi_at_ip * w; // \int_{Omega.n>0} Omega.n psi dOmega 
 					}
 				}
-				beta(beta_dof[local_face_id*tr_el.GetDof() + n]) = reflect ? 0.0 : b/2; 
+				beta(beta_dof[local_face_id*tr_el.GetDof() + n]) = Jout; 
 				for (auto d=0; d<dim; d++) {
 					double val; 
 					if (reflect) {
-						val = 2.0*dot2*nor(d) - nor(d)/3*phi - nor(d)/3/alpha*Jn;
+						val = 2.0*dot2*nor(d); 
 					} else {
-						val = Pout(d) - nor(d)/6*phi - nor(d)/6/alpha*Jn;
-					}
+						val = Pout(d); 
+					}							
 					tensor(tensor_dof[local_face_id*tr_el.GetDof()*dim + n + d*tr_el.GetDof()]) 
 						= val; 
 				}
@@ -287,4 +191,179 @@ void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const Angula
 
 	beta.ExchangeFaceNbrData(); 
 	tensor.ExchangeFaceNbrData(); 
+}
+
+ConsistentSMMSourceOperator::ConsistentSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+		const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, 
+		ConstTransportVectorView source_vec, double _alpha, int _reflect_bdr_attr)
+	: ConsistentSMMSourceOperatorBase(_fes, _vfes, _quad, _psi_ext, source_vec, _alpha, _reflect_bdr_attr)
+{
+	const auto dim = quad.Dimension(); 
+	phi_ext = MomentVectorExtents(1,dim+1,fes.GetVSize()); 
+	moments.SetSize(TotalExtent(phi_ext)); 
+
+	mfem::ParBilinearForm F11form(&vfes); 
+	F11form.AddInteriorFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/2/alpha)); 
+	F11form.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/2/alpha), marshak_bdr_attrs);
+	F11form.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs);  
+	F11form.Assemble(); 
+	F11form.Finalize(); 
+	F11 = HypreParMatrixPtr(F11form.ParallelAssemble()); 
+
+	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
+	mfem::ConstantCoefficient neg_one(-1.0); 
+	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
+	Dform.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator); 
+	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
+	Dform.Assemble(); 
+	Dform.Finalize(); 
+	D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
+
+	mfem::ParMixedBilinearForm F21form(&vfes, &fes); 
+	F21form.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator); 
+	F21form.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
+	F21form.Assemble(); 
+	F21form.Finalize(); 
+	F21 = HypreParMatrixPtr(F21form.ParallelAssemble()); 	
+
+	mfem::ParBilinearForm F22form(&fes); 
+	mfem::ConstantCoefficient alpha_c(alpha/2); 
+	F22form.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha/2, false)); 
+	F22form.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
+	F22form.Assemble(); 
+	F22form.Finalize(); 
+	F22 = HypreParMatrixPtr(F22form.ParallelAssemble()); 
+}
+
+void ConsistentSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+{
+	ConsistentSMMSourceOperatorBase::Mult(psi, source); 
+	mfem::BlockVector bv(source.GetData(), offsets); 
+
+	const auto dim = quad.Dimension(); 
+	DiscreteToMoment D(quad, psi_ext, phi_ext); 
+	D.Mult(psi, moments); 
+	mfem::Vector phi(moments, 0, fes.GetVSize()); 
+	mfem::Vector J(moments, fes.GetVSize(), dim*fes.GetVSize()); 
+
+	F11->Mult(1.0, J, 1.0, bv.GetBlock(0)); 
+	F21->Mult(1.0, J, 1.0, bv.GetBlock(1)); 
+	this->D->MultTranspose(-1.0, phi, 1.0, bv.GetBlock(0)); 
+	F22->Mult(1.0, phi, 1.0, bv.GetBlock(1)); 
+}
+
+ConsistentLDGSMMSourceOperator::ConsistentLDGSMMSourceOperator(const BlockLDGDiffusionDiscretization &_lhs, 
+	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec)
+	: lhs(_lhs), ConsistentSMMSourceOperatorBase(_lhs.fes, _lhs.vfes, _quad, _psi_ext, source_vec, _lhs.alpha, _lhs.reflect_bdr_attr)
+{
+	const auto dim = quad.Dimension(); 
+	phi_ext = MomentVectorExtents(1,dim+1,fes.GetVSize()); 
+	moments.SetSize(TotalExtent(phi_ext)); 
+
+	const auto &alpha = lhs.alpha; 
+	const bool is_half_range = lhs.Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
+
+	if (is_half_range) {
+		mfem::ParBilinearForm Mtform(&vfes);
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 		
+		Mtform.Assemble(); 
+		Mtform.Finalize();  
+		Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
+	}
+
+	mfem::ParBilinearForm Maform(&fes); 
+	mfem::ConstantCoefficient alpha_c(is_half_range ? alpha/2 : alpha); 
+	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha/2, false)); 
+	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
+	Maform.Assemble(); 
+	Maform.Finalize(); 
+	Ma = HypreParMatrixPtr(Maform.ParallelAssemble());
+
+	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
+	mfem::RatioCoefficient diffco(1.0/3, lhs.total); 
+	if (lhs.scale_ldg_stabilization) {
+		double kappa = pow(fes.GetOrder(0)+1, 2); 
+		Dform.AddInteriorFaceIntegrator(new LDGTraceIntegrator(diffco, lhs.beta, kappa, alpha/2)); 
+	} else {
+		Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&lhs.beta)); 		
+	}
+	if (is_half_range) {
+		Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), lhs.marshak_bdr_attrs); 		
+	}
+	Dform.Assemble(); 
+	Dform.Finalize(); 
+	D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
+}
+
+void ConsistentLDGSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+{
+	ConsistentSMMSourceOperatorBase::Mult(psi, source); 
+	mfem::BlockVector bv(source.GetData(), offsets); 
+
+	const auto dim = quad.Dimension(); 
+	DiscreteToMoment D(quad, psi_ext, phi_ext); 
+	D.Mult(psi, moments); 
+	mfem::Vector phi(moments, 0, fes.GetVSize()); 
+	mfem::Vector J(moments, fes.GetVSize(), dim*fes.GetVSize()); 
+	if (Mt) Mt->Mult(1.0, J, 1.0, bv.GetBlock(0)); 
+	this->D->Mult(1.0, J, 1.0, bv.GetBlock(1)); 
+	lhs.DT->Mult(-1.0, phi, 1.0, bv.GetBlock(0)); 
+	Ma->Mult(1.0, phi, 1.0, bv.GetBlock(1)); 
+}
+
+ConsistentIPSMMSourceOperator::ConsistentIPSMMSourceOperator(const BlockIPDiffusionDiscretization &_lhs, 
+	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec)
+	: lhs(_lhs), ConsistentSMMSourceOperatorBase(_lhs.fes, _lhs.vfes, _quad, _psi_ext, source_vec, _lhs.alpha, _lhs.reflect_bdr_attr)
+{
+	const auto dim = quad.Dimension(); 
+	phi_ext = MomentVectorExtents(1,dim+1,fes.GetVSize()); 
+	moments.SetSize(TotalExtent(phi_ext)); 
+
+	const auto &alpha = lhs.alpha;
+	const auto &kappa = lhs.kappa; 
+	const auto is_half_range = lhs.Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
+
+	if (is_half_range) {
+		mfem::ParBilinearForm Mtform(&vfes);
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 
+		Mtform.Assemble(); 
+		Mtform.Finalize();  
+		Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 		
+	}
+
+	mfem::ParBilinearForm Maform(&fes); 
+	mfem::ConstantCoefficient alpha_c(is_half_range ? alpha/2 : alpha); 
+	mfem::RatioCoefficient diffco(1./3, lhs.total); 
+	mfem::Coefficient *coef = lhs.scale_ip_stabilization ? &diffco : nullptr; 
+	double limit = lhs.mip ? alpha/2 : 0.0; 
+	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(kappa, limit, coef)); 		
+	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
+	Maform.Assemble(); 
+	Maform.Finalize(); 
+	Ma = HypreParMatrixPtr(Maform.ParallelAssemble());
+
+	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
+	Dform.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator); 
+	if (is_half_range) Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
+	Dform.Assemble(); 
+	Dform.Finalize(); 
+	D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
+}
+
+void ConsistentIPSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+{
+	ConsistentSMMSourceOperatorBase::Mult(psi, source); 
+	mfem::BlockVector bv(source.GetData(), offsets); 
+
+	const auto dim = quad.Dimension(); 
+	DiscreteToMoment D(quad, psi_ext, phi_ext); 
+	D.Mult(psi, moments); 
+	mfem::Vector phi(moments, 0, fes.GetVSize()); 
+	mfem::Vector J(moments, fes.GetVSize(), dim*fes.GetVSize()); 
+	if (Mt) Mt->Mult(1.0, J, 1.0, bv.GetBlock(0)); 
+	this->D->Mult(1.0, J, 1.0, bv.GetBlock(1)); 
+	lhs.DT->Mult(-1.0, phi, 1.0, bv.GetBlock(0)); 
+	Ma->Mult(1.0, phi, 1.0, bv.GetBlock(1));
 }

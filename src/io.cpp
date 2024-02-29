@@ -232,6 +232,17 @@ void SundialsErrorFunction(int error_code, const char *module, const char *funct
 	
 } 
 
+DiffusionBoundaryConditionType GetDiffusionBCType(sol::table &table, std::string key, std::string def) 
+{
+	auto bc_type = GetAndValidateOption<std::string>(table, key, {"full range", "half range"}, def); 
+	DiffusionBoundaryConditionType bc; 
+	if (bc_type == "half range") 
+		bc = DiffusionBoundaryConditionType::HALF_RANGE; 	
+	else if (bc_type == "full range") 
+		bc = DiffusionBoundaryConditionType::FULL_RANGE; 
+	return bc; 
+}
+
 }
 
 YAML::Emitter &operator<<(YAML::Emitter &out, sol::table &table) 

@@ -4,6 +4,7 @@
 #include "sol/sol.hpp"
 #include "yaml-cpp/yaml.h"
 #include "transport_op.hpp"
+#include "block_smm_op.hpp"
 
 namespace io 
 {
@@ -38,7 +39,34 @@ struct SundialsUserCallbackData {
 void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data); 
 void SundialsErrorFunction(int error_code, const char *module, const char *function, char *msg, void *user_data); 
 
+DiffusionBoundaryConditionType GetDiffusionBCType(sol::table &table, std::string key, std::string defaulted); 
+
+template<typename T> 
+T GetAndValidateOption(sol::table &table, std::string key, std::initializer_list<T> options, T def) 
+{
+	sol::optional<T> avail = table[key]; 
+	if (avail) {
+		const T res = avail.value(); 
+		bool valid = false; 
+		for (const auto &opt : options) {
+			if (res == opt) valid = true; 
+		}
+		if (!valid) {
+			std::stringstream ss; 
+			ss << "\"" << res << "\" not a valid input for key \"" << key << "\". Valid options are:";
+			for (const auto &opt : options) {
+				ss << " \"" << opt << "\""; 
+			}
+			MFEM_ABORT(ss.str()); 
+		}
+		return res; 	
+	}
+	else {
+		return def; 
+	}
 }
+
+} // end namespace io 
 
 // convenience function to print sol::table's into YAML maps 
 // calls parse::PrintSolTable 

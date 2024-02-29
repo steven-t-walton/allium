@@ -292,6 +292,69 @@ SMMCorrectionTensorCoefficient::~SMMCorrectionTensorCoefficient()
 	for (auto i=0; i<gfs.Size(); i++) { delete gfs[i]; }
 }
 
+SecondMomentTensorCoefficient::SecondMomentTensorCoefficient(
+	mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, ConstTransportVectorView _psi)
+	: fes(_fes), quad(_quad), psi(_psi), mfem::MatrixArrayCoefficient(_fes.GetMesh()->Dimension())
+{
+	const auto dim = height; 
+	gfs.SetSize(dim*dim); 
+	for (auto i=0; i<dim*dim; i++) {
+		gfs[i] = new mfem::ParGridFunction(&fes); 
+		(*gfs[i]) = 0.0; 
+	}
+
+	mfem::DenseMatrix OmegaOmega(dim); 
+	for (auto a=0; a<quad.Size(); a++) {
+		const auto &Omega = quad.GetOmega(a); 
+		mfem::MultVVt(Omega, OmegaOmega); 
+		OmegaOmega *= quad.GetWeight(a); 
+		for (auto i=0; i<psi.extent(2); i++) {
+			auto psi_local = psi(0,a,i); 
+			for (auto d=0; d<dim; d++) {
+				for (auto e=0; e<dim; e++) {
+					auto idx = d + e*dim; 
+					(*gfs[idx])(i) += OmegaOmega(d,e) * psi_local; 
+				}
+			}
+		}
+	}
+
+	for (auto i=0; i<dim; i++) {
+		for (auto j=0; j<dim; j++) {
+			gfs[i*dim + j]->ExchangeFaceNbrData(); 
+			Set(i,j, new mfem::GridFunctionCoefficient(gfs[i*dim+j]), true); 
+		}
+	}
+}
+
+SecondMomentTensorCoefficient::~SecondMomentTensorCoefficient() 
+{
+	for (auto i=0; i<gfs.Size(); i++) { delete gfs[i]; }
+}
+
+void MatrixDivergenceGridFunctionCoefficient::Eval(mfem::Vector &v, 
+	mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
+{
+	mfem::Vector g; 
+	for (int i=0; i<vdim; i++) {
+		for (int j=0; j<vdim; j++) {
+			const auto *gf = dynamic_cast<mfem::GridFunctionCoefficient*>(T.GetCoeff(i,j))->GetGridFunction();
+			mfem::GradientGridFunctionCoefficient grad_coef(gf); 
+			grad.GetColumnReference(i*vdim + j, g); 
+			grad_coef.Eval(g, trans, ip); 
+		}
+	}
+
+	v.SetSize(vdim); 
+	v = 0.0; 
+	for (auto i=0; i<vdim; i++) {
+		for (auto j=0; j<vdim; j++) {
+			const auto idx = j + i*vdim; 
+			v(i) += grad(j, idx); 
+		}
+	}
+}
+
 SMMBdrCorrectionFactorCoefficient::SMMBdrCorrectionFactorCoefficient(
 	mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	ConstTransportVectorView _psi, double _alpha)

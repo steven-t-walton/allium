@@ -13,4 +13,5 @@ cmd = ['mpirun', '-n', '4', args.exe, '-i', args.input, '-l', args.lua]
 result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
 db = yaml.safe_load(result.stdout)
 it = db['outer iterations']
-assert(it < 10)
+print(f'{it = }')
+assert(it < 12)

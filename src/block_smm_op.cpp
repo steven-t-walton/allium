@@ -18,9 +18,11 @@ void BlockDiffusionDiscretization::BackSolve(const mfem::Vector &g, const mfem::
 	iMt->Mult(tmp_elim_vec, J); 
 }
 
-BlockLDGDiffusionDiscretization::BlockLDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, const mfem::Vector &beta, 
-	bool scale_ldg_stabilization, int reflect_bdr_attr)
+BlockLDGDiffusionDiscretization::BlockLDGDiffusionDiscretization(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+	mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha, const mfem::Vector &_beta, 
+	bool _scale_ldg_stabilization, int _reflect_bdr_attr, DiffusionBoundaryConditionType _Jbcs)
+	: fes(_fes), vfes(_vfes), total(_total), absorption(_absorption), alpha(_alpha), beta(_beta), 
+	  scale_ldg_stabilization(_scale_ldg_stabilization), reflect_bdr_attr(_reflect_bdr_attr), Jbcs(_Jbcs)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
@@ -30,7 +32,8 @@ BlockLDGDiffusionDiscretization::BlockLDGDiffusionDiscretization(mfem::ParFinite
 
 	const auto &mesh = *fes.GetParMesh(); 
 	const auto &mesh_bdr_attributes = mesh.bdr_attributes; 
-	mfem::Array<int> marshak_bdr_attrs(mesh_bdr_attributes.Max()), reflect_bdr_attrs(mesh_bdr_attributes.Max()); 
+	marshak_bdr_attrs.SetSize(mesh_bdr_attributes.Max()); 
+	reflect_bdr_attrs.SetSize(mesh_bdr_attributes.Max()); 
 	marshak_bdr_attrs = 1; 
 	reflect_bdr_attrs = 0; 
 	if (reflect_bdr_attr > 0) {
@@ -39,18 +42,22 @@ BlockLDGDiffusionDiscretization::BlockLDGDiffusionDiscretization(mfem::ParFinite
 	}
 	const auto dim = mesh.Dimension(); 
 
+	const bool is_half_range = Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
+
 	mfem::ParBilinearForm Mtform(&vfes);
 	mfem::ProductCoefficient total3(3.0, total); 
 	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3)); 
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 
+	if (is_half_range) {
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 		
+	}
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	auto Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
 	iMt = HypreParMatrixPtr(ElementByElementBlockInverse(vfes, *Mt)); 
 
 	mfem::ParBilinearForm Maform(&fes); 
-	mfem::ConstantCoefficient alpha_c(alpha/2); 
+	mfem::ConstantCoefficient alpha_c(is_half_range ? alpha/2 : alpha); 
 	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha/2, false)); 
 	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
@@ -68,7 +75,9 @@ BlockLDGDiffusionDiscretization::BlockLDGDiffusionDiscretization(mfem::ParFinite
 	} else {
 		Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta)); 		
 	}
-	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
+	if (is_half_range) {
+		Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 		
+	}
 	Dform.Assemble(); 
 	Dform.Finalize(); 
 	D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
@@ -79,9 +88,11 @@ BlockLDGDiffusionDiscretization::BlockLDGDiffusionDiscretization(mfem::ParFinite
 	S = HypreParMatrixPtr(mfem::ParAdd(DiMtDT.get(), Ma.get())); 
 }
 
-BlockIPDiffusionDiscretization::BlockIPDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, double kappa, 
-	bool mip, bool scale_ip_stabilization, int reflect_bdr_attr)
+BlockIPDiffusionDiscretization::BlockIPDiffusionDiscretization(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+	mfem::Coefficient &_total, mfem::Coefficient &_absorption, double _alpha, double _kappa, 
+	bool _mip, bool _scale_ip_stabilization, int _reflect_bdr_attr, DiffusionBoundaryConditionType _Jbcs)
+	: fes(_fes), vfes(_vfes), total(_total), absorption(_absorption), alpha(_alpha), kappa(_kappa), 
+	  mip(_mip), scale_ip_stabilization(_scale_ip_stabilization), reflect_bdr_attr(_reflect_bdr_attr), Jbcs(_Jbcs)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
@@ -95,7 +106,8 @@ BlockIPDiffusionDiscretization::BlockIPDiffusionDiscretization(mfem::ParFiniteEl
 
 	const auto &mesh = *fes.GetParMesh(); 
 	const auto &mesh_bdr_attributes = mesh.bdr_attributes; 
-	mfem::Array<int> marshak_bdr_attrs(mesh_bdr_attributes.Max()), reflect_bdr_attrs(mesh_bdr_attributes.Max()); 
+	marshak_bdr_attrs.SetSize(mesh_bdr_attributes.Max()); 
+	reflect_bdr_attrs.SetSize(mesh_bdr_attributes.Max()); 
 	marshak_bdr_attrs = 1; 
 	reflect_bdr_attrs = 0; 
 	if (reflect_bdr_attr > 0) {
@@ -103,19 +115,22 @@ BlockIPDiffusionDiscretization::BlockIPDiffusionDiscretization(mfem::ParFiniteEl
 		reflect_bdr_attrs[reflect_bdr_attr-1] = 1; 
 	}
 	const auto dim = mesh.Dimension(); 
+	const auto is_half_range = Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
 
 	mfem::ParBilinearForm Mtform(&vfes);
 	mfem::ProductCoefficient total3(3.0, total); 
 	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3)); 
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 
+	if (is_half_range) {
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 		
+	}
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	auto Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
 	iMt = HypreParMatrixPtr(ElementByElementBlockInverse(vfes, *Mt)); 
 
 	mfem::ParBilinearForm Maform(&fes); 
-	mfem::ConstantCoefficient alpha_c(alpha/2); 
+	mfem::ConstantCoefficient alpha_c(is_half_range ? alpha/2 : alpha); 
 	mfem::RatioCoefficient diffco(1./3, total); 
 	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
 	mfem::Coefficient *coef = scale_ip_stabilization ? &diffco : nullptr; 
@@ -130,7 +145,7 @@ BlockIPDiffusionDiscretization::BlockIPDiffusionDiscretization(mfem::ParFiniteEl
 	mfem::ConstantCoefficient neg_one(-1.0); 
 	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
 	Dform.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator); 
-	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
+	if (is_half_range) Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
 	Dform.Assemble(); 
 	Dform.Finalize(); 
 	D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
@@ -156,8 +171,8 @@ void InverseBlockDiffusionOperator::Mult(const mfem::Vector &b, mfem::Vector &x)
 BlockDiffusionSMMSourceOperator::BlockDiffusionSMMSourceOperator(
 	mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, PhaseSpaceCoefficient &source_coef, 
-	PhaseSpaceCoefficient &inflow_coef, double _alpha, int reflect_bdr_attr)
-	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), reflect_bdr_attr(reflect_bdr_attr)
+	PhaseSpaceCoefficient &inflow_coef, double _alpha, int reflect_bdr_attr, DiffusionBoundaryConditionType _Jbcs)
+	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), reflect_bdr_attr(reflect_bdr_attr), Jbcs(_Jbcs)
 {
 	offsets.SetSize(3); 
 	offsets[0] = 0; 
@@ -175,9 +190,10 @@ BlockDiffusionSMMSourceOperator::BlockDiffusionSMMSourceOperator(
 	marshak_bdr_attrs = 1; 
 	reflect_bdr_attrs = 0; 
 	if (reflect_bdr_attr > 0) {
-		marshak_bdr_attrs[reflect_bdr_attr] = 0; 
-		reflect_bdr_attrs[reflect_bdr_attr] = 1; 
+		marshak_bdr_attrs[reflect_bdr_attr-1] = 0; 
+		reflect_bdr_attrs[reflect_bdr_attr-1] = 1; 
 	} 
+	const auto is_half_range = Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
 
 	const auto dim = fes.GetMesh()->Dimension(); 
 	Q0.SetSize(fes.GetVSize()); 
@@ -203,19 +219,23 @@ BlockDiffusionSMMSourceOperator::BlockDiffusionSMMSourceOperator(
 	}
 
 	InflowPartialCurrentCoefficient Jin(inflow_coef, quad); 
+	mfem::ProductCoefficient Jin2(2.0, Jin); 
+	mfem::Coefficient *coef; 
+	if (is_half_range) coef = &Jin; 
+	else coef = &Jin2; 
 	mfem::LinearForm fform(&fes); 
-	// fform.AddBdrFaceIntegrator(new mfem::BoundaryLFIntegrator(Jin, 2, 1)); 
-	fform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryLFIntegrator(Jin, *fes.FEColl(), 2, 1)); 
+	fform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryLFIntegrator(*coef, *fes.FEColl(), 2, 1)); 
 	fform.Assemble(); 
-
-	mfem::LinearForm gform(&vfes); 
-	// gform.AddBdrFaceIntegrator(new BoundaryNormalFaceLFIntegrator(Jin, 2, 1)); 
-	gform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryNormalLFIntegrator(Jin, *fes.FEColl(), 2, 1)); 
-	gform.Assemble(); 
-
 	Q0.Add(-1.0, fform); 
-	Q1.Add(1./alpha/3, gform); 
-	Q1 *= 3.0; 
+
+	if (is_half_range) {
+		mfem::LinearForm gform(&vfes); 
+		gform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryNormalLFIntegrator(Jin, *fes.FEColl(), 2, 1)); 		
+		gform.Assemble(); 
+
+		Q1.Add(1./alpha/3, gform); 
+	}
+	Q1 *= 3.0; 		
 }
 
 void BlockDiffusionSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
@@ -224,10 +244,10 @@ void BlockDiffusionSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector
 	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 
 	SMMCorrectionTensorCoefficient T(fes, quad, psi_view); 
 	SMMBdrCorrectionFactorCoefficient beta(fes, quad, psi_view, alpha); 	
+	const auto is_half_range = Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
 
 	mfem::ParLinearForm fform(&fes, bv.GetBlock(1).GetData()); 
-	mfem::ProductCoefficient bdr_coef_f(-0.5, beta); 
-	// fform.AddBdrFaceIntegrator(new mfem::BoundaryLFIntegrator(bdr_coef_f, 2, 1)); 
+	mfem::ProductCoefficient bdr_coef_f(is_half_range ? -0.5 : -1.0, beta); 
 	fform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryLFIntegrator(bdr_coef_f, *fes.FEColl(), 2, 1), marshak_bdr_attrs); 
 	fform.Assemble(); 
 
@@ -236,8 +256,9 @@ void BlockDiffusionSMMSourceOperator::Mult(const mfem::Vector &psi, mfem::Vector
 	gform.AddInteriorFaceIntegrator(new VectorJumpTensorAverageLFIntegrator(T)); 
 	gform.AddBdrFaceIntegrator(new VectorJumpTensorAverageLFIntegrator(T)); 
 	mfem::ProductCoefficient bdr_coef_g(1./2/alpha/3, beta);
-	// gform.AddBdrFaceIntegrator(new BoundaryNormalFaceLFIntegrator(bdr_coef_g, 2, 1)); 
-	gform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryNormalLFIntegrator(bdr_coef_g, *fes.FEColl(), 2, 1)); 
+	if (is_half_range) {
+		gform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryNormalLFIntegrator(bdr_coef_g, *fes.FEColl(), 2, 1), marshak_bdr_attrs); 		
+	}
 	gform.Assemble();
 	gform *= 3.0;  
 

@@ -3,10 +3,10 @@
 #include "angular_quadrature.hpp"
 #include "tvector.hpp"
 #include "dg_trace_coll.hpp"
+#include "block_smm_op.hpp"
 
-// make test solving P1 diffusion with this source operator! 
-class ConsistentSMMSourceOperator : public mfem::Operator {
-private:
+class ConsistentSMMSourceOperatorBase : public mfem::Operator {
+protected:
 	mfem::ParFiniteElementSpace &fes, &vfes; 
 	const AngularQuadrature &quad; 
 	const TransportVectorExtents &psi_ext; 
@@ -14,6 +14,7 @@ private:
 	int reflect_bdr_attr; 
 
 	std::unique_ptr<const mfem::Table> element_to_face; 
+	std::unordered_map<int,int> face_to_bdr_el; 
 
 	mfem::Array<int> offsets; 
 	mfem::Vector Q0, Q1; 
@@ -23,6 +24,22 @@ private:
 
 	mutable mfem::Array<int> marshak_bdr_attrs, reflect_bdr_attrs; 
 public:
+	ConsistentSMMSourceOperatorBase(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		const AngularQuadrature &quad, const TransportVectorExtents &psi_ext, ConstTransportVectorView source_vec, 
+		double alpha, int reflect_bdr_attr); 
+	virtual void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
+private:
+	void ComputeHalfRangeInterfaceTerms(ConstTransportVectorView psi, 
+		mfem::ParGridFunction &beta, mfem::ParGridFunction &tensor) const;
+};
+
+class ConsistentSMMSourceOperator : public ConsistentSMMSourceOperatorBase {
+private:
+	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>; 
+	HypreParMatrixPtr F11, D, F21, F22;  	
+	MomentVectorExtents phi_ext; 
+	mutable mfem::Vector moments;
+public:
 	ConsistentSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
 		const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
 		double _alpha, int _reflect_bdr_attr=-1); 
@@ -30,50 +47,32 @@ public:
 	const mfem::Array<int> &Offsets() const { return offsets; }
 };
 
-class ConsistentLDGSMMSourceOperator : public mfem::Operator {
+class ConsistentLDGSMMSourceOperator : public ConsistentSMMSourceOperatorBase {
 private:
-	mfem::ParFiniteElementSpace &fes, &vfes; 
-	const AngularQuadrature &quad; 
-	const TransportVectorExtents &psi_ext; 
-	double alpha; 	
+	const BlockLDGDiffusionDiscretization &lhs; 
 
-	ConsistentSMMSourceOperator base_source_op; 
 	MomentVectorExtents phi_ext; 
 	mutable mfem::Vector moments;
 
 	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>; 
-	HypreParMatrixPtr F1, F2;  
+	HypreParMatrixPtr Mt, D, Ma; 
 public:
-	ConsistentLDGSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-		const AngularQuadrature &quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-		double _alpha, const mfem::Vector &beta, mfem::Coefficient *total=nullptr, int reflection_bdr_attr=-1); 
+	ConsistentLDGSMMSourceOperator(const BlockLDGDiffusionDiscretization &lhs, 
+		const AngularQuadrature &quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec); 
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
 };
 
-class ConsistentIPSMMSourceOperator : public mfem::Operator {
+class ConsistentIPSMMSourceOperator : public ConsistentSMMSourceOperatorBase {
 private:
-	mfem::ParFiniteElementSpace &fes, &vfes; 
-	const AngularQuadrature &quad; 
-	const TransportVectorExtents &psi_ext; 
-	double alpha, kappa; 
+	const BlockIPDiffusionDiscretization &lhs; 
 
-	ConsistentSMMSourceOperator base_source_op; 
 	MomentVectorExtents phi_ext; 
 	mutable mfem::Vector moments;
 
 	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>; 
-	HypreParMatrixPtr F1, F2;  	
+	HypreParMatrixPtr Mt, D, Ma; 
 public:
-	ConsistentIPSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-		const AngularQuadrature &quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec, 
-		double _alpha, mfem::Coefficient &total, double _kappa=-1.0, bool mip=false, bool scale_ip_stabilization=true, 
-		int reflect_bdr_attr=-1); 
+	ConsistentIPSMMSourceOperator(const BlockIPDiffusionDiscretization &_lhs, 
+		const AngularQuadrature &quad, const TransportVectorExtents &_psi_ext, ConstTransportVectorView source_vec); 
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
 };
-
-// hat(P)n - n/3 {{ phi }} - n/6/alpha [[ J.n ]]
-// An = Pn^+ - n/6 phi - n/6/alpha J.n 
-// -A(-n) = Pn^- - n/6 phi + n/6/alpha J.n
-// closure is An1 - A(-n)2 (always compute outflow normal component of pressure)
-void ProjectClosuresToFaces(const mfem::ParFiniteElementSpace &fes, const AngularQuadrature &quad, ConstTransportVectorView psi, 
-	double alpha, mfem::ParGridFunction &beta, mfem::ParGridFunction &tensor, int reflection_bdr_attr=-1); 

@@ -98,6 +98,32 @@ public:
 	~SMMCorrectionTensorCoefficient(); 
 };
 
+class SecondMomentTensorCoefficient : public mfem::MatrixArrayCoefficient
+{
+private:
+	mfem::ParFiniteElementSpace &fes; 
+	const AngularQuadrature	&quad; 
+	ConstTransportVectorView psi; 
+	mfem::Array<mfem::ParGridFunction*> gfs; 
+public:
+	SecondMomentTensorCoefficient(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, ConstTransportVectorView _psi); 
+	~SecondMomentTensorCoefficient(); 
+};
+
+class MatrixDivergenceGridFunctionCoefficient : public mfem::VectorCoefficient
+{
+private:
+	mfem::MatrixArrayCoefficient &T; 
+	mfem::DenseMatrix grad; 
+public:
+	MatrixDivergenceGridFunctionCoefficient(mfem::MatrixArrayCoefficient &t) 
+		: T(t), mfem::VectorCoefficient(t.GetHeight()) 
+	{
+		grad.SetSize(vdim, vdim*vdim); 
+	}
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &T, const mfem::IntegrationPoint &ip); 
+};
+
 class SMMBdrCorrectionFactorCoefficient : public mfem::Coefficient 
 {
 private:

@@ -36,6 +36,19 @@ public:
 		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat); 
 };
 
+class DGVectorJumpAverageIntegrator : public mfem::BilinearFormIntegrator
+{
+private:
+	mfem::Vector te_shape1, te_shape2, tr_shape1, tr_shape2, nor; 
+	double alpha; 
+public:
+	DGVectorJumpAverageIntegrator(double a=1.0) : alpha(a) { }
+	using mfem::BilinearFormIntegrator::AssembleFaceMatrix; 
+	void AssembleFaceMatrix(const mfem::FiniteElement &tr_fe1, const mfem::FiniteElement &tr_fe2, 
+		const mfem::FiniteElement &te_fe1, const mfem::FiniteElement &te_fe2, 
+		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat); 
+};
+
 class DGVectorJumpJumpIntegrator : public mfem::BilinearFormIntegrator 
 {
 private:
