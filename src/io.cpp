@@ -232,15 +232,25 @@ void SundialsErrorFunction(int error_code, const char *module, const char *funct
 	
 } 
 
-DiffusionBoundaryConditionType GetDiffusionBCType(sol::table &table, std::string key, std::string def) 
+std::pair<DiffusionBoundaryConditionType,std::string> 
+GetDiffusionBCType(sol::table &table, std::string key, std::string def) 
 {
-	auto bc_type = GetAndValidateOption<std::string>(table, key, {"full range", "half range"}, def); 
+	auto bc_type = GetAndValidateOption<std::string>(table, key, {"full range", "half range", "half range reflect"}, def); 
 	DiffusionBoundaryConditionType bc; 
 	if (bc_type == "half range") 
 		bc = DiffusionBoundaryConditionType::HALF_RANGE; 	
 	else if (bc_type == "full range") 
 		bc = DiffusionBoundaryConditionType::FULL_RANGE; 
-	return bc; 
+	else if (bc_type == "half range reflect") 
+		bc = DiffusionBoundaryConditionType::HALF_RANGE_REFLECT; 
+	return {bc, bc_type}; 
+}
+
+std::string ResolveRelativePath(std::string path) 
+{
+	char output_name_resolve[PATH_MAX];
+	realpath(path.c_str(), output_name_resolve);  	
+	return std::string(output_name_resolve); 
 }
 
 }

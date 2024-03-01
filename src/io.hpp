@@ -39,7 +39,25 @@ struct SundialsUserCallbackData {
 void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data); 
 void SundialsErrorFunction(int error_code, const char *module, const char *function, char *msg, void *user_data); 
 
-DiffusionBoundaryConditionType GetDiffusionBCType(sol::table &table, std::string key, std::string defaulted); 
+std::pair<DiffusionBoundaryConditionType,std::string> 
+GetDiffusionBCType(sol::table &table, std::string key, std::string defaulted); 
+
+template<typename T>
+void ValidateOption(std::string key, std::string res, std::initializer_list<T> options)
+{
+	bool valid = false; 
+	for (const auto &opt : options) {
+		if (res == opt) valid = true; 
+	}
+	if (!valid) {
+		std::stringstream ss; 
+		ss << "\"" << res << "\" not a valid input for key \"" << key << "\". Valid options are:";
+		for (const auto &opt : options) {
+			ss << " \"" << opt << "\""; 
+		}
+		MFEM_ABORT(ss.str()); 
+	}	
+}
 
 template<typename T> 
 T GetAndValidateOption(sol::table &table, std::string key, std::initializer_list<T> options, T def) 
@@ -47,24 +65,15 @@ T GetAndValidateOption(sol::table &table, std::string key, std::initializer_list
 	sol::optional<T> avail = table[key]; 
 	if (avail) {
 		const T res = avail.value(); 
-		bool valid = false; 
-		for (const auto &opt : options) {
-			if (res == opt) valid = true; 
-		}
-		if (!valid) {
-			std::stringstream ss; 
-			ss << "\"" << res << "\" not a valid input for key \"" << key << "\". Valid options are:";
-			for (const auto &opt : options) {
-				ss << " \"" << opt << "\""; 
-			}
-			MFEM_ABORT(ss.str()); 
-		}
+		ValidateOption(key, res, options); 
 		return res; 	
 	}
 	else {
 		return def; 
 	}
 }
+
+std::string ResolveRelativePath(std::string path); 
 
 } // end namespace io 
 

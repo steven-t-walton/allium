@@ -196,7 +196,7 @@ int main(int argc, char *argv[]) {
 		#endif
 	out << YAML::EndMap; 
 	#endif
-	out << YAML::Key << "input file" << YAML::Value << realpath(input_file.c_str(), nullptr); 
+	out << YAML::Key << "input file" << YAML::Value << io::ResolveRelativePath(input_file); 
 
 	// --- extract list of materials --- 
 	std::vector<std::string> attr_list; 
@@ -275,6 +275,7 @@ int main(int argc, char *argv[]) {
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
 		sol::table data = bcs[bdr_attr_list[i].c_str()]; 
 		std::string type = data["type"]; 
+		io::ValidateOption("boundary_conditions::type", type, {"inflow", "reflective"}); 
 		if (type == "inflow") {
 			sol::object value = data["value"]; 
 			lua_bc_objs[i] = value; // keep lua data in scope  
@@ -333,7 +334,7 @@ int main(int argc, char *argv[]) {
 		int refinements = mesh_node["refinements"].get_or(0); 
 		for (int r=0; r<refinements; r++) smesh.UniformRefinement(); 			
 
-		out << YAML::Key << "file name" << YAML::Value << realpath(fname.value().c_str(), nullptr); 
+		out << YAML::Key << "file name" << YAML::Value << io::ResolveRelativePath(fname.value()); 
 		out << YAML::Key << "uniform refinements" << YAML::Value << refinements; 
 	} 
 
@@ -438,25 +439,16 @@ int main(int argc, char *argv[]) {
 	sol::table driver = lua["driver"]; 
 	const int fe_order = driver["fe_order"]; 
 	const int sn_order = driver["sn_order"]; 
-	sol::optional<std::string> basis_type_avail = driver["basis_type"]; 
-	std::string basis_type_string; 
-	if (basis_type_avail) {
-		basis_type_string = basis_type_avail.value(); 
-	} 
-	// default to lobatto
-	// lobatto is better for the moment solver's preconditioners 
-	else {
-		basis_type_string = "lobatto"; 
-	}
+	std::string basis_type_str = io::GetAndValidateOption(driver, "basis_type", {"lobatto", "legendre"}, "lobatto"); 
 
 	// --- build solution space --- 
 	// DG space for transport solution 
 	int basis_type; 
-	if (basis_type_string == "legendre") {
+	if (basis_type_str == "legendre") {
 		basis_type = mfem::BasisType::GaussLegendre; 
-	} else if (basis_type_string == "lobatto") {
+	} else if (basis_type_str == "lobatto") {
 		basis_type = mfem::BasisType::GaussLobatto; 
-	} else { MFEM_ABORT("basis type " << basis_type_string << " not supported"); }
+	} 
 	mfem::L2_FECollection fec(fe_order, dim, basis_type); 
 	mfem::ParFiniteElementSpace fes(&mesh, &fec); // scalar finite element space 
 	mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); // vector finite element space, dim copies of fes 
@@ -571,7 +563,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "num angles" << YAML::Value << Nomega; 			
 		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
 		out << YAML::Key << "phi size" << YAML::Value << phi_size_global;
-		out << YAML::Key << "basis type" << YAML::Value << basis_type_string; 
+		out << YAML::Key << "basis type" << YAML::Value << basis_type_str; 
 		out << YAML::Key << "solver" << YAML::Value << solver; 
 		if (sweep_opts_avail) {
 			out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value();
@@ -654,7 +646,7 @@ int main(int argc, char *argv[]) {
 			} 
 			else if (type == "ldgsa") {
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
-				const auto bc_type = io::GetDiffusionBCType(prec_table, "bc_type", "half range"); 
+				auto [bc_type,bc_str] = io::GetDiffusionBCType(prec_table, "bc_type", "half range"); 
 				block_disc = new BlockLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
 					beta, scale_stabilization, reflection_bdr_attr, bc_type); 
 				const auto &S = block_disc->SchurComplement(); 
@@ -679,13 +671,13 @@ int main(int argc, char *argv[]) {
 				}
 
 				out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
-				out << YAML::Key << "boundary condition type" << YAML::Value << std::string(prec_table["bc_type"]); 
+				out << YAML::Key << "boundary condition type" << YAML::Value << bc_str; 
 			}
 			else if (type == "mip") {
 				double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
 				bool lower_bound = prec_table["bound_stabilization_below"].get_or(true); 
-				const auto bc_type = io::GetDiffusionBCType(prec_table, "bc_type", "full range"); 
+				auto [bc_type,bc_str] = io::GetDiffusionBCType(prec_table, "bc_type", "full range"); 
 				block_disc = new BlockIPDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
 					kappa, lower_bound, scale_stabilization, reflection_bdr_attr, bc_type); 
 				const auto &S = block_disc->SchurComplement(); 
@@ -712,7 +704,7 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "kappa" << YAML::Value << kappa; 
 				out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
 				out << YAML::Key << "bound stabilization from below" << YAML::Value << lower_bound; 
-				out << YAML::Key << "boundary condition type" << YAML::Value << std::string(prec_table["bc_type"]); 
+				out << YAML::Key << "boundary condition type" << YAML::Value << bc_str; 
 			}
 			else MFEM_ABORT("dsa type " << type << " not defined"); 
 
@@ -800,8 +792,7 @@ int main(int argc, char *argv[]) {
 		if (type == "LDGSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
 			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
-			bool stab_bound = accel["bound_stabilization_below"].get_or(true); 
-			auto bc_type = io::GetDiffusionBCType(accel, "bc_type", "full range"); 
+			auto [bc_type, bc_str] = io::GetDiffusionBCType(accel, "bc_type", "full range"); 
 			auto *block_ldg = new BlockLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta, 
 				scale_stabilization, reflection_bdr_attr, bc_type); 
 			block_disc = block_ldg; 
@@ -847,8 +838,7 @@ int main(int argc, char *argv[]) {
 			// output LDG specific options 
 			out << YAML::Key << "consistent" << YAML::Value << consistent; 
 			out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
-			out << YAML::Key << "bound stabilization from below" << YAML::Value << stab_bound; 
-			out << YAML::Key << "boundary condition type" << YAML::Value << std::string(accel["bc_type"]); 
+			out << YAML::Key << "boundary condition type" << YAML::Value << bc_str; 
 		} 
 		else if (type == "IPSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
@@ -857,7 +847,7 @@ int main(int argc, char *argv[]) {
 			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
 			// use kappa = alpha/2 if regular kappa goes below alpha/2 
 			bool stab_bound = accel["bound_stabilization_below"].get_or(true); 
-			const auto bc_type = io::GetDiffusionBCType(accel, "bc_type", "full range"); 
+			auto [bc_type, bc_str] = io::GetDiffusionBCType(accel, "bc_type", "full range"); 
 
 			auto *block_ip = new BlockIPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, stab_bound, 
 				scale_stabilization, reflection_bdr_attr, bc_type); 
@@ -906,7 +896,7 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "consistent" << YAML::Value << consistent; 
 			out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
 			out << YAML::Key << "bound stabilization from below" << YAML::Value << stab_bound; 
-			out << YAML::Key << "boundary condition type" << YAML::Value << std::string(accel["bc_type"]); 
+			out << YAML::Key << "boundary condition type" << YAML::Value << bc_str; 
 		}
 		else if (type == "P1SMM") {
 		#ifdef MFEM_USE_SUPERLU
@@ -970,8 +960,8 @@ int main(int argc, char *argv[]) {
 		}
 		if (inner_it->Size()) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "min inner" << YAML::Value << inner_it->Min(); 
 			out << YAML::Key << "max inner" << YAML::Value << inner_it->Max();
+			out << YAML::Key << "min inner" << YAML::Value << inner_it->Min(); 
 			out << YAML::Key << "avg inner" << YAML::Value << (double)inner_it->Sum()/inner_it->Size(); 		
 			out << YAML::EndMap; 
 		}
@@ -1059,9 +1049,7 @@ int main(int argc, char *argv[]) {
 		sol::optional<std::string> paraview_avail = output["paraview"]; 
 		if (paraview_avail) {
 			std::string output_name = paraview_avail.value(); 
-			char output_name_resolve[PATH_MAX];
-			realpath(output_name.c_str(), output_name_resolve);  	
-			out << YAML::Key << "paraview" << YAML::Value << output_name_resolve; 
+			out << YAML::Key << "paraview" << YAML::Value << io::ResolveRelativePath(output_name); 
 			mfem::ParGridFunction mesh_part(&fes0); 
 			for (int i=0; i<mesh_part.Size(); i++) { mesh_part[i] = rank; }
 			mfem::ParaViewDataCollection dc(output_name, &mesh); 
@@ -1123,7 +1111,7 @@ int main(int argc, char *argv[]) {
 		#ifdef MFEM_USE_GSLIB
 			sol::table lineout = lineout_avail.value(); 
 			std::string path = output["lineout_path"].get_or(std::string("lineout.yaml")); 
-			out << YAML::Key << "lineout" << YAML::Value << realpath(path.c_str(), nullptr); 
+			out << YAML::Key << "lineout" << YAML::Value << io::ResolveRelativePath(path); 
 			std::ofstream file_out(path); 
 			mfem::OutStream file_out_par(file_out); 
 			if (!root) file_out_par.Disable(); 
@@ -1134,9 +1122,9 @@ int main(int argc, char *argv[]) {
 				fout << YAML::Key << it.first.as<std::string>() << YAML::Value << YAML::BeginMap; 
 				sol::table line = it.second; 
 				mfem::Vector start(dim), end(dim), dir(dim);
-				sol::table start_table = line["start_point"]; 
-				sol::table end_table = line["end_point"]; 
-				const int npoints = line["num_points"];  
+				sol::table start_table = line["from"]; 
+				sol::table end_table = line["to"]; 
+				const int npoints = line["npoints"];  
 				for (int d=0; d<dim; d++) {
 					start(d) = start_table[d+1]; 
 					end(d) = end_table[d+1]; 
