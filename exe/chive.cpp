@@ -275,7 +275,7 @@ int main(int argc, char *argv[]) {
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
 		sol::table data = bcs[bdr_attr_list[i].c_str()]; 
 		std::string type = data["type"]; 
-		io::ValidateOption("boundary_conditions::type", type, {"inflow", "reflective"}); 
+		io::ValidateOption<std::string>("boundary_conditions::type", type, {"inflow", "reflective", "vacuum"}); 
 		if (type == "inflow") {
 			sol::object value = data["value"]; 
 			lua_bc_objs[i] = value; // keep lua data in scope  
@@ -295,6 +295,9 @@ int main(int argc, char *argv[]) {
 			}
 			inflow_list[i] = nullptr; 
 		} 
+		else if (type == "vacuum") {
+			inflow_list[i] = nullptr; 
+		}
 	}
 
 	// print list to screen 
@@ -302,7 +305,7 @@ int main(int argc, char *argv[]) {
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
 		out << YAML::BeginMap; 
 		out << YAML::Key << "name" << YAML::Value << bdr_attr_list[i]; 
-		out << YAML::Key << "type" << YAML::Value << ((inflow_list[i]) ? "inflow" : "reflective"); 
+		out << YAML::Key << "type" << YAML::Value << std::string(bcs[bdr_attr_list[i].c_str()]["type"]); 
 		if (inflow_list[i]) {
 			out << YAML::Key << "value" << YAML::Value; 
 			if (lua_bc_objs[i].get_type() == sol::type::number) {
@@ -324,7 +327,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	// --- make mesh and solution spaces --- 
-	auto mesh_node = lua["mesh"]; 
+	sol::table mesh_node = lua["mesh"]; 
 	sol::optional<std::string> fname = mesh_node["file"]; 
 	mfem::Mesh smesh; 
 	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
@@ -343,35 +346,35 @@ int main(int argc, char *argv[]) {
 		sol::table ne = mesh_node["num_elements"]; 
 		sol::table extents = mesh_node["extents"]; 
 		assert(ne.size() == extents.size()); 
-		auto num_dim = ne.size(); 
-		sol::optional<std::string> element_type_avail = mesh_node["element_type"]; 
-		std::string eltype_str = "segment"; 
-		if (element_type_avail) eltype_str = element_type_avail.value(); 
+		int num_dim = ne.size(); 
+		io::ValidateOption("mesh::num_dim", num_dim, {1,2,3}, root); 
+		std::string eltype_str; 
+		mfem::Element::Type eltype; 
+		bool sfc_ordering = mesh_node["sfc_ordering"].get_or(false); 
 		if (num_dim==1) {
-			smesh = mfem::Mesh::MakeCartesian1D(ne[1], extents[1]); 
+			eltype_str = io::GetAndValidateOption(mesh_node, "element_type", {"segment"}, "segment", root); 
+			smesh = mfem::Mesh::MakeCartesian1D(ne[1], extents[1]);
 		} else if (num_dim==2) {
-			mfem::Element::Type eltype = mfem::Element::QUADRILATERAL; 
-			if (element_type_avail) {
-				std::string type = element_type_avail.value(); 
-				if (type == "quadrilateral") {
-					eltype = mfem::Element::QUADRILATERAL; 
-				} else if (type == "triangle") {
-					eltype = mfem::Element::TRIANGLE; 
-				} else { MFEM_ABORT("element type " << type << " not defined for dim = " << num_dim); }
-			} else { eltype_str = "quadrilateral"; }
-			smesh = mfem::Mesh::MakeCartesian2D(ne[1], ne[2], eltype, true, extents[1], extents[2], false); 
+			eltype_str = io::GetAndValidateOption(mesh_node, "element_type", 
+				{"quadrilateral", "triangle"}, "quadrilateral", root); 
+			if (eltype_str == "quadrilateral") {
+				eltype = mfem::Element::QUADRILATERAL; 
+			} 
+			else if (eltype_str == "triangle") {
+				eltype = mfem::Element::TRIANGLE; 
+			} 
+			smesh = mfem::Mesh::MakeCartesian2D(ne[1], ne[2], eltype, true, extents[1], extents[2], sfc_ordering); 
 		} else if (num_dim==3) {
-			mfem::Element::Type eltype = mfem::Element::HEXAHEDRON; 
-			if (element_type_avail) {
-				std::string type = element_type_avail.value(); 
-				if (type == "hexahedron") {
-					eltype = mfem::Element::HEXAHEDRON; 
-				} else if (type == "tetrahedron") {
-					eltype = mfem::Element::TETRAHEDRON; 
-				} else { MFEM_ABORT("element type " << type << " not defined for dim = " << num_dim); }
-			} else { eltype_str = "hexahedron"; }
-			smesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], eltype, extents[1], extents[2], extents[3], false); 
-		} else { MFEM_ABORT("dim = " << num_dim << " not supported"); }
+			eltype_str = io::GetAndValidateOption(mesh_node, "element_type", 
+				{"hexahedron", "tetrahedron"}, "hexahedron", root); 
+			if (eltype_str == "hexahedron") {
+				eltype = mfem::Element::HEXAHEDRON; 
+			} 
+			else if (eltype_str == "tetrahedron") {
+				eltype = mfem::Element::TETRAHEDRON; 
+			}
+			smesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], eltype, extents[1], extents[2], extents[3], sfc_ordering); 
+		}
 
 		out << YAML::Key << "extents" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
 		for (auto i=1; i<=extents.size(); i++) {
@@ -385,6 +388,7 @@ int main(int argc, char *argv[]) {
 		} 
 		out << YAML::EndSeq; 		
 		out << YAML::Key << "element type" << YAML::Value << eltype_str; 
+		out << YAML::Key << "space filling ordering" << YAML::Value << sfc_ordering; 
 	}
 	const auto dim = smesh.Dimension(); 
 
@@ -439,7 +443,7 @@ int main(int argc, char *argv[]) {
 	sol::table driver = lua["driver"]; 
 	const int fe_order = driver["fe_order"]; 
 	const int sn_order = driver["sn_order"]; 
-	std::string basis_type_str = io::GetAndValidateOption(driver, "basis_type", {"lobatto", "legendre"}, "lobatto"); 
+	std::string basis_type_str = io::GetAndValidateOption(driver, "basis_type", {"lobatto", "legendre"}, "lobatto", root); 
 
 	// --- build solution space --- 
 	// DG space for transport solution 
@@ -508,16 +512,20 @@ int main(int argc, char *argv[]) {
 	sol::table solver = driver["solver"]; 
 	sol::optional<sol::table> accel_avail = driver["acceleration"]; 
 	sol::optional<sol::table> prec_avail = driver["preconditioner"]; 
+	if (accel_avail and prec_avail) { MFEM_ABORT("cannot use both preconditioning and acceleration"); }
 	auto *outer_solver = io::CreateIterativeSolver(solver, MPI_COMM_WORLD);
 	if (!outer_solver) { MFEM_ABORT("outer solver required"); }
-	if (accel_avail and prec_avail) { MFEM_ABORT("cannot use both preconditioning and acceleration"); }
+	if (accel_avail) {
+		io::ValidateOption<std::string>("driver::solver::type", solver["type"], 
+			{"fixed point", "fp", "kinsol"}, root); 		
+	} 
+	else {
+		io::ValidateOption<std::string>("driver::solver::type", solver["type"], 
+			{"cg", "conjugate gradient", "gmres", "fgmres", "sli", "bicg", "bicgstab", "direct", "superlu"}, root); 
+	}
 	sol::table inner_solver_table; 
 	mfem::IterativeSolver *inner_it_solver = nullptr; 
 	if (accel_avail) {
-		if (not(dynamic_cast<FixedPointIterationSolver*>(outer_solver) 
-			or dynamic_cast<mfem::KINSolver*>(outer_solver))) {
-			MFEM_ABORT("must use fixed point-type solvers for moment methods"); 
-		}
 		sol::optional<sol::table> inner_solver_table_avail = accel_avail.value()["solver"]; 
 		if (inner_solver_table_avail) {
 			inner_solver_table = inner_solver_table_avail.value();
@@ -530,10 +538,6 @@ int main(int argc, char *argv[]) {
 		inner_it_solver = io::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	}
 	if (prec_avail) {
-		if (dynamic_cast<FixedPointIterationSolver*>(outer_solver) 
-			or dynamic_cast<mfem::KINSolver*>(outer_solver)) {
-			MFEM_ABORT("cannot use fixed point-type solvers for transport iteration"); 
-		}
 		sol::optional<sol::table> inner_solver_table_avail = prec_avail.value()["solver"]; 
 		if (inner_solver_table_avail) {
 			inner_solver_table = inner_solver_table_avail.value(); 
@@ -545,12 +549,7 @@ int main(int argc, char *argv[]) {
 		// can be nullptr if direct solver specified 
 		inner_it_solver = io::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
 	}
-	if (!accel_avail) {
-		if (dynamic_cast<FixedPointIterationSolver*>(outer_solver) 
-			or dynamic_cast<mfem::KINSolver*>(outer_solver)) {
-			MFEM_ABORT("cannot use fixed point-type solvers for transport iteration"); 
-		}
-	}
+
 	// generic operator in case inner solver is SuperLU or product operator etc 
 	mfem::Operator *inner_solver = inner_it_solver; 
 	// sweep setup options 
@@ -646,7 +645,9 @@ int main(int argc, char *argv[]) {
 			} 
 			else if (type == "ldgsa") {
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
-				auto [bc_type,bc_str] = io::GetDiffusionBCType(prec_table, "bc_type", "half range"); 
+				const auto bc_str = io::GetAndValidateOption<std::string>(prec_table, "bc_type", 
+					{"full range", "half range", "half range reflect"}, "full range", root); 
+				const auto bc_type = io::GetDiffusionBCType(bc_str); 
 				block_disc = new BlockLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
 					beta, scale_stabilization, reflection_bdr_attr, bc_type); 
 				const auto &S = block_disc->SchurComplement(); 
@@ -677,7 +678,9 @@ int main(int argc, char *argv[]) {
 				double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
 				bool lower_bound = prec_table["bound_stabilization_below"].get_or(true); 
-				auto [bc_type,bc_str] = io::GetDiffusionBCType(prec_table, "bc_type", "full range"); 
+				const auto bc_str = io::GetAndValidateOption<std::string>(prec_table, "bc_type", 
+					{"full range", "half range", "half range reflect"}, "full range", root); 
+				const auto bc_type = io::GetDiffusionBCType(bc_str); 
 				block_disc = new BlockIPDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
 					kappa, lower_bound, scale_stabilization, reflection_bdr_attr, bc_type); 
 				const auto &S = block_disc->SchurComplement(); 
@@ -792,7 +795,9 @@ int main(int argc, char *argv[]) {
 		if (type == "LDGSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
 			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
-			auto [bc_type, bc_str] = io::GetDiffusionBCType(accel, "bc_type", "full range"); 
+			const auto bc_str = io::GetAndValidateOption<std::string>(accel, "bc_type", 
+				{"full range", "half range", "half range reflect"}, "full range", root); 
+			const auto bc_type = io::GetDiffusionBCType(bc_str); 
 			auto *block_ldg = new BlockLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta, 
 				scale_stabilization, reflection_bdr_attr, bc_type); 
 			block_disc = block_ldg; 
@@ -847,7 +852,9 @@ int main(int argc, char *argv[]) {
 			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
 			// use kappa = alpha/2 if regular kappa goes below alpha/2 
 			bool stab_bound = accel["bound_stabilization_below"].get_or(true); 
-			auto [bc_type, bc_str] = io::GetDiffusionBCType(accel, "bc_type", "full range"); 
+			const auto bc_str = io::GetAndValidateOption<std::string>(accel, "bc_type", 
+				{"full range", "half range", "half range reflect"}, "full range", root); 
+			const auto bc_type = io::GetDiffusionBCType(bc_str); 
 
 			auto *block_ip = new BlockIPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, stab_bound, 
 				scale_stabilization, reflection_bdr_attr, bc_type); 
@@ -936,6 +943,8 @@ int main(int argc, char *argv[]) {
 
 		out << YAML::Key << "solver" << YAML::Value << inner_solver_table; 
 		out << YAML::EndMap; // end acceleration map 
+		bool diffusion_solve = accel["diffusion_solve"].get_or(false); 
+		if (diffusion_solve) out << YAML::Key << "diffusion solve" << YAML::Value << diffusion_solve; 
 		out << YAML::EndMap; // end driver map 
 
 		MomentMethodFixedPointOperator G(D, Linv, Ms_form, *smm, source_vec, psi); 
@@ -949,9 +958,16 @@ int main(int argc, char *argv[]) {
 
 		MomentMethodIterationMonitor monitor(out, G, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
 		outer_solver->SetMonitor(monitor); 
-		mfem::Vector blank; 
-		outer_solver->Mult(blank, phi); 
-		out << YAML::Key << "outer iterations" << YAML::Value << outer_solver->GetNumIterations();
+
+		if (diffusion_solve) {
+			smm->Mult(psi, phi); 
+		}
+
+		else {
+			mfem::Vector blank; 
+			outer_solver->Mult(blank, phi); 
+			out << YAML::Key << "outer iterations" << YAML::Value << outer_solver->GetNumIterations();			
+		}
 		mfem::Array<int> *inner_it = nullptr; 
 		if (sundials) {
 			inner_it = &sundials_data.inner_it; 
