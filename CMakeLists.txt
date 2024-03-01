@@ -175,6 +175,7 @@ endif()
 
 option(ENABLE_CHIVE_TESTS "integrated tests for the chive driver" OFF)
 if (${ENABLE_CHIVE_TESTS})
+	enable_testing()
 	message(STATUS "chive tests enabled")
 	# requires python executable 
 	set(Python3_FIND_UNVERSIONED_NAMES "FIRST") 
