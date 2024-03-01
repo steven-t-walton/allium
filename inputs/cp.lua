@@ -1,13 +1,15 @@
+sig_max = 200
+sig_min = 0.2
 pipe = {
-	total = 0.2, 
-	scattering = 0.2, 
-	source = 0
+	total = sig_min, 
+	scattering = sig_min - 1e-3, 
+	source = 1e-7
 }
 
 wall = {
-	total = 200, 
-	scattering = 199.9, 
-	source = 0
+	total = sig_max, 
+	scattering = sig_max - 1e-3, 
+	source = 1e-7
 }
 
 materials = {pipe = pipe, wall = wall}
@@ -32,8 +34,7 @@ boundary_conditions = {
 		value = 1.0/2/math.pi
 	},
 	vacuum = {
-		type = "inflow", 
-		value = 0 
+		type = "vacuum", 
 	}, 
 	reflection = {
 		type = "reflective"
@@ -51,33 +52,36 @@ function boundary_map(x,y,z)
 	return r 
 end 
 
-Ne = 40
+Ne = 64
 mesh = {
 	num_elements = {7*Ne,2*Ne},
-	extents = {7,2} 
+	extents = {7,2},
 }
 
 driver = {
 	fe_order = 1, 
 	sn_order = 12,
+	basis_type = "lobatto",
 	solver = {
 		type = "kinsol", 
 		abstol = 1e-5, 
-		max_iter = 100, 
+		max_iter = 200, 
 		kdim = 10, 
+		iterative_mode = true
 	},
 	acceleration = {
 		type = "ldgsmm",
 		consistent = true, 
-		scale_stabilization = true, 
-		penalty_lower_bound = true,
+		bc_type = "full range",
+		scale_stabilization = false, 
 		solver = {
 			type = "cg", 
-			abstol = 1e-7, 
+			abstol = 1e-8, 
 			max_iter = 200,
 			iterative_mode = true,
+			-- BS other options: coarsening 6, aggressive 0, interp 0
 			amg_opts = {
-				max_iter = 1, 
+				max_iter = 1,
 				pre_sweeps = 1, 
 				post_sweeps = 1, 
 				max_levels = 25, 
@@ -90,13 +94,12 @@ driver = {
 		}
 	},
 	-- preconditioner = {
-	-- 	type = "block ldgsa",
-	-- 	scale_stabilization = true, 
+	-- 	type = "mip",
 	-- 	solver = {
 	-- 		type = "cg", 
-	-- 		reltol = 1e-3, 
-	-- 		-- abstol = 1e-10,
-	-- 		max_iter = 100,
+	-- 		-- reltol = 1e-3, 
+	-- 		abstol = 1e-8,
+	-- 		max_iter = 200,
 	-- 	}
 	-- }
 }
@@ -104,7 +107,25 @@ driver = {
 output = {
 	paraview = "solution", 
 	lineout = {
-		{start_point = {7,0}, end_point = {7,2}, num_points = 2*Ne},
-		{start_point = {0,0}, end_point = {7,0}, num_points = 7*Ne}
+		outflow = {
+			from = {7,0}, 
+			to = {7,2}, 
+			npoints = 2*2*Ne
+		},
+		centerline = {
+			from = {0,0}, 
+			to = {7,0}, 
+			npoints = 2*7*Ne
+		}, 
+		inflow = {
+			from = {0,0}, 
+			to = {0,2}, 
+			npoints = 2*2*Ne 
+		}
+	},
+	lineout_path = "cp_line.yaml",
+	tracer = {
+		{2,0}, 
+		{7,0}
 	}
 }
