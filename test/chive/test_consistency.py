@@ -10,7 +10,7 @@ parser.add_argument('--np', type=int, help='number of MPI ranks', default=1)
 args = parser.parse_args()
 
 cmd = ['mpirun', '-n', '4', args.exe, '-i', args.input, '-l', args.lua]
-result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+result = subprocess.run(cmd, stdout=subprocess.PIPE)
 print(result.stdout)
 db = yaml.safe_load(result.stdout)
 consistency = db['consistency']

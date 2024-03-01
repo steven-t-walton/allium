@@ -10,8 +10,8 @@ parser.add_argument('--np', type=int, help='number of MPI ranks', default=1)
 args = parser.parse_args()
 
 cmd = ['mpirun', '-n', '4', args.exe, '-i', args.input, '-l', args.lua]
-result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+result = subprocess.run(cmd, stdout=subprocess.PIPE)
 db = yaml.safe_load(result.stdout)
 it = db['outer iterations']
-print(f'{it = }')
+print(f'it = {it}')
 assert(it < 12)

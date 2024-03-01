@@ -16,7 +16,7 @@ args = parser.parse_args()
 def Run(Ne):
 	cmd = ['mpirun', '-n', '4', args.exe, '-i', args.input, 
 		'-l', f'driver.fe_order = {args.fe_order}; mesh.num_elements = {{{Ne},{Ne}}}; {args.lua}']
-	result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+	result = subprocess.run(cmd, stdout=subprocess.PIPE)
 	print(result.stdout)
 	db = yaml.safe_load(result.stdout)
 	phi = db['L2 error']['scalar flux']
