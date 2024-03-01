@@ -262,11 +262,14 @@ ConsistentLDGSMMSourceOperator::ConsistentLDGSMMSourceOperator(const BlockLDGDif
 
 	const auto &alpha = lhs.alpha; 
 	const bool is_half_range = lhs.Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
+	const bool is_half_range_ref = lhs.Jbcs == DiffusionBoundaryConditionType::HALF_RANGE_REFLECT; 
 
-	if (is_half_range) {
+	if (is_half_range or is_half_range_ref) {
 		mfem::ParBilinearForm Mtform(&vfes);
-		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
-		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 		
+		if (is_half_range) 
+			Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
+		if (is_half_range or is_half_range_ref)
+			Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 		
 		Mtform.Assemble(); 
 		Mtform.Finalize();  
 		Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
@@ -323,11 +326,14 @@ ConsistentIPSMMSourceOperator::ConsistentIPSMMSourceOperator(const BlockIPDiffus
 	const auto &alpha = lhs.alpha;
 	const auto &kappa = lhs.kappa; 
 	const auto is_half_range = lhs.Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
+	const auto is_half_range_ref = lhs.Jbcs == DiffusionBoundaryConditionType::HALF_RANGE_REFLECT;
 
-	if (is_half_range) {
+	if (is_half_range or is_half_range_ref) {
 		mfem::ParBilinearForm Mtform(&vfes);
-		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
-		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 
+		if (is_half_range) 
+			Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
+		if (is_half_range or is_half_range_ref) 
+			Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 
 		Mtform.Assemble(); 
 		Mtform.Finalize();  
 		Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 		

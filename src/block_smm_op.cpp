@@ -43,13 +43,16 @@ BlockLDGDiffusionDiscretization::BlockLDGDiffusionDiscretization(mfem::ParFinite
 	const auto dim = mesh.Dimension(); 
 
 	const bool is_half_range = Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
+	const bool is_half_range_ref = Jbcs == DiffusionBoundaryConditionType::HALF_RANGE_REFLECT; 
 
 	mfem::ParBilinearForm Mtform(&vfes);
 	mfem::ProductCoefficient total3(3.0, total); 
 	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3)); 
+	if (is_half_range or is_half_range_ref) {
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 		
+	}
 	if (is_half_range) {
 		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
-		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 		
 	}
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
@@ -116,13 +119,16 @@ BlockIPDiffusionDiscretization::BlockIPDiffusionDiscretization(mfem::ParFiniteEl
 	}
 	const auto dim = mesh.Dimension(); 
 	const auto is_half_range = Jbcs == DiffusionBoundaryConditionType::HALF_RANGE; 
+	const auto is_half_range_ref = Jbcs == DiffusionBoundaryConditionType::HALF_RANGE_REFLECT; 
 
 	mfem::ParBilinearForm Mtform(&vfes);
 	mfem::ProductCoefficient total3(3.0, total); 
 	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3)); 
+	if (is_half_range or is_half_range_ref) {
+		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 		
+	}
 	if (is_half_range) {
 		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1./2/alpha), marshak_bdr_attrs); 
-		Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs); 		
 	}
 	Mtform.Assemble(); 
 	Mtform.Finalize();  

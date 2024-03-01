@@ -11,6 +11,7 @@ args = parser.parse_args()
 
 cmd = ['mpirun', '-n', '4', args.exe, '-i', args.input, '-l', args.lua]
 result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+print(result.stdout)
 db = yaml.safe_load(result.stdout)
 consistency = db['consistency']
 print(consistency)

@@ -73,7 +73,3 @@ driver = {
 		max_iter = 50
 	}
 }
-
-output = {
-	paraview = "solution"
-}

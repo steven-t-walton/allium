@@ -9,14 +9,15 @@ parser.add_argument('-i', '--input', type=str, help='path to base input file', r
 parser.add_argument('-l', '--lua', type=str, help='extra lua commands for test', required=True)
 parser.add_argument('-n', '--Ne', type=int, help='number of elements in each axis for base run', default=10)
 parser.add_argument('-p', '--fe_order', type=int, help='finite element order', default=1)
-parser.add_argument('--phi-order', type=int, help='expected order of accuracy for phi', required=True)
-parser.add_argument('--J-order', type=int, help='expected order of accuracy for J', required=True)
+parser.add_argument('--phi-order', type=float, help='expected order of accuracy for phi', required=True)
+parser.add_argument('--J-order', type=float, help='expected order of accuracy for J', required=True)
 args = parser.parse_args()
 
 def Run(Ne):
 	cmd = ['mpirun', '-n', '4', args.exe, '-i', args.input, 
 		'-l', f'driver.fe_order = {args.fe_order}; mesh.num_elements = {{{Ne},{Ne}}}; {args.lua}']
 	result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+	print(result.stdout)
 	db = yaml.safe_load(result.stdout)
 	phi = db['L2 error']['scalar flux']
 	J = db['L2 error']['current']
