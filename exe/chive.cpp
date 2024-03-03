@@ -124,8 +124,9 @@ int main(int argc, char *argv[]) {
 	// must call hypre init for BoomerAMG now? 
 	mfem::Hypre::Init(); 
 
-	mfem::StopWatch timer; 
-	timer.Start(); 
+	mfem::StopWatch wall_timer, setup_timer, solve_timer; 
+	wall_timer.Start(); 
+	setup_timer.Start(); 
 
 	const auto rank = mfem::Mpi::WorldRank(); 
 	const bool root = rank == 0; 
@@ -746,7 +747,10 @@ int main(int argc, char *argv[]) {
 		outer_solver->SetOperator(T); 
 		TransportIterationMonitor monitor(out, T, prec, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
 		outer_solver->SetMonitor(monitor); 
+		setup_timer.Stop(); 
+		solve_timer.Start(); 
 		outer_solver->Mult(schur_source, phi); 
+		solve_timer.Stop(); 
 
 		// extra sweep to get psi 
 		mfem::Vector scat_source(phi_size); 
@@ -959,6 +963,8 @@ int main(int argc, char *argv[]) {
 		MomentMethodIterationMonitor monitor(out, G, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
 		outer_solver->SetMonitor(monitor); 
 
+		setup_timer.Stop(); 
+		solve_timer.Start(); 
 		if (diffusion_solve) {
 			smm->Mult(psi, phi); 
 		}
@@ -968,6 +974,7 @@ int main(int argc, char *argv[]) {
 			outer_solver->Mult(blank, phi); 
 			out << YAML::Key << "outer iterations" << YAML::Value << outer_solver->GetNumIterations();			
 		}
+		solve_timer.Stop(); 
 		mfem::Array<int> *inner_it = nullptr; 
 		if (sundials) {
 			inner_it = &sundials_data.inner_it; 
@@ -1211,9 +1218,12 @@ int main(int argc, char *argv[]) {
 
 	// output wall clock time 
 	MPI_Barrier(MPI_COMM_WORLD); 
-	timer.Stop(); 
-	double time = timer.RealTime(); 
-	out << YAML::Key << "wall time" << YAML::Value << io::FormatTimeString(time); 
+	wall_timer.Stop(); 
+	out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "setup" << YAML::Value << io::FormatTimeString(setup_timer.RealTime()); 
+		out << YAML::Key << "solve" << YAML::Value << io::FormatTimeString(solve_timer.RealTime()); 
+		out << YAML::Key << "wall" << YAML::Value << io::FormatTimeString(wall_timer.RealTime()); 
+	out << YAML::EndMap; 
 
 	// --- end yaml output --- 
 	out << YAML::EndMap << YAML::Newline; 
