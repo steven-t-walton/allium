@@ -52,10 +52,11 @@ function boundary_map(x,y,z)
 	return r 
 end 
 
-Ne = 64
 mesh = {
-	num_elements = {7*Ne,2*Ne},
+	num_elements = {7*2,2*2},
 	extents = {7,2},
+	serial_refinements = 0,
+	parallel_refinements = 0,
 }
 
 driver = {
@@ -65,15 +66,19 @@ driver = {
 	solver = {
 		type = "kinsol", 
 		abstol = 1e-5, 
-		max_iter = 200, 
+		max_iter = 1, 
 		kdim = 10, 
 		iterative_mode = true
+	},
+	sweep_opts = {
+	    send_buffer_size = 14
 	},
 	acceleration = {
 		type = "ldgsmm",
 		consistent = true, 
 		bc_type = "full range",
-		scale_stabilization = false, 
+		-- kappa = 4,
+		-- scale_stabilization = false, 
 		solver = {
 			type = "cg", 
 			abstol = 1e-8, 
@@ -81,17 +86,27 @@ driver = {
 			iterative_mode = true,
 			-- BS other options: coarsening 6, aggressive 0, interp 0
 			amg_opts = {
-				max_iter = 1,
-				pre_sweeps = 1, 
-				post_sweeps = 1, 
-				max_levels = 25, 
-				relax_type = 8, -- 8 = l1-GS, 6 = symm. GS, 3 = GS, 18 = l1-Jacobi
-				aggressive_coarsening = 1, 
-				interpolation = 6, -- extended+i
-				coarsening = 10, -- 10 = HMIS, 8 = PMIS, 6 = Falgout, 0 = CLJP
-				strength_threshold = 0.25
+				max_iter = 1, 
+				relax_sweeps = 1, 
+				relax_type = 8, 
+				strength_threshold = 0.25,
+
+				-- defaults 
+				-- coarsening = 10, 
+				-- aggressive_coarsening = 1, 
+				-- interpolation = 6, 
+
+				-- BS recommends 
+				coarsening = 6, 
+				aggressive_coarsening = 0, 
+				interpolation = 0
 			}
 		}
+		-- solver = {
+		-- 	type = "direct", 
+		-- 	iterative_refine = "none", 
+		-- 	print_statistics = true
+		-- }
 	},
 	-- preconditioner = {
 	-- 	type = "mip",
@@ -104,28 +119,28 @@ driver = {
 	-- }
 }
 
-output = {
-	paraview = "solution", 
-	lineout = {
-		outflow = {
-			from = {7,0}, 
-			to = {7,2}, 
-			npoints = 2*2*Ne
-		},
-		centerline = {
-			from = {0,0}, 
-			to = {7,0}, 
-			npoints = 2*7*Ne
-		}, 
-		inflow = {
-			from = {0,0}, 
-			to = {0,2}, 
-			npoints = 2*2*Ne 
-		}
-	},
-	lineout_path = "cp_line.yaml",
-	tracer = {
-		{2,0}, 
-		{7,0}
-	}
-}
+-- output = {
+-- 	paraview = "solution", 
+-- 	lineout = {
+-- 		outflow = {
+-- 			from = {7,0}, 
+-- 			to = {7,2}, 
+-- 			npoints = 2*2*Ne
+-- 		},
+-- 		centerline = {
+-- 			from = {0,0}, 
+-- 			to = {7,0}, 
+-- 			npoints = 2*7*Ne
+-- 		}, 
+-- 		inflow = {
+-- 			from = {0,0}, 
+-- 			to = {0,2}, 
+-- 			npoints = 2*2*Ne 
+-- 		}
+-- 	},
+-- 	lineout_path = "cp_line.yaml",
+-- 	tracer = {
+-- 		{2,0}, 
+-- 		{7,0}
+-- 	}
+-- }
