@@ -9,7 +9,7 @@ namespace io
 std::string FormatTimeString(double time) {
 	std::stringstream ss; 
 	if (time < 60) {
-		ss << std::setprecision(3) << time; 
+		ss << std::fixed << std::setprecision(3) << time; 
 		return ss.str(); 
 	}
 	double remainder = std::fmod(time, 3600*24); 
@@ -27,7 +27,7 @@ std::string FormatTimeString(double time) {
 	if (minutes > 0 or hours > 0 or days > 0) {
 		ss << std::setfill('0') << std::setw(2) << minutes << ":";
 	}
-	ss << std::setfill('0') << std::fixed << std::setprecision(2) << std::setw(5) << seconds; 		
+	ss << std::setfill('0') << std::fixed << std::setprecision(3) << std::setw(6) << seconds; 		
 	return ss.str(); 
 }
 
@@ -131,26 +131,30 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 	return s; 
 }
 
-void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg) 
+void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root) 
 {
+	for (const auto &it : table) {
+		std::string key = it.first.as<std::string>();
+		ValidateOption<std::string>("BoomerAMG", key, 
+			{"max_iter", "relax_sweeps", "max_levels", "relax_type", "cycle_type", 
+			 "aggressive_coarsening", "interpolation", "coarsening", "strength_threshold"},
+			root
+		); 
+	}
 	sol::optional<int> max_iter = table["max_iter"]; 
-	sol::optional<int> pre_sweeps = table["pre_sweeps"]; 
-	sol::optional<int> post_sweeps = table["post_sweeps"]; 
+	sol::optional<int> sweeps = table["relax_sweeps"]; 
 	sol::optional<int> max_levels = table["max_levels"]; 
 	sol::optional<int> relax_type = table["relax_type"]; 
 	sol::optional<int> cycle_type = table["cycle_type"]; 
 	sol::optional<int> agg_coarsen = table["aggressive_coarsening"]; 
 	sol::optional<int> interpolation = table["interpolation"]; 
 	sol::optional<int> coarsening = table["coarsening"]; 
-	sol::optional<int> strength_thresh = table["strength_threshold"]; 
+	sol::optional<double> strength_thresh = table["strength_threshold"]; 
 	if (max_iter) {
 		amg.SetMaxIter(max_iter.value()); 
 	}
-	if (pre_sweeps or post_sweeps) {
-		int pre = 1, post = 1; 
-		if (pre_sweeps) pre = pre_sweeps.value(); 
-		if (post_sweeps) post = post_sweeps.value(); 
-		amg.SetCycleNumSweeps(pre, post); 
+	if (sweeps) {
+		HYPRE_BoomerAMGSetNumSweeps(amg, sweeps.value());	
 	}
 	if (max_levels) {
 		amg.SetMaxLevels(max_levels.value()); 
@@ -174,6 +178,71 @@ void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg)
 		amg.SetStrengthThresh(strength_thresh.value()); 
 	}
 }
+
+#ifdef MFEM_USE_SUPERLU
+void SetSuperLUOptions(sol::table &table, mfem::SuperLUSolver &slu, bool root)
+{
+	for (const auto &it : table) {
+		auto key = it.first.as<std::string>(); 
+		ValidateOption<std::string>("superlu", key, 
+			{"symmetric_pattern", "iterative_refine", "equilibriate", 
+			 "column_permutation", "ParSymbFact", "print_statistics"}, 
+			root); 
+	}
+	sol::optional<bool> sym = table["symmetric_pattern"]; 
+	sol::optional<std::string> itref = table["iterative_refine"]; 
+	sol::optional<bool> equil = table["equilibriate"]; 
+	sol::optional<std::string> colperm = table["column_permutation"]; 
+	sol::optional<bool> parsymbfact = table["ParSymbFact"]; 
+	bool print = table["print_statistics"].get_or(false); 
+
+	if (sym) 
+		slu.SetSymmetricPattern(sym.value()); 
+	if (itref) {
+		std::string val = itref.value(); 
+		ValidateOption<std::string>("superlu::iterative_refine", val, 
+			{"none", "single", "double"}, root); 
+		if (val == "none") {
+			slu.SetIterativeRefine(mfem::superlu::NOREFINE); 
+		} else if (val == "single") {
+			slu.SetIterativeRefine(mfem::superlu::SLU_SINGLE); 
+		} else if (val == "double") {
+			slu.SetIterativeRefine(mfem::superlu::SLU_DOUBLE); 
+		}
+	} 
+	// default to no iterative refine 
+	else {
+		slu.SetIterativeRefine(mfem::superlu::NOREFINE); 
+	}
+	if (equil) {
+		slu.SetEquilibriate(equil.value()); 
+	}
+	if (colperm) {
+		std::string val = colperm.value(); 
+		ValidateOption<std::string>("superlu::colperm", val, 
+			{"natural", "MMD_ATA", "MMD_AT_PLUS_A", "COLAMD", "METIS_AT_PLUS_A", "PARMETIS"}, root); 
+		mfem::superlu::ColPerm r; 
+		if (val == "natural") {
+			r = mfem::superlu::NATURAL; 
+		} else if (val == "MMD_ATA") {
+			r = mfem::superlu::MMD_ATA; 
+		} else if (val == "MMD_AT_PLUS_A") {
+			r = mfem::superlu::MMD_AT_PLUS_A; 
+		} else if (val == "COLAMD") {
+			r = mfem::superlu::COLAMD; 
+		} else if (val == "METIS_AT_PLUS_A") {
+			r = mfem::superlu::METIS_AT_PLUS_A; 
+		} else if (val == "PARMETIS") {
+			r = mfem::superlu::PARMETIS; 
+		}
+		slu.SetColumnPermutation(r); 
+	}
+	if (parsymbfact) {
+		slu.SetParSymbFact(parsymbfact.value()); 
+	}
+	slu.SetPrintStatistics(print); 
+}
+#endif
 
 void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data) 
 {
@@ -204,10 +273,15 @@ void SundialsCallbackFunction(const char *module, const char *function, char *ms
 			out << YAML::EndMap; 		
 			data->inner_it.Append(data->inner_solver->GetNumIterations());		
 		}
+		const auto total_time = G.TotalTimer().RealTime(); 
+		const auto sweep_time = G.SweepTimer().RealTime(); 
+		const auto moment_time = G.MomentTimer().RealTime(); 
+		data->sweep_time.Append(sweep_time); 
+		data->moment_time.Append(moment_time); 
 		out << YAML::Key << "timings" << YAML::BeginMap; 
-		out << YAML::Key << "total" << YAML::Value << G.TotalTimer().RealTime(); 
-		out << YAML::Key << "sweep" << YAML::Value << G.SweepTimer().RealTime(); 
-		out << YAML::Key << "moment" << YAML::Value << G.MomentTimer().RealTime(); 
+		out << YAML::Key << "total" << YAML::Value << FormatTimeString(total_time); 
+		out << YAML::Key << "sweep" << YAML::Value << FormatTimeString(sweep_time); 
+		out << YAML::Key << "moment" << YAML::Value << FormatTimeString(moment_time); 
 		out << YAML::EndMap; 
 		out << YAML::EndMap; 
 		out << YAML::Newline; 		

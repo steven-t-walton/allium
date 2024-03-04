@@ -33,6 +33,7 @@ private:
 	bool first = true; 
 public:
 	mfem::Array<int> inner_it; 
+	mfem::Array<double> sweep_time, prec_time; 
 
 	TransportIterationMonitor(YAML::Emitter &yaml, const TransportOperator &t, 
 		const DiffusionSyntheticAccelerationOperator * const d=nullptr, 
@@ -60,9 +61,14 @@ public:
 			inner_it.Append(inner_solver->GetNumIterations()); 
 		}
 		out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "sweep" << YAML::Value << io::FormatTimeString(T.GetStopWatch().RealTime()); 
-			if (dsa)
-				out << YAML::Key << "preconditioner" << YAML::Value << io::FormatTimeString(dsa->GetStopWatch().RealTime()); 
+			const auto sweep = T.GetStopWatch().RealTime(); 
+			sweep_time.Append(sweep); 
+			out << YAML::Key << "sweep" << YAML::Value << io::FormatTimeString(sweep); 
+			if (dsa) {
+				const auto prec = dsa->GetStopWatch().RealTime(); 				
+				prec_time.Append(prec); 
+				out << YAML::Key << "preconditioner" << YAML::Value << io::FormatTimeString(prec); 
+			}
 		out << YAML::EndMap; 
 		out << YAML::EndMap << YAML::Newline; 
 
@@ -81,6 +87,7 @@ private:
 	mfem::IterativeSolver const * const inner_solver = nullptr; 
 public:
 	mfem::Array<int> inner_it; 
+	mfem::Array<double> sweep_time, moment_time; 
 	MomentMethodIterationMonitor(YAML::Emitter &yaml, MomentMethodFixedPointOperator &_op, 
 		const mfem::IterativeSolver * const inner=nullptr)
 		: out(yaml), op(_op), inner_solver(inner)
@@ -106,8 +113,12 @@ public:
 		}
 		out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
 			out << YAML::Key << "total" << YAML::Value << io::FormatTimeString(op.TotalTimer().RealTime()); 
-			out << YAML::Key << "sweep" << YAML::Value << io::FormatTimeString(op.SweepTimer().RealTime()); 
-			out << YAML::Key << "moment" << YAML::Value << io::FormatTimeString(op.MomentTimer().RealTime()); 
+			const auto sweep = op.SweepTimer().RealTime(); 
+			sweep_time.Append(sweep); 
+			out << YAML::Key << "sweep" << YAML::Value << io::FormatTimeString(sweep);
+			const auto moment = op.MomentTimer().RealTime(); 
+			moment_time.Append(moment);  
+			out << YAML::Key << "moment" << YAML::Value << io::FormatTimeString(moment); 
 		out << YAML::EndMap; 
 		out << YAML::EndMap << YAML::Newline; 
 
@@ -330,16 +341,14 @@ int main(int argc, char *argv[]) {
 	// --- make mesh and solution spaces --- 
 	sol::table mesh_node = lua["mesh"]; 
 	sol::optional<std::string> fname = mesh_node["file"]; 
+	int ser_ref = mesh_node["serial_refinements"].get_or(0); 
+	int par_ref = mesh_node["parallel_refinements"].get_or(0); 
 	mfem::Mesh smesh; 
 	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
 	// load from a mesh file 
 	if (fname) {
 		smesh = mfem::Mesh::LoadFromFile(fname.value(), 1, 1);
-		int refinements = mesh_node["refinements"].get_or(0); 
-		for (int r=0; r<refinements; r++) smesh.UniformRefinement(); 			
-
 		out << YAML::Key << "file name" << YAML::Value << io::ResolveRelativePath(fname.value()); 
-		out << YAML::Key << "uniform refinements" << YAML::Value << refinements; 
 	} 
 
 	// create a cartesian mesh from extents and elements/axis 
@@ -391,19 +400,11 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "element type" << YAML::Value << eltype_str; 
 		out << YAML::Key << "space filling ordering" << YAML::Value << sfc_ordering; 
 	}
+	// apply serial refinements 
+	for (int sr=0; sr<ser_ref; sr++) {
+		smesh.UniformRefinement(); 
+	}
 	const auto dim = smesh.Dimension(); 
-
-	// print mesh characteristics 
-	double hmin, hmax, kmin, kmax; 
-	smesh.GetCharacteristics(hmin, hmax, kmin, kmax); 
-	out << YAML::Key << "dim" << YAML::Value << dim; 
-	out << YAML::Key << "elements" << YAML::Value << smesh.GetNE(); 
-	out << YAML::Key << "min mesh size" << YAML::Value << hmin; 
-	out << YAML::Key << "max mesh size" << YAML::Value << hmax; 
-	out << YAML::Key << "min mesh conditioning" << YAML::Value << kmin; 
-	out << YAML::Key << "max mesh conditioning" << YAML::Value << kmax; 
-	out << YAML::Key << "MPI ranks" << YAML::Value << mfem::Mpi::WorldSize(); 
-	out << YAML::EndMap; 
 
 	// --- assign materials to elements --- 
 	sol::function geom_func = lua["material_map"]; 
@@ -437,8 +438,31 @@ int main(int argc, char *argv[]) {
 
 	// --- create parallel mesh --- 
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
+	for (int pr=0; pr<par_ref; pr++) {
+		mesh.UniformRefinement(); 
+	}
 	mesh.ExchangeFaceNbrData(); // create parallel communication data needed for sweep 
 	mesh.SetAttributes(); 
+	// print mesh characteristics 
+	double hmin, hmax, kmin, kmax; 
+	mesh.GetCharacteristics(hmin, hmax, kmin, kmax); 
+	const auto global_ne = mesh.ReduceInt(mesh.GetNE()); 
+	out << YAML::Key << "dim" << YAML::Value << dim; 
+	out << YAML::Key << "elements" << YAML::Value << global_ne; 
+	out << YAML::Key << "mesh size" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "min" << YAML::Value << hmin; 
+		out << YAML::Key << "max" << YAML::Value << hmax; 
+	out << YAML::EndMap; 
+	out << YAML::Key << "mesh conditioning" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "min" << YAML::Value << kmin; 
+		out << YAML::Key << "max" << YAML::Value << kmax; 
+	out << YAML::EndMap; 
+	out << YAML::Key << "MPI ranks" << YAML::Value << mfem::Mpi::WorldSize(); 
+	out << YAML::Key << "refinements" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "serial" << YAML::Value << ser_ref; 
+		out << YAML::Key << "parallel" << YAML::Value << par_ref; 
+	out << YAML::EndMap; 
+	out << YAML::EndMap; 
 
 	// --- load algorithmic parameters --- 
 	sol::table driver = lua["driver"]; 
@@ -610,6 +634,9 @@ int main(int argc, char *argv[]) {
 	mfem::Vector beta(dim); 
 	for (int d=0; d<dim; d++) { beta(d) = d+1; }
 
+	// store time spent sweeping/solving moment system at each iteration 
+	mfem::Array<double> sweep_time, moment_time; 
+
 	// standard sn iteration with preconditioning if available 
 	if (!accel_avail) {
 		DiffusionSyntheticAccelerationOperator *prec = nullptr; // applies I + D^{-1} Ms
@@ -635,7 +662,7 @@ int main(int argc, char *argv[]) {
 				auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
 				slu_op = new mfem::SuperLURowLocMatrix(*mono); 
 				auto *slu = new mfem::SuperLUSolver(*slu_op); 
-				slu->SetPrintStatistics(false); 
+				io::SetSuperLUOptions(inner_solver_table, *slu, root); 
 				auto *ceo = new ComponentExtractionOperator(p1disc->RowOffsets(), 1); 
 				auto *ceo_t = new mfem::TransposeOperator(*ceo); 
 				// solve 2x2 but source and solution and scalar flux only 
@@ -665,7 +692,7 @@ int main(int argc, char *argv[]) {
 				#ifdef MFEM_USE_SUPERLU
 					slu_op = new mfem::SuperLURowLocMatrix(S); 
 					auto *slu = new mfem::SuperLUSolver(*slu_op); 
-					slu->SetPrintStatistics(false); 
+					io::SetSuperLUOptions(inner_solver_table, *slu, root); 
 					inner_solver = slu; 
 				#else 
 					MFEM_ABORT("superlu required for direct option"); 
@@ -698,7 +725,7 @@ int main(int argc, char *argv[]) {
 				#ifdef MFEM_USE_SUPERLU
 					slu_op = new mfem::SuperLURowLocMatrix(S); 
 					auto *slu = new mfem::SuperLUSolver(*slu_op); 
-					slu->SetPrintStatistics(false); 
+					io::SetSuperLUOptions(inner_solver_table, *slu, root); 
 					inner_solver = slu; 
 				#else 
 					MFEM_ABORT("superlu required for direct option"); 
@@ -716,7 +743,7 @@ int main(int argc, char *argv[]) {
 			if (amg) {
 				amg->SetPrintLevel(0); 
 				sol::optional<sol::table> amg_opts = prec_table["solver"]["amg_opts"]; 
-				if (amg_opts) io::SetAMGOptions(amg_opts.value(), *amg); 				
+				if (amg_opts) io::SetAMGOptions(amg_opts.value(), *amg, root); 				
 			}
 
 			// create DSA operator 
@@ -777,6 +804,9 @@ int main(int argc, char *argv[]) {
 	#endif
 		if (dsa_mat) delete dsa_mat; 
 		if (block_disc) delete block_disc; 
+
+		sweep_time = monitor.sweep_time; 
+		moment_time = monitor.prec_time; 
 	}
 
 	// moment-based solve
@@ -789,6 +819,7 @@ int main(int argc, char *argv[]) {
 		BlockDiffusionDiscretization *block_disc = nullptr; 
 	#ifdef MFEM_USE_SUPERLU
 		mfem::SuperLURowLocMatrix *slu_op = nullptr; 
+		mfem::SuperLUSolver *slu = nullptr; 
 	#endif
 
 		sol::table accel = accel_avail.value(); 
@@ -827,7 +858,7 @@ int main(int argc, char *argv[]) {
 			#ifdef MFEM_USE_SUPERLU
 				slu_op = new mfem::SuperLURowLocMatrix(S); 
 				auto *slu = new mfem::SuperLUSolver(*slu_op); 
-				slu->SetPrintStatistics(false); 
+				io::SetSuperLUOptions(inner_solver_table, *slu, root); 
 				inner_solver = slu;
 			#else 
 				MFEM_ABORT("superlu required for direct option"); 
@@ -885,7 +916,7 @@ int main(int argc, char *argv[]) {
 			#ifdef MFEM_USE_SUPERLU
 				slu_op = new mfem::SuperLURowLocMatrix(S); 
 				auto *slu = new mfem::SuperLUSolver(*slu_op); 
-				slu->SetPrintStatistics(false); 
+				io::SetSuperLUOptions(inner_solver_table, *slu, root); 
 				inner_solver = slu;
 			#else 
 				MFEM_ABORT("superlu required for direct option"); 
@@ -921,7 +952,7 @@ int main(int argc, char *argv[]) {
 			auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
 			slu_op = new mfem::SuperLURowLocMatrix(*mono); 
 			auto *slu = new mfem::SuperLUSolver(*slu_op); 
-			slu->SetPrintStatistics(false); 
+			io::SetSuperLUOptions(inner_solver_table, *slu, root); 
 
 			auto *source_op = new ConsistentSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, reflection_bdr_attr); 
 			offsets = p1disc->RowOffsets(); // copy offsets 
@@ -942,7 +973,7 @@ int main(int argc, char *argv[]) {
 		if (amg) {
 			amg->SetPrintLevel(0); 
 			sol::optional<sol::table> amg_opts = inner_solver_table["amg_opts"]; 
-			if (amg_opts) io::SetAMGOptions(amg_opts.value(), *amg);	
+			if (amg_opts) io::SetAMGOptions(amg_opts.value(), *amg, root);	
 		}
 
 		out << YAML::Key << "solver" << YAML::Value << inner_solver_table; 
@@ -978,8 +1009,12 @@ int main(int argc, char *argv[]) {
 		mfem::Array<int> *inner_it = nullptr; 
 		if (sundials) {
 			inner_it = &sundials_data.inner_it; 
+			sweep_time = sundials_data.sweep_time; 
+			moment_time = sundials_data.moment_time; 
 		} else {
 			inner_it = &monitor.inner_it; 
+			sweep_time = monitor.sweep_time; 
+			moment_time = monitor.moment_time; 
 		}
 		if (inner_it->Size()) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
@@ -1221,7 +1256,12 @@ int main(int argc, char *argv[]) {
 	wall_timer.Stop(); 
 	out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "setup" << YAML::Value << io::FormatTimeString(setup_timer.RealTime()); 
-		out << YAML::Key << "solve" << YAML::Value << io::FormatTimeString(solve_timer.RealTime()); 
+		// out << YAML::Key << "solve" << YAML::Value << io::FormatTimeString(solve_timer.RealTime()); 
+		out << YAML::Key << "solve" << YAML::Value << YAML::BeginMap; 
+			out << YAML::Key << "total" << YAML::Value << io::FormatTimeString(solve_timer.RealTime()); 
+			out << YAML::Key << "sweep" << YAML::Value << io::FormatTimeString(sweep_time.Sum()); 
+			out << YAML::Key << "moment" << YAML::Value << io::FormatTimeString(moment_time.Sum()); 
+		out << YAML::EndMap; 
 		out << YAML::Key << "wall" << YAML::Value << io::FormatTimeString(wall_timer.RealTime()); 
 	out << YAML::EndMap; 
 

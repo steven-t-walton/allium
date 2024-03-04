@@ -21,13 +21,17 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table);
 mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm); 
 
 // set AMG options like max levels, num sweeps, etc via a lua table 
-void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg); 
+void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root=true); 
+#ifdef MFEM_USE_SUPERLU
+void SetSuperLUOptions(sol::table &table, mfem::SuperLUSolver &slu, bool root=true); 
+#endif
 
 struct SundialsUserCallbackData {
 	YAML::Emitter *out; 
 	const MomentMethodFixedPointOperator *G; 
 	const mfem::IterativeSolver * const inner_solver; 
 	mfem::Array<int> inner_it; 
+	mfem::Array<double> sweep_time, moment_time; 
 	SundialsUserCallbackData(YAML::Emitter &out, const MomentMethodFixedPointOperator &G, 
 		const mfem::IterativeSolver * const isolver) 
 		: out(&out), G(&G), inner_solver(isolver)
