@@ -150,6 +150,7 @@ void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root)
 	sol::optional<int> interpolation = table["interpolation"]; 
 	sol::optional<int> coarsening = table["coarsening"]; 
 	sol::optional<double> strength_thresh = table["strength_threshold"]; 
+	int print_level = table["print_level"].get_or(0); 
 	if (max_iter) {
 		amg.SetMaxIter(max_iter.value()); 
 	}
@@ -177,6 +178,7 @@ void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root)
 	if (strength_thresh) {
 		amg.SetStrengthThresh(strength_thresh.value()); 
 	}
+	amg.SetPrintLevel(print_level); 
 }
 
 #ifdef MFEM_USE_SUPERLU
@@ -185,7 +187,7 @@ void SetSuperLUOptions(sol::table &table, mfem::SuperLUSolver &slu, bool root)
 	for (const auto &it : table) {
 		auto key = it.first.as<std::string>(); 
 		ValidateOption<std::string>("superlu", key, 
-			{"symmetric_pattern", "iterative_refine", "equilibriate", 
+			{"type", "symmetric_pattern", "iterative_refine", "equilibriate", 
 			 "column_permutation", "ParSymbFact", "print_statistics"}, 
 			root); 
 	}

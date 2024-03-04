@@ -135,7 +135,7 @@ int main(int argc, char *argv[]) {
 	// must call hypre init for BoomerAMG now? 
 	mfem::Hypre::Init(); 
 
-	mfem::StopWatch wall_timer, setup_timer, solve_timer; 
+	mfem::StopWatch wall_timer, setup_timer, solve_timer, output_timer; 
 	wall_timer.Start(); 
 	setup_timer.Start(); 
 
@@ -182,7 +182,7 @@ int main(int argc, char *argv[]) {
 
 	// YAML output 
 	YAML::Emitter out(par_out);
-	out.SetDoublePrecision(3); 
+	out.SetDoublePrecision(8); 
 	out << YAML::BeginMap; 
 
 	// --- load lua file --- 
@@ -341,8 +341,9 @@ int main(int argc, char *argv[]) {
 	// --- make mesh and solution spaces --- 
 	sol::table mesh_node = lua["mesh"]; 
 	sol::optional<std::string> fname = mesh_node["file"]; 
-	int ser_ref = mesh_node["serial_refinements"].get_or(0); 
-	int par_ref = mesh_node["parallel_refinements"].get_or(0); 
+	const int ser_ref = mesh_node["serial_refinements"].get_or(0); 
+	const int par_ref = mesh_node["parallel_refinements"].get_or(0); 
+	const int tot_ref = ser_ref + par_ref; 
 	mfem::Mesh smesh; 
 	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
 	// load from a mesh file 
@@ -394,7 +395,7 @@ int main(int argc, char *argv[]) {
 
 		out << YAML::Key << "elements/axis" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
 		for (auto i=1; i<=ne.size(); i++) {
-			out << (int)ne[i]; 
+			out << (int)ne[i] * pow(2,tot_ref); 
 		} 
 		out << YAML::EndSeq; 		
 		out << YAML::Key << "element type" << YAML::Value << eltype_str; 
@@ -794,7 +795,8 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
 			out << YAML::Key << "max inner" << YAML::Value << monitor.inner_it.Max();
 			out << YAML::Key << "min inner" << YAML::Value << monitor.inner_it.Min(); 
-			out << YAML::Key << "avg inner" << YAML::Value << (double)monitor.inner_it.Sum()/monitor.inner_it.Size(); 		
+			out << YAML::Key << "avg inner" << YAML::Value << (double)monitor.inner_it.Sum()/monitor.inner_it.Size();
+			out << YAML::Key << "total" << YAML::Value << monitor.inner_it.Sum(); 
 			out << YAML::EndMap; 
 		}
 		if (prec) delete prec; 
@@ -1020,7 +1022,8 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
 			out << YAML::Key << "max inner" << YAML::Value << inner_it->Max();
 			out << YAML::Key << "min inner" << YAML::Value << inner_it->Min(); 
-			out << YAML::Key << "avg inner" << YAML::Value << (double)inner_it->Sum()/inner_it->Size(); 		
+			out << YAML::Key << "avg inner" << YAML::Value << (double)inner_it->Sum()/inner_it->Size(); 
+			out << YAML::Key << "total" << YAML::Value << inner_it->Sum(); 		
 			out << YAML::EndMap; 
 		}
 
@@ -1057,6 +1060,9 @@ int main(int argc, char *argv[]) {
 	if (inner_solver) delete inner_solver; 
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
+
+	// time post processing and output 
+	output_timer.Start(); 
 
 	// --- compute error if exact solution provided --- 
 	sol::optional<sol::function> solution_func_avail = lua["scalar_flux_solution"]; 
@@ -1182,13 +1188,14 @@ int main(int argc, char *argv[]) {
 				mfem::Vector start(dim), end(dim), dir(dim);
 				sol::table start_table = line["from"]; 
 				sol::table end_table = line["to"]; 
-				const int npoints = line["npoints"];  
 				for (int d=0; d<dim; d++) {
 					start(d) = start_table[d+1]; 
 					end(d) = end_table[d+1]; 
 				}
 				subtract(end, start, dir); 
 				double L = dir.Norml2();
+				// get (p+1) points per element on a uniform mesh 
+				const int npoints = L/hmin*(fe_order + 1); 
 				dir *= 1.0 / (npoints-1); 
 				double h = 1.0 / (npoints-1);  
 				mfem::Vector pts(npoints * dim); 
@@ -1253,15 +1260,16 @@ int main(int argc, char *argv[]) {
 
 	// output wall clock time 
 	MPI_Barrier(MPI_COMM_WORLD); 
+	output_timer.Stop(); 
 	wall_timer.Stop(); 
 	out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "setup" << YAML::Value << io::FormatTimeString(setup_timer.RealTime()); 
-		// out << YAML::Key << "solve" << YAML::Value << io::FormatTimeString(solve_timer.RealTime()); 
 		out << YAML::Key << "solve" << YAML::Value << YAML::BeginMap; 
 			out << YAML::Key << "total" << YAML::Value << io::FormatTimeString(solve_timer.RealTime()); 
 			out << YAML::Key << "sweep" << YAML::Value << io::FormatTimeString(sweep_time.Sum()); 
 			out << YAML::Key << "moment" << YAML::Value << io::FormatTimeString(moment_time.Sum()); 
 		out << YAML::EndMap; 
+		out << YAML::Key << "output" << YAML::Value << io::FormatTimeString(output_timer.RealTime()); 
 		out << YAML::Key << "wall" << YAML::Value << io::FormatTimeString(wall_timer.RealTime()); 
 	out << YAML::EndMap; 
 
