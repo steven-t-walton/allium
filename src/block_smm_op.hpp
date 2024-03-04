@@ -6,7 +6,7 @@
 enum DiffusionBoundaryConditionType {
 	HALF_RANGE, 
 	FULL_RANGE, 
-	HALF_RANGE_REFLECT
+	HALF_RANGE_REFLECT // half range on reflective boundaries only 
 };
 
 // helper class to solve the 2x2 LDG diffusion system of the form 
