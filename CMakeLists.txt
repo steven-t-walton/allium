@@ -134,18 +134,8 @@ target_include_directories(allium PUBLIC ${MFEM_INCLUDE_DIRS} ${CMAKE_BINARY_DIR
 
 # add executables in exe directory 
 LIST(APPEND EXE
-	exe/parsweep.cpp
-	exe/scratch.cpp
 	exe/chive.cpp
 )
-
-if (${MFEM_USE_SUPERLU})
-	LIST(APPEND EXE exe/p1.cpp)
-endif()
-
-if (${MFEM_USE_SUITESPARSE}) 
-	LIST(APPEND EXE exe/sweep.cpp)
-endif()
 
 foreach(exe ${EXE})
 	get_filename_component(name ${exe} NAME) 
