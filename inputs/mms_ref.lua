@@ -1,8 +1,8 @@
 total = 1
 scattering = .99
 
-alpha = 0
-beta = 0
+alpha = .25 
+beta = 1
 delta = 2
 function scalar_flux_solution(x,y,z)
 	return math.sin(math.pi*x)*math.sin(math.pi*y) + alpha*2/3*math.sin(3*math.pi*x)*math.sin(3*math.pi*y) + delta
@@ -76,11 +76,13 @@ driver = {
 		max_iter = 50
 	},
 	acceleration = {
-		type = "ldgsmm",
+		type = "ipsmm",
 		consistent = false,  
+		-- bc_type = "full range", 
 		solver = {
-			type = "direct", 
-			iterative_mode = false
+			type = "cg", 
+			abstol = 1e-12,
+			max_iter = 100
 		}
 	},
 	-- preconditioner = {
@@ -92,5 +94,13 @@ driver = {
 }
 
 output = {
-	paraview = "solution"
+	paraview = "solution",
+	lineout = {
+		centerline = {
+			from = {0,.25}, 
+			to = {0.5,0.25},
+			npoints = 50
+		}
+	},
+	lineout_path = "lineout.yaml"
 }

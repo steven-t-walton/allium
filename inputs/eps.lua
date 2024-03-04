@@ -1,4 +1,5 @@
-epsilon = 1e-4
+epsilon = 1e-1
+reflect = false
 
 mat = {
 	total = 1/epsilon, 
@@ -13,46 +14,53 @@ function material_map(x,y,z)
 end 
 
 boundary_conditions = {
-	vacuum = 0
+	vacuum = {
+		type = "vacuum", 
+	}, 
+	reflective = {
+		type = "reflective",
+	}
 }
 
 function boundary_map(x,y,z)
-	return "vacuum"
+	if ((y==0.0) and reflect) then 
+		return "reflective"
+	else
+		return "vacuum"
+	end
 end 
 
-Ne = 10
+Ne = 8
+L = (reflect) and 0.5 or 1.0
 mesh = {
-	-- file = "/opt/mfem/data/star-hilbert.mesh",
-	-- refinements = 3
 	num_elements = {Ne,Ne},
-	extents = {1,1} 
+	extents = {1,L}, 
 }
 
 driver = {
 	fe_order = 1, 
 	sn_order = 4, 
 	solver = {
-		type = "sli", 
+		type = "fp", 
 		abstol = 1e-6, 
-		max_iter = 50, 
+		max_iter = 100, 
+		iterative_mode = false,
+		kdim = 10
 	},
 	-- preconditioner = {
-	-- 	type = "mip", 
-	-- 	solver = {
-	-- 		type = "cg", 
-	-- 		reltol = 1e-2, 
-	-- 		max_iter = 100
-	-- 	}
+	-- 	type = "mip",
+	-- 	scale_stabilization = true,
+	-- 	bc_type = "half range",
 	-- }
 	acceleration = {
 		type = "ldgsmm", 
-		consistent = false, 
-		solver = {
-			type = "direct"
-		}
+		bc_type = "full range", 
+		consistent = true, 
+		scale_stabilization = true, 
+		bound_stabilization_below = true
 	}
 }
 
 output = {
-	name = "solution"
+	paraview = "solution", 
 }

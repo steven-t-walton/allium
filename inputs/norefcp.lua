@@ -3,52 +3,46 @@ sig_min = 0.2
 pipe = {
 	total = sig_min, 
 	scattering = sig_min - 1e-3, 
-	source = 1e-7
+	source = 0
 }
 
 wall = {
 	total = sig_max, 
 	scattering = sig_max - 1e-3, 
-	source = 1e-7
+	source = 0
 }
 
 materials = {pipe = pipe, wall = wall}
 
 function material_map(x,y,z) 
 	r = "wall"
-	if (y<0.5) then 
+	if (y<2.5 and y>1.5) then 
 		r = "pipe"
 	end
-	if (x > 2.5 and x < 4.5 and y<1.5) then 
+	if (x > 2.5 and x < 4.5 and y<3.5 and y>0.5) then 
 		r = "pipe"
 	end
-	if (x > 3 and x < 4 and y < 1) then
+	if (x > 3 and x < 4 and y < 3 and y>1) then
 		r = "wall"
 	end 
 	return r 
 end 
 
 boundary_conditions = {
-	pipe = {
+	inflow = {
 		type = "inflow", 
 		value = 1.0/2/math.pi
 	},
-	wall = {
+	vacuum = {
 		type = "vacuum", 
 	}, 
-	bottom = {
-		type = "reflective"
-	}
 }
 
 function boundary_map(x,y,z)
-	r = "wall" 
-	if (x < 1e-10 and y < 0.5) then 
-		r = "pipe"
+	r = "vacuum" 
+	if (x < 1e-10 and y < 2.5 and y>1.5) then 
+		r = "inflow"
 	end 
-	if (y<1e-10) then 
-		r = "bottom"
-	end
 	return r 
 end 
 
