@@ -65,7 +65,7 @@ function(CheckConsistency name drv)
 	set_tests_properties("chive.consistency.${name}_tri" PROPERTIES LABELS "chive;serial")
 
 	add_test(NAME "chive.consistency.${name}_mixed" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
-		-l "${drv}; mesh = {file = \"${TEST_DIR}/mixed.mesh\", refinements = 2}")
+		-l "${drv}; mesh = {file = \"${TEST_DIR}/mixed.mesh\", serial_refinements = 2}")
 	set_tests_properties("chive.consistency.${name}_mixed" PROPERTIES LABELS "chive;serial")
 
 	add_test(NAME "chive.consistency.${name}_hex" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
@@ -82,7 +82,7 @@ function(CheckConsistency name drv)
 	set_tests_properties("chive.consistency.${name}_tri" PROPERTIES LABELS "chive;parallel")
 
 	add_test(NAME "chive.consistency.${name}_mixed_par" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
-		-l "${drv}; mesh = {file = \"${TEST_DIR}/mixed.mesh\", refinements = 2}" --np 4)
+		-l "${drv}; mesh = {file = \"${TEST_DIR}/mixed.mesh\", serial_refinements = 2}" --np 4)
 	set_tests_properties("chive.consistency.${name}_mixed_par" PROPERTIES LABELS "chive;parallel")
 
 	add_test(NAME "chive.consistency.${name}_hex_par" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
