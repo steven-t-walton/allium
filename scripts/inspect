@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+
+import yaml 
+import sys 
+
+argc = len(sys.argv)
+assert(argc>1)
+file = sys.argv[1] 
+with open(file, 'r') as inp:
+	db = yaml.safe_load(inp)
+
+for i in range(2,argc):
+	db = db[sys.argv[i]]
+
+if (type(db)==dict):
+	print(yaml.dump(db))
+else:
+	print(db)
