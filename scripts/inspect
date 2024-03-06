@@ -10,7 +10,10 @@ with open(file, 'r') as inp:
 	db = yaml.safe_load(inp)
 
 for i in range(2,argc):
-	db = db[sys.argv[i]]
+	idx = sys.argv[i]
+	if (type(db)==list):
+		idx = int(idx)
+	db = db[idx]
 
 if (type(db)==dict):
 	print(yaml.dump(db))
