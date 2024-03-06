@@ -730,8 +730,8 @@ void LDGTraceIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &tr_fe1,
 		int order;
 		if (tr_ndof2)
 		{
-			order = std::max(tr_fe1.GetOrder(), tr_fe2.GetOrder()) + std::max(te_fe1.GetOrder(),
-			te_fe2.GetOrder());
+			order = std::max(tr_fe1.GetOrder(), tr_fe2.GetOrder()) 
+				+ std::max(te_fe1.GetOrder(), te_fe2.GetOrder());
 		}
 		else
 		{
