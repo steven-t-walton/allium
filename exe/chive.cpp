@@ -738,6 +738,41 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "bound stabilization from below" << YAML::Value << lower_bound; 
 				out << YAML::Key << "boundary condition type" << YAML::Value << bc_str; 
 			}
+			else if (type == "scalar mip") {
+				double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
+				double sigma = prec_table["sigma"].get_or(-1.0); 
+				mfem::Array<int> marshak_bdr_attrs(mesh.bdr_attributes.Max()); 
+				marshak_bdr_attrs = 1;
+				if (reflection_bdr_attr > 0) {
+					marshak_bdr_attrs[reflection_bdr_attr-1] = 0; 
+				}
+				mfem::ParBilinearForm Kform(&fes); 
+				mfem::RatioCoefficient diffco(1.0/3, total); 
+				mfem::ConstantCoefficient alpha_c(alpha/2); 
+				Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
+				Kform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
+				Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, sigma, kappa, alpha/2)); 
+				Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
+				Kform.Assemble(); 
+				Kform.Finalize(); 
+				dsa_mat = Kform.ParallelAssemble();
+
+				if (inner_it_solver) {
+					amg = new mfem::HypreBoomerAMG(*dsa_mat); 
+					inner_it_solver->SetOperator(*dsa_mat); 
+					inner_it_solver->SetPreconditioner(*amg); 
+				}
+
+				else {
+					slu_op = new mfem::SuperLURowLocMatrix(*dsa_mat); 
+					auto *slu = new mfem::SuperLUSolver(*slu_op); 
+					io::SetSuperLUOptions(inner_solver_table, *slu, root); 
+					inner_solver = slu; 
+				}
+
+				out << YAML::Key << "kappa" << YAML::Value << kappa; 
+				out << YAML::Key << "sigma" << YAML::Value << sigma; 
+			}
 			else MFEM_ABORT("dsa type " << type << " not defined"); 
 
 			// setup AMG object 
@@ -981,7 +1016,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "solver" << YAML::Value << inner_solver_table; 
 		out << YAML::EndMap; // end acceleration map 
 		bool diffusion_solve = accel["diffusion_solve"].get_or(false); 
-		if (diffusion_solve) out << YAML::Key << "diffusion solve" << YAML::Value << diffusion_solve; 
+		if (diffusion_solve) out << YAML::Key << "diffusion solve" << YAML::Value << diffusion_solve << YAML::Newline; 
 		out << YAML::EndMap; // end driver map 
 
 		MomentMethodFixedPointOperator G(D, Linv, Ms_form, *smm, source_vec, psi); 
