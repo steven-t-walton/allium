@@ -127,3 +127,20 @@ endforeach()
 add_test(NAME "chive.kinsol" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
 	-l "driver.solver.type = \"kinsol\"; driver.solver.kdim = 5; driver.acceleration.type = \"ldgsmm\"; mesh = {num_elements = {8,8}, extents = {1,1}}" --np 4)
 set_tests_properties("chive.kinsol" PROPERTIES LABELS "chive;parallel")
+
+# --- GCI tests on "easy" crooked pipe problem --- 
+# assesses pointwise convergence on realistic problem 
+# compare scalar flux at outflow as mesh is refined, confirm get 1st order convergence 
+add_test(NAME "chive.cp.mip" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_gci.py -e ${CHIVE} -i ${TEST_DIR}/easy_cp.lua 
+	-l "driver.preconditioner = {type = \"mip\", solver = cg_solver}" --nprocs 4 -o 1)
+set_tests_properties("chive.cp.mip" PROPERTIES LABELS "chive;parallel")
+
+add_test(NAME "chive.cp.ldgsmm" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_gci.py -e ${CHIVE} -i ${TEST_DIR}/easy_cp.lua 
+	-l "driver.acceleration = {type = \"ldgsmm\", consistent=true, solver = cg_solver}; driver.solver.type = \"kinsol\"" 
+	--nprocs 4 -o 1)
+set_tests_properties("chive.cp.ldgsmm" PROPERTIES LABELS "chive;parallel")
+
+add_test(NAME "chive.cp.ipsmm" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_gci.py -e ${CHIVE} -i ${TEST_DIR}/easy_cp.lua 
+	-l "driver.acceleration = {type = \"ipsmm\", consistent=true, solver = cg_solver}; driver.solver.type = \"kinsol\"" 
+	--nprocs 4 -o 1)
+set_tests_properties("chive.cp.ipsmm" PROPERTIES LABELS "chive;parallel")
