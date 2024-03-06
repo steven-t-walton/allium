@@ -604,7 +604,7 @@ int main(int argc, char *argv[]) {
 	// allocate transport vector + views 
 	mfem::Vector psi(psi_size);
 	psi = 0.0; 
-	mfem::Vector moment_solution(moments_size);  
+	mfem::Vector moment_solution(moments_size), moment_solution_HO; 
 	mfem::ParGridFunction phi(&fes), J(&vfes, moment_solution, phi_size);
 
 	// initial guess 
@@ -793,9 +793,9 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "outer iterations" << YAML::Value << outer_solver->GetNumIterations();
 		if (monitor.inner_it.Size()) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "max inner" << YAML::Value << monitor.inner_it.Max();
-			out << YAML::Key << "min inner" << YAML::Value << monitor.inner_it.Min(); 
-			out << YAML::Key << "avg inner" << YAML::Value << (double)monitor.inner_it.Sum()/monitor.inner_it.Size();
+			out << YAML::Key << "max" << YAML::Value << monitor.inner_it.Max();
+			out << YAML::Key << "min" << YAML::Value << monitor.inner_it.Min(); 
+			out << YAML::Key << "avg" << YAML::Value << (double)monitor.inner_it.Sum()/monitor.inner_it.Size();
 			out << YAML::Key << "total" << YAML::Value << monitor.inner_it.Sum(); 
 			out << YAML::EndMap; 
 		}
@@ -815,7 +815,7 @@ int main(int argc, char *argv[]) {
 	else {
 		// space for current 
 		mfem::Array<int> offsets; 
-		mfem::BlockVector block_x; 
+		mfem::BlockVector block_x;
 		mfem::Operator *smm = nullptr; 
 		mfem::HypreBoomerAMG *amg = nullptr; 
 		BlockDiffusionDiscretization *block_disc = nullptr; 
@@ -1020,20 +1020,20 @@ int main(int argc, char *argv[]) {
 		}
 		if (inner_it->Size()) {
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "max inner" << YAML::Value << inner_it->Max();
-			out << YAML::Key << "min inner" << YAML::Value << inner_it->Min(); 
-			out << YAML::Key << "avg inner" << YAML::Value << (double)inner_it->Sum()/inner_it->Size(); 
+			out << YAML::Key << "max" << YAML::Value << inner_it->Max();
+			out << YAML::Key << "min" << YAML::Value << inner_it->Min(); 
+			out << YAML::Key << "avg" << YAML::Value << (double)inner_it->Sum()/inner_it->Size(); 
 			out << YAML::Key << "total" << YAML::Value << inner_it->Sum(); 		
 			out << YAML::EndMap; 
 		}
 
 		// compute "consistency" between SN and moment solution 
 		// for scalar flux and current 
-		J = block_x.GetBlock(0); 
-		mfem::Vector x_sn(moments_size); 
-		Dlin_aniso.Mult(psi, x_sn); 
-		mfem::ParGridFunction phi_sn(&fes, x_sn, 0); 
-		mfem::ParGridFunction J_sn(&vfes, x_sn, fes.GetVSize()); 
+		J = block_x.GetBlock(0);
+		moment_solution_HO.SetSize(moments_size);  
+		Dlin_aniso.Mult(psi, moment_solution_HO); 
+		mfem::ParGridFunction phi_sn(&fes, moment_solution_HO, 0); 
+		mfem::ParGridFunction J_sn(&vfes, moment_solution_HO, fes.GetVSize()); 
 		mfem::GridFunctionCoefficient phi_snc(&phi_sn); 
 		double consistency_phi = phi.ComputeL2Error(phi_snc); 
 		mfem::GridFunctionCoefficient J_snc(&J_sn); 
@@ -1119,6 +1119,13 @@ int main(int argc, char *argv[]) {
 			mfem::ParaViewDataCollection dc(output_name, &mesh); 
 			dc.RegisterField("phi", &phi); 
 			dc.RegisterField("J", &J); 
+			mfem::ParGridFunction phi_ho, J_ho; 
+			if (moment_solution_HO.Size()) {
+				phi_ho.MakeRef(&fes, moment_solution_HO, 0); 
+				J_ho.MakeRef(&vfes, moment_solution_HO, fes.GetVSize()); 
+				dc.RegisterField("phi_ho", &phi_ho); 
+				dc.RegisterField("J_ho", &J_ho); 
+			}
 			dc.RegisterField("partition", &mesh_part); 
 			dc.RegisterField("total", &total_gf); 
 			dc.RegisterField("scattering", &scattering_gf); 
