@@ -673,7 +673,7 @@ int main(int argc, char *argv[]) {
 			#endif
 			} 
 			else if (type == "ldgsa") {
-				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
+				bool scale_stabilization = prec_table["scale_stabilization"].get_or(false); 
 				const auto bc_str = io::GetAndValidateOption<std::string>(prec_table, "bc_type", 
 					{"full range", "half range", "half range reflect"}, "full range", root); 
 				const auto bc_type = io::GetDiffusionBCType(bc_str); 
@@ -866,7 +866,7 @@ int main(int argc, char *argv[]) {
 		std::transform(type.begin(), type.end(), type.begin(), ::toupper); 
 		if (type == "LDGSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
-			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
+			bool scale_stabilization = accel["scale_stabilization"].get_or(false); 
 			const auto bc_str = io::GetAndValidateOption<std::string>(accel, "bc_type", 
 				{"full range", "half range", "half range reflect"}, "full range", root); 
 			const auto bc_type = io::GetDiffusionBCType(bc_str); 
