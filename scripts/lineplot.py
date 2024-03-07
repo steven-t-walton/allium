@@ -23,7 +23,13 @@ for file,label in zip(args.files, labels):
 	with open(file, 'r') as inp:
 		db = yaml.safe_load(inp)
 
-	line = db[args.key]
+	try:
+		line = db[args.key]
+	except:
+		s = f'key "{args.key}" not found in {file}. Valid keys are:'
+		for key in list(db.keys()):
+			s += f' "{key}"'
+		raise RuntimeError(s)
 	x = np.array(line['x'])
 	y = np.array(line[args.var])
 	if (len(y.shape)>1):
