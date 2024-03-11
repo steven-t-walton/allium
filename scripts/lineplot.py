@@ -10,6 +10,7 @@ parser.add_argument('files', help='list of files to plot', nargs='+')
 parser.add_argument('-v', '--var', help='variable name', type=str, required=True)
 parser.add_argument('-l', '--labels', help='legend entries', type=str, nargs='+', default=[])
 parser.add_argument('-k', '--key', help='name of lineout to plot', type=str, required=True)
+parser.add_argument('-o', '--output', help='file name to save', type=str, default=None)
 args = parser.parse_args()
 
 var_names = {'scalar flux': r'$\varphi$', 'current' : r'$\|J\|$'}
@@ -41,4 +42,7 @@ for file,label in zip(args.files, labels):
 
 if (len(args.files)>1):
 	plt.legend()
-plt.show()
+if (args.output is not None):
+	plt.savefig(args.output)
+else:
+	plt.show()
