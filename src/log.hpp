@@ -93,9 +93,7 @@ public:
 						my_value = std::min(my_value, nbr); 
 					} else if constexpr (Op == SynchronizeOperation::MAX) {
 						my_value = std::max(my_value, nbr); 
-					} else {
-						static_assert(false, "operation not defined"); 
-					}
+					} 
 				}
 
 				count++; 
