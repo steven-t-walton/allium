@@ -400,11 +400,6 @@ int main(int argc, char *argv[]) {
 			}
 			smesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], eltype, extents[1], extents[2], extents[3], sfc_ordering); 
 		}
-		// need at minimum WorldSize() elements in serial mesh 
-		if (smesh.GetNE() < mfem::Mpi::WorldSize() and root) {
-			MFEM_ABORT("serial mesh with " << smesh.GetNE() << " elements too small to decompose on " 
-				<< mfem::Mpi::WorldSize() << " processors"); 
-		}
 
 		out << YAML::Key << "extents" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
 		for (auto i=1; i<=extents.size(); i++) {
@@ -423,6 +418,11 @@ int main(int argc, char *argv[]) {
 	// apply serial refinements 
 	for (int sr=0; sr<ser_ref; sr++) {
 		smesh.UniformRefinement(); 
+	}
+	// need at minimum WorldSize() elements in serial mesh 
+	if (smesh.GetNE() < mfem::Mpi::WorldSize() and root) {
+		MFEM_ABORT("serial mesh with " << smesh.GetNE() << " elements too small to decompose on " 
+			<< mfem::Mpi::WorldSize() << " processors"); 
 	}
 	const auto dim = smesh.Dimension(); 
 
