@@ -13,6 +13,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/block_smm_op.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/cons_smm_op.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/io.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/log.hpp
 )
 
 LIST(APPEND srcs 
@@ -29,6 +30,7 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/block_smm_op.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/cons_smm_op.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/io.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/log.cpp
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)

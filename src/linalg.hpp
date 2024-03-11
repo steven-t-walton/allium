@@ -1,6 +1,7 @@
 #pragma once 
 
 #include "mfem.hpp"
+#include "log.hpp"
 
 mfem::HypreParMatrix *ElementByElementBlockInverse(const mfem::ParFiniteElementSpace &fes, const mfem::HypreParMatrix &A); 
 
@@ -64,15 +65,38 @@ private:
 	const mfem::Operator *A, *B, *C; 
 	bool ownA, ownB, ownC; 
 	mutable mfem::Vector t1, t2;
+	mutable mfem::StopWatch timer; 
+	bool log_time = false; 
+	std::array<std::string,3> timing_keys; 
 public:
 	TripleProductOperator(const mfem::Operator *a, const mfem::Operator *b, const mfem::Operator *c,
 		bool owna, bool ownb, bool ownc); 
 	~TripleProductOperator(); 
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const {
-		C->Mult(x,t1); B->Mult(t1, t2); A->Mult(t2, y); 
+		timer.Restart(); 
+		C->Mult(x,t1); 
+		timer.Stop(); 
+		if (log_time) TimingLog[timing_keys[2]] += timer.RealTime(); 
+
+		timer.Restart(); 		
+		B->Mult(t1, t2); 
+		timer.Stop(); 
+		if (log_time) TimingLog[timing_keys[1]] += timer.RealTime(); 
+
+		timer.Restart(); 
+		A->Mult(t2, y); 
+		timer.Stop(); 
+		if (log_time) TimingLog[timing_keys[0]] += timer.RealTime(); 
 	}
 	void MultTranspose(const mfem::Vector &x, mfem::Vector &y) const {
 		A->MultTranspose(x, t2); B->MultTranspose(t2, t1); C->MultTranspose(t1, y); 
+	}
+
+	void SetLoggingKeys(std::string a, std::string b, std::string c) {
+		timing_keys[0] = a; 
+		timing_keys[1] = b; 
+		timing_keys[2] = c; 
+		log_time = true; 
 	}
 };
 

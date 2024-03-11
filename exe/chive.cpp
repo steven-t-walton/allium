@@ -14,6 +14,7 @@
 #include "comment_stream.hpp"
 #include "linalg.hpp"
 #include "io.hpp"
+#include "log.hpp"
 #include <kinsol/kinsol.h>
 
 template<typename K, typename V> 
@@ -997,7 +998,7 @@ int main(int argc, char *argv[]) {
 			// extract scalar flux, storing [J,phi] in block_x 
 			auto *block_extract = new SubBlockExtractionOperator(block_x, 1); 
 			// build SM source, invert P1, extract phi 
-			smm = new mfem::TripleProductOperator(block_extract, slu, source_op, true, true, true); 
+			smm = new TripleProductOperator(block_extract, slu, source_op, true, true, true); 
 
 			out << YAML::Key << "consistent" << YAML::Value << true; 
 		#else
@@ -1011,6 +1012,11 @@ int main(int argc, char *argv[]) {
 			amg->SetPrintLevel(0); 
 			sol::optional<sol::table> amg_opts = inner_solver_table["amg_opts"]; 
 			if (amg_opts) io::SetAMGOptions(amg_opts.value(), *amg, root);	
+		}
+
+		auto *triple_prod = dynamic_cast<TripleProductOperator*>(smm); 
+		if (triple_prod) {
+			triple_prod->SetLoggingKeys("smm block extract", "smm solve", "smm source"); 
 		}
 
 		out << YAML::Key << "solver" << YAML::Value << inner_solver_table; 
@@ -1300,10 +1306,27 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap; // end output map 
 	}
 
+	TimingLog.Synchronize(); 
+	EventLog.Synchronize(); 
+
 	// output wall clock time 
 	MPI_Barrier(MPI_COMM_WORLD); 
 	output_timer.Stop(); 
 	wall_timer.Stop(); 
+	if (EventLog.size()) {
+		out << YAML::Key << "event log" << YAML::Value << YAML::BeginMap; 
+		for (const auto &it : EventLog) {
+			out << YAML::Key << it.first << YAML::Value << it.second; 
+		}
+		out << YAML::EndMap; 
+	}
+	if (TimingLog.size()) {
+		out << YAML::Key << "timing log" << YAML::Value << YAML::BeginMap; 
+		for (const auto &it : TimingLog) {
+			out << YAML::Key << it.first << YAML::Value << io::FormatTimeString(it.second); 
+		}
+		out << YAML::EndMap; 		
+	}
 	out << YAML::Key << "timings" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "setup" << YAML::Value << io::FormatTimeString(setup_timer.RealTime()); 
 		out << YAML::Key << "solve" << YAML::Value << YAML::BeginMap; 
