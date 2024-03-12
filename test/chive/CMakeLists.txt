@@ -132,15 +132,14 @@ set_tests_properties("chive.kinsol" PROPERTIES LABELS "chive;parallel")
 # assesses pointwise convergence on realistic problem 
 # compare scalar flux at outflow as mesh is refined, confirm get 1st order convergence 
 add_test(NAME "chive.cp.mip" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_gci.py -e ${CHIVE} -i ${TEST_DIR}/easy_cp.lua 
-	-l "driver.preconditioner = {type = \"mip\", solver = cg_solver}" --nprocs 4 -o 1)
+	-l "driver.preconditioner = {type = 'mip', solver = cg_solver}" --nprocs 4 -o 1)
 set_tests_properties("chive.cp.mip" PROPERTIES LABELS "chive;parallel")
 
 add_test(NAME "chive.cp.ldgsmm" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_gci.py -e ${CHIVE} -i ${TEST_DIR}/easy_cp.lua 
-	-l "driver.acceleration = {type = \"ldgsmm\", consistent=true, solver = cg_solver}; driver.solver.type = \"kinsol\"" 
+	-l "driver.acceleration = {type = 'ldgsmm', consistent=true, solver = cg_solver}; driver.solver.type = 'kinsol'" 
 	--nprocs 4 -o 1)
 set_tests_properties("chive.cp.ldgsmm" PROPERTIES LABELS "chive;parallel")
 
 add_test(NAME "chive.cp.ipsmm" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_gci.py -e ${CHIVE} -i ${TEST_DIR}/easy_cp.lua 
-	-l "driver.acceleration = {type = \"ipsmm\", consistent=true, solver = cg_solver}; driver.solver.type = \"kinsol\"" 
-	--nprocs 4 -o 1)
+	-l "driver.acceleration = {type = 'ipsmm', consistent = true, solver = cg_solver}; driver.solver.type = 'kinsol'" --nprocs 4 -o 1)
 set_tests_properties("chive.cp.ipsmm" PROPERTIES LABELS "chive;parallel")

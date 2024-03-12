@@ -17,10 +17,9 @@ args = parser.parse_args()
 d = []
 for r in range(3):
 	cmd = ['mpirun', '-n', str(args.nprocs), args.exe, '-i', args.input, 
-		'-l', f'\"driver.fe_order = {args.fe_order}; mesh.parallel_refinements = {r+args.base_ref}; {args.lua}\"']
+		'-l', f'driver.fe_order = {args.fe_order}; mesh.parallel_refinements = {r+args.base_ref}; {args.lua}']
 	print(*cmd)
-	res = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
-	print(res.stdout)
+	res = subprocess.run(cmd, stdout=subprocess.PIPE)
 	db = yaml.safe_load(res.stdout)
 	tracers = db['output']['tracer']
 	local = []
