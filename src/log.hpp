@@ -96,9 +96,12 @@ public:
 					} 
 				}
 
+				delete[] nbr_key_data; 
 				count++; 
 			}
 		}
+
+		delete[] key_data; 
 	}
 };
 
