@@ -25,6 +25,11 @@ public:
 	LevelSymmetricQuadrature(int _order, int _dim); 
 };
 
+class AbuShumaysQuadrature : public AngularQuadrature {
+public:
+	AbuShumaysQuadrature(int _order, int _dim); 
+};
+
 class SingleAngleQuadratureRule : public AngularQuadrature {
 public:
 	SingleAngleQuadratureRule(const AngularQuadrature &rule, int angle)

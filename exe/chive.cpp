@@ -143,8 +143,6 @@ int main(int argc, char *argv[]) {
 	const auto rank = mfem::Mpi::WorldRank(); 
 	const bool root = rank == 0; 
 
-	if (argc == 1) { MFEM_ABORT("must supply input file"); }
-
 	// stream for output to terminal
 	mfem::OutStream par_out(std::cout);
 	// enable only for root so non-root procs don't clutter cout 
@@ -487,7 +485,6 @@ int main(int argc, char *argv[]) {
 	// --- load algorithmic parameters --- 
 	sol::table driver = lua["driver"]; 
 	const int fe_order = driver["fe_order"]; 
-	const int sn_order = driver["sn_order"]; 
 	std::string basis_type_str = io::GetAndValidateOption(driver, "basis_type", {"lobatto", "legendre"}, "lobatto", root); 
 
 	// --- build solution space --- 
@@ -537,8 +534,17 @@ int main(int argc, char *argv[]) {
 	PWPhaseSpaceCoefficient inflow(battrs, inflow_list); 
 
 	// --- angular quadrature rule --- 
-	LevelSymmetricQuadrature quad(sn_order, dim); 
-	const auto Nomega = quad.Size(); 
+	const int sn_order = driver["sn_order"]; 
+	const std::string sn_type = io::GetAndValidateOption(driver, "sn_quadrature_type", 
+		{"level symmetric", "abu shumays"}, "level symmetric", root); 
+	AngularQuadrature *quad; 
+	if (sn_type == "level symmetric") {
+		quad = new LevelSymmetricQuadrature(sn_order, dim); 
+	} 
+	else if (sn_type == "abu shumays") {
+		quad = new AbuShumaysQuadrature(sn_order, dim); 
+	}
+	const auto Nomega = quad->Size(); 
 
 	// --- transport vector setup --- 
 	TransportVectorExtents psi_ext(1, Nomega, fes.GetVSize());
@@ -547,8 +553,8 @@ int main(int argc, char *argv[]) {
 	const auto phi_size = TotalExtent(phi_ext);
 	MomentVectorExtents moments_ext(1, dim+1, fes.GetVSize()); // scalar flux and dim components of current 
 	const auto moments_size = TotalExtent(moments_ext); 
-	DiscreteToMoment D(quad, psi_ext, phi_ext); // integrates over angle psi -> phi 
-	DiscreteToMoment Dlin_aniso(quad, psi_ext, moments_ext); // forms psi -> [phi,J] 
+	DiscreteToMoment D(*quad, psi_ext, phi_ext); // integrates over angle psi -> phi 
+	DiscreteToMoment Dlin_aniso(*quad, psi_ext, moments_ext); // forms psi -> [phi,J] 
 
 	const auto psi_size_global = mesh.ReduceInt(psi_size); 
 	const auto phi_size_global = mesh.ReduceInt(phi_size); 
@@ -604,6 +610,7 @@ int main(int argc, char *argv[]) {
 	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "fe order" << YAML::Value << fe_order; 
 		out << YAML::Key << "sn order" << YAML::Value << sn_order; 
+		out << YAML::Key << "sn quadrature type" << YAML::Value << sn_type; 
 		out << YAML::Key << "num angles" << YAML::Value << Nomega; 			
 		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
 		out << YAML::Key << "phi size" << YAML::Value << phi_size_global;
@@ -633,10 +640,10 @@ int main(int argc, char *argv[]) {
 	mfem::Vector source_vec(psi_size); 
 	source_vec = 0.0; 
 	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
-	FormTransportSource(fes, quad, source, inflow, source_vec_view); 
+	FormTransportSource(fes, *quad, source, inflow, source_vec_view); 
 
 	// build sweep operator 
-	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow, reflection_bdr_attr); 
+	InverseAdvectionOperator Linv(fes, *quad, psi_ext, total, inflow, reflection_bdr_attr); 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -650,7 +657,7 @@ int main(int argc, char *argv[]) {
 	// common parameters to discretization
 	mfem::Vector normal(dim); 
 	normal = 0.0; normal(0) = 1.0; 
-	double alpha = ComputeAlpha(quad, normal);
+	double alpha = ComputeAlpha(*quad, normal);
 	mfem::Vector beta(dim); 
 	for (int d=0; d<dim; d++) { beta(d) = d+1; }
 
@@ -896,9 +903,9 @@ int main(int argc, char *argv[]) {
 
 			mfem::Operator *source_op; 
 			if (consistent) {
-				source_op = new ConsistentLDGSMMSourceOperator(*block_ldg, quad, psi_ext, source_vec_view); 
+				source_op = new ConsistentLDGSMMSourceOperator(*block_ldg, *quad, psi_ext, source_vec_view); 
 			} else {
-				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, 
+				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, *quad, psi_ext, source, inflow, 
 					alpha, reflection_bdr_attr, bc_type); 				
 			}
 
@@ -954,9 +961,9 @@ int main(int argc, char *argv[]) {
 
 			mfem::Operator *source_op; 
 			if (consistent) {
-				source_op = new ConsistentIPSMMSourceOperator(*block_ip, quad, psi_ext, source_vec_view); 
+				source_op = new ConsistentIPSMMSourceOperator(*block_ip, *quad, psi_ext, source_vec_view); 
 			} else {
-				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, quad, psi_ext, source, inflow, alpha, 
+				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, *quad, psi_ext, source, inflow, alpha, 
 					reflection_bdr_attr, bc_type); 				
 			}
 
@@ -1010,7 +1017,7 @@ int main(int argc, char *argv[]) {
 			auto *slu = new mfem::SuperLUSolver(*slu_op); 
 			io::SetSuperLUOptions(inner_solver_table, *slu, root); 
 
-			auto *source_op = new ConsistentSMMSourceOperator(fes, vfes, quad, psi_ext, source_vec_view, alpha, reflection_bdr_attr); 
+			auto *source_op = new ConsistentSMMSourceOperator(fes, vfes, *quad, psi_ext, source_vec_view, alpha, reflection_bdr_attr); 
 			offsets = p1disc->RowOffsets(); // copy offsets 
 			block_x.Update(offsets); // set size of block_x 
 			// extract scalar flux, storing [J,phi] in block_x 
@@ -1117,6 +1124,7 @@ int main(int argc, char *argv[]) {
 	// --- clean up hanging pointers --- 
 	delete outer_solver; 
 	if (inner_solver) delete inner_solver; 
+	delete quad; 
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
 
@@ -1146,12 +1154,15 @@ int main(int argc, char *argv[]) {
 
 	if (current_func_avail) {
 		auto solution_func = current_func_avail.value(); 
-		auto solution_lam = [&solution_func](const mfem::Vector &x) {
+		auto solution_lam = [&solution_func](const mfem::Vector &x, mfem::Vector &v) {
 			double pos[3]; 
 			for (auto d=0; d<x.Size(); d++) { pos[d] = x(d); }
-			return solution_func(pos[0], pos[1], pos[2]); 
+			sol::table r = solution_func(pos[0], pos[1], pos[2]); 
+			for (int i=0; i<x.Size(); i++) {
+				v(i) = r[i+1]; 
+			}
 		}; 
-		mfem::FunctionCoefficient Jcoef(solution_lam); 
+		mfem::VectorFunctionCoefficient Jcoef(dim, solution_lam); 
 		double l2 = J.ComputeL2Error(Jcoef); 
 		std::stringstream ss; 
 		ss << std::setprecision(3) << std::scientific << l2; 

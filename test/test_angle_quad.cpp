@@ -62,7 +62,8 @@ TEST(AngularQuadrature, Reflection2D) {
 	const auto dim = 2; 
 	LevelSymmetricQuadrature quad(4,dim); 
 	mfem::Vector nor(dim); 
-	nor = 1.0; 
+	nor = 0.0; 
+	nor(0) = 1.0; 
 
 	for (int angle=0; angle<quad.Size(); angle++) {
 		auto r = quad.GetReflectedAngleIndex(angle, nor); 
@@ -73,7 +74,8 @@ TEST(AngularQuadrature, Reflection3D) {
 	const auto dim = 3; 
 	LevelSymmetricQuadrature quad(4,dim); 
 	mfem::Vector nor(dim); 
-	nor = 1.0; 
+	nor = 0.0; 
+	nor(0) = 1.0; 
 
 	for (int angle=0; angle<quad.Size(); angle++) {
 		auto r = quad.GetReflectedAngleIndex(angle, nor); 
@@ -117,4 +119,16 @@ TEST(DiscreteToMoment, LinearlyAnisotropic) {
 	EXPECT_NEAR(phi_view(0,0,0), 2./3, 1e-13); 	
 	EXPECT_NEAR(phi_view(0,1,0), 1./3, 1e-13); 	
 	EXPECT_NEAR(phi_view(0,2,0), 1./3, 1e-13); 	
+}
+
+TEST(AbuShumays, Quadratic) {
+	auto f = [](const mfem::Vector &Omega) {
+		return 2*Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
+	}; 
+	auto orders = {20, 36}; 
+	for (const auto &order : orders) {
+		AbuShumaysQuadrature quad(order, 2);
+		double val = Integrate(quad, f); 
+		EXPECT_NEAR(val, 4*M_PI, 1e-11); 				
+	}
 }

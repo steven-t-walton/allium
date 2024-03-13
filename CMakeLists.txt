@@ -93,6 +93,7 @@ find_package(OpenMP REQUIRED)
 # set location of quadrature files 
 set(LS_QUADRATURE_DIR "${CMAKE_SOURCE_DIR}/data/lsquad")
 message(STATUS "angular quadrature dir: ${LS_QUADRATURE_DIR}")
+set(AS_QUADRATURE_DIR "${CMAKE_SOURCE_DIR}/data/abu-shumays-quad")
 
 # define transport vector layout 
 # LEFT: stride fastest in group, then angle, then space 
