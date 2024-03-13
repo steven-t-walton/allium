@@ -11,6 +11,8 @@ parser.add_argument('-v', '--var', help='variable name', type=str, required=True
 parser.add_argument('-l', '--labels', help='legend entries', type=str, nargs='+', default=[])
 parser.add_argument('-k', '--key', help='name of lineout to plot', type=str, required=True)
 parser.add_argument('-o', '--output', help='file name to save', type=str, default=None)
+parser.add_argument('-c', '--component', help='component to select for vector-valued lineout', type=int, default=None)
+parser.add_argument('-t', '--title', help='plot title', type=str, default=None)
 args = parser.parse_args()
 
 var_names = {'scalar flux': r'$\varphi$', 'current' : r'$\|J\|$'}
@@ -34,7 +36,10 @@ for file,label in zip(args.files, labels):
 	x = np.array(line['x'])
 	y = np.array(line[args.var])
 	if (len(y.shape)>1):
-		y = np.linalg.norm(y, axis=1)
+		if (args.component is not None):
+			y = y[:,args.component]
+		else:
+			y = np.linalg.norm(y, axis=1)
 	t = np.linalg.norm(x - x[0], axis=1)
 	plt.plot(t, y, label=label)
 	plt.xlabel('$t$')
@@ -42,6 +47,8 @@ for file,label in zip(args.files, labels):
 
 if (len(args.files)>1):
 	plt.legend()
+if (args.title is not None):
+	plt.title(args.title)
 if (args.output is not None):
 	plt.savefig(args.output)
 else:
