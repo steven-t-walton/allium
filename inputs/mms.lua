@@ -9,7 +9,8 @@ function scalar_flux_solution(x,y,z)
 end
 
 function current_solution(x,y,z)
-	return beta/3*math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
+	v = beta/3*math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
+	return {v,v}
 end
 
 function psi(x,y,z,mu,eta,xi)
@@ -54,7 +55,7 @@ function boundary_map(x,y,z)
 	return "inflow"
 end 
 
-Ne = 20
+Ne = 10
 mesh = {
 	num_elements = {Ne,Ne},
 	extents = {1,1} 
@@ -62,7 +63,7 @@ mesh = {
 
 driver = {
 	fe_order = 1, 
-	sn_order = 4, 
+	sn_order = 20, 
 	solver = {
 		type = "fp", 
 		abstol = 1e-10, 

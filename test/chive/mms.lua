@@ -9,7 +9,8 @@ function scalar_flux_solution(x,y,z)
 end
 
 function current_solution(x,y,z)
-	return beta/3*math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
+	v = beta/3*math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
+	return {v,v}
 end
 
 function psi(x,y,z,mu,eta,xi)
