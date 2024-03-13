@@ -1220,9 +1220,15 @@ int main(int argc, char *argv[]) {
 			finder.Setup(mesh); 
 			finder.FindPoints(pos, mfem::Ordering::byVDIM); 
 			const auto &gscodes = finder.GetCode(); 
-			mfem::Vector phi_tracer, Jtracer; 
+			mfem::Vector phi_tracer, Jtracer, phi_ho_tracer, J_ho_tracer; 
 			finder.Interpolate(phi, phi_tracer); 
 			finder.Interpolate(J, Jtracer); 
+			if (moment_solution_HO.Size()) {
+				mfem::ParGridFunction phi_ho(&fes, moment_solution_HO, 0);
+				mfem::ParGridFunction J_ho(&vfes, moment_solution_HO, fes.GetVSize()); 
+				finder.Interpolate(phi_ho, phi_ho_tracer); 
+				finder.Interpolate(J_ho, J_ho_tracer); 
+			}
 			out.SetDoublePrecision(16); 
 			out << YAML::Key << "tracer" << YAML::Value << YAML::BeginSeq; 
 			for (auto i=0; i<ntracers; i++) {
@@ -1237,6 +1243,10 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "current" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
 				for (auto d=0; d<dim; d++) { out << Jtracer(ntracers*d + i); }
 				out << YAML::EndSeq; 
+				out << YAML::Key << "scalar flux (HO)" << YAML::Value << phi_ho_tracer(i); 
+				out << YAML::Key << "current (HO)" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+				for (auto d=0; d<dim; d++) { out << J_ho_tracer(ntracers*d + i); }
+				out << YAML::EndSeq; 
 				out << YAML::EndMap; 
 			}
 			out << YAML::EndSeq; 
@@ -1250,6 +1260,7 @@ int main(int argc, char *argv[]) {
 		sol::optional<sol::table> lineout_avail = output["lineout"]; 
 		if (lineout_avail) {
 		#ifdef MFEM_USE_GSLIB
+			mesh.EnsureNodes(); // required for FindPointsGSLIB
 			sol::table lineout = lineout_avail.value(); 
 			std::string path = output["lineout_path"].get_or(std::string("lineout.yaml")); 
 			out << YAML::Key << "lineout" << YAML::Value << io::ResolveRelativePath(path); 
@@ -1285,13 +1296,18 @@ int main(int argc, char *argv[]) {
 					}
 				}
 				mfem::FindPointsGSLIB finder(MPI_COMM_WORLD);
-				mesh.EnsureNodes();  
 				finder.Setup(mesh); 
 				finder.FindPoints(pts, mfem::Ordering::byVDIM); 
 				const auto &gscodes = finder.GetCode(); 
-				mfem::Vector phi_line, J_line; 
+				mfem::Vector phi_line, J_line, phi_ho_line, J_ho_line; 
 				finder.Interpolate(phi, phi_line);
 				finder.Interpolate(J, J_line);  
+				if (moment_solution_HO.Size()) {
+					mfem::ParGridFunction phi_ho(&fes, moment_solution_HO, 0);
+					mfem::ParGridFunction J_ho(&vfes, moment_solution_HO, fes.GetVSize()); 
+					finder.Interpolate(phi_ho, phi_ho_line); 
+					finder.Interpolate(J_ho, J_ho_line); 
+				}
 
 				// output locations
 				fout << YAML::Key << "x" << YAML::Value << YAML::BeginSeq; 
@@ -1324,7 +1340,28 @@ int main(int argc, char *argv[]) {
 					fout << YAML::EndSeq; 
 				}
 				fout << YAML::EndSeq; 
+				if (phi_ho_line.Size()) {
+					fout << YAML::Key << "scalar flux (HO)" << YAML::Value << YAML::BeginSeq; 
+					for (auto n=0; n<npoints; n++) {
+						if (gscodes[n]==2) continue; 
+						fout << phi_ho_line(n); 
+					}
+					fout << YAML::EndSeq; 
+				}
+				if (J_ho_line.Size()) {
+					fout << YAML::Key << "current (HO)" << YAML::Value << YAML::BeginSeq;  
+					for (auto n=0; n<npoints; n++) {
+						if (gscodes[n] == 2) continue; 
+						fout << YAML::Flow << YAML::BeginSeq; 
+						for (auto d=0; d<dim; d++) {
+							fout << J_ho_line(d * npoints + n); 
+						}
+						fout << YAML::EndSeq; 
+					}
+					fout << YAML::EndSeq; 
+				}
 				fout << YAML::EndMap; 
+				finder.FreeData(); // clean up find points data 
 			}
 			fout << YAML::EndMap; 
 			file_out.close(); 
