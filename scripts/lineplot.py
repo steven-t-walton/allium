@@ -15,7 +15,7 @@ parser.add_argument('-c', '--component', help='component to select for vector-va
 parser.add_argument('-t', '--title', help='plot title', type=str, default=None)
 args = parser.parse_args()
 
-var_names = {'scalar flux': r'$\varphi$', 'current' : r'$\|J\|$'}
+var_names = {'scalar flux': r'$\varphi$', 'current' : r'$\|J\|$', 'scalar flux': r'$\varphi_{HO}$', 'current (HO)': r'$\|J_{HO}\|$'}
 
 if (len(args.labels)):
 	labels = args.labels
