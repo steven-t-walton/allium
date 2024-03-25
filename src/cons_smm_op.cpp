@@ -79,7 +79,6 @@ void ConsistentSMMSourceOperatorBase::Mult(const mfem::Vector &psi, mfem::Vector
 {
 	mfem::BlockVector bv(source.GetData(), offsets); 
 	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 
-	SMMCorrectionTensorCoefficient T(fes, quad, psi_view);
 	SecondMomentTensorCoefficient P(fes, quad, psi_view); 
 	ComputeHalfRangeInterfaceTerms(psi_view, beta, tensor); 
 

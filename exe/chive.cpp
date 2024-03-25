@@ -657,7 +657,7 @@ int main(int argc, char *argv[]) {
 	// common parameters to discretization
 	mfem::Vector normal(dim); 
 	normal = 0.0; normal(0) = 1.0; 
-	double alpha = ComputeAlpha(*quad, normal);
+	const double alpha = ComputeAlpha(*quad, normal);
 	mfem::Vector beta(dim); 
 	for (int d=0; d<dim; d++) { beta(d) = d+1; }
 
