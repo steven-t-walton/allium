@@ -13,9 +13,12 @@ parser.add_argument('-k', '--key', help='name of lineout to plot', type=str, req
 parser.add_argument('-o', '--output', help='file name to save', type=str, default=None)
 parser.add_argument('-c', '--component', help='component to select for vector-valued lineout', type=int, default=None)
 parser.add_argument('-t', '--title', help='plot title', type=str, default=None)
+parser.add_argument('-lfs', '--label-font-size', help='font size for axis labels', default=18, type=int)
+parser.add_argument('-legfs', '--legend-font-size', help='font size for legend entries', default=18, type=int)
 args = parser.parse_args()
 
-var_names = {'scalar flux': r'$\varphi$', 'current' : r'$\|J\|$', 'scalar flux': r'$\varphi_{HO}$', 'current (HO)': r'$\|J_{HO}\|$'}
+var_names = {'scalar flux': r'$\varphi$', 'current' : r'$\|\mathbf{J}\|$', 
+	'scalar flux (HO)': r'$\varphi_{HO}$', 'current (HO)': r'$\|J_{HO}\|$'}
 
 if (len(args.labels)):
 	labels = args.labels
@@ -42,11 +45,11 @@ for file,label in zip(args.files, labels):
 			y = np.linalg.norm(y, axis=1)
 	t = np.linalg.norm(x - x[0], axis=1)
 	plt.plot(t, y, label=label)
-	plt.xlabel('$t$')
-	plt.ylabel(var_names[args.var])
+	plt.xlabel('$t$', fontsize=args.label_font_size)
+	plt.ylabel(var_names[args.var], fontsize=args.label_font_size)
 
 if (len(args.files)>1):
-	plt.legend()
+	plt.legend(fontsize=args.legend_font_size)
 if (args.title is not None):
 	plt.title(args.title)
 if (args.output is not None):
