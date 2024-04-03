@@ -1243,9 +1243,12 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "current" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
 				for (auto d=0; d<dim; d++) { out << Jtracer(ntracers*d + i); }
 				out << YAML::EndSeq; 
-				out << YAML::Key << "scalar flux (HO)" << YAML::Value << phi_ho_tracer(i); 
-				out << YAML::Key << "current (HO)" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
-				for (auto d=0; d<dim; d++) { out << J_ho_tracer(ntracers*d + i); }
+				if (phi_ho_tracer.Size()) 
+					out << YAML::Key << "scalar flux (HO)" << YAML::Value << phi_ho_tracer(i); 
+				if (J_ho_tracer.Size()) {
+					out << YAML::Key << "current (HO)" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+					for (auto d=0; d<dim; d++) { out << J_ho_tracer(ntracers*d + i); }
+				}
 				out << YAML::EndSeq; 
 				out << YAML::EndMap; 
 			}
@@ -1372,8 +1375,8 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap; // end output map 
 	}
 
-	TimingLog.Synchronize(); 
-	EventLog.Synchronize(); 
+	// TimingLog.Synchronize(); 
+	// EventLog.Synchronize(); 
 
 	// output wall clock time 
 	MPI_Barrier(MPI_COMM_WORLD); 
