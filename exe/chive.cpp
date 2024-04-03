@@ -1375,8 +1375,8 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap; // end output map 
 	}
 
-	// TimingLog.Synchronize(); 
-	// EventLog.Synchronize(); 
+	TimingLog.Synchronize(); 
+	EventLog.Synchronize(); 
 
 	// output wall clock time 
 	MPI_Barrier(MPI_COMM_WORLD); 
