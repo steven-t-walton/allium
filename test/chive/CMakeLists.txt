@@ -13,11 +13,6 @@ foreach(bc full half)
 		-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ldgsmm\", consistent = true, bc_type = \"${bc} range\"}" --phi-order 2 --J-order 2)
 	set_tests_properties("chive.mms.ldgsmm_${bc}" PROPERTIES LABELS "chive;parallel")
 
-	# independent LDG SMM test 
-	add_test(NAME "chive.mms.indep_ldgsmm_${bc}" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
-		-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ldgsmm\", consistent = false, bc_type=\"${bc} range\"}" --Ne 15 --phi-order 2 --J-order 2)
-	set_tests_properties("chive.mms.indep_ldgsmm_${bc}" PROPERTIES LABELS "chive;parallel")
-
 	# consistent IP SMM test 
 	add_test(NAME "chive.mms.ipsmm_${bc}" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
 		-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ipsmm\", consistent = true, bc_type=\"${bc} range\"}" --phi-order 2 --J-order 2)
@@ -27,8 +22,17 @@ foreach(bc full half)
 	add_test(NAME "chive.mms.indep_ipsmm_${bc}" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
 		-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ipsmm\", consistent = false, bc_type=\"${bc} range\"}" --Ne 15 --phi-order 2 --J-order 1)
 	set_tests_properties("chive.mms.indep_ipsmm_${bc}" PROPERTIES LABELS "chive;parallel")
-
 endforeach()
+
+# independent LDG SMM test 
+add_test(NAME "chive.mms.indep_ldgsmm_full" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
+	-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ldgsmm\", consistent = false, bc_type=\"full range\"}" --Ne 20 --phi-order 2 --J-order 1.5)
+set_tests_properties("chive.mms.indep_ldgsmm_full" PROPERTIES LABELS "chive;parallel")
+
+# independent LDG SMM test 
+add_test(NAME "chive.mms.indep_ldgsmm_half" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
+	-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ldgsmm\", consistent = false, bc_type=\"half range\"}" --Ne 20 --phi-order 2 --J-order 2)
+set_tests_properties("chive.mms.indep_ldgsmm_half" PROPERTIES LABELS "chive;parallel")
 
 # MIP test 
 add_test(NAME "chive.mms.mip" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
