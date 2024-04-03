@@ -40,6 +40,7 @@ private:
 	mfem::Array<int> edge_to_face_id; 
 
 	mutable mfem::Vector psi_fnbr; 
+	mutable mfem::Array<igraph_integer_t> degrees; 
 
 	// number of elements to sweep before sending a message 
 	// packs messages to reduce network saturation 

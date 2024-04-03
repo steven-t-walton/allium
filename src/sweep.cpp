@@ -199,6 +199,10 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	igraph_is_dag(&graph, &is_dag); 
 	if (!is_dag) { MFEM_ABORT("graph is not a dag"); }
 
+	// count nodes, allocate degrees array 
+	const auto num_nodes = igraph_vcount(&graph); 
+	degrees.SetSize(num_nodes); 
+
 	// map processor number to face number index 
 	for (auto fn=0; fn<num_face_nbrs; fn++) {
 		proc_to_fn[mesh.GetFaceNbrRank(fn)] = fn; 
@@ -318,12 +322,9 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// allocate face neighbor data 
 	TransportVectorExtents psi_fnbr_ext(1, Nomega, Ndof_fnbr);
 	psi_fnbr.SetSize(TotalExtent(psi_fnbr_ext)); 
-	psi_fnbr = 0.0; 
 	TransportVectorView psi_fnbr_view(psi_fnbr.GetData(), psi_fnbr_ext); 
 
 	// --- determine roots of graph --- 
-	const auto num_nodes = igraph_vcount(&graph); 
-	mfem::Array<igraph_integer_t> degrees(num_nodes); 
 	igraph_vector_int_t degrees_view; 
 	igraph_vector_int_view(&degrees_view, degrees.GetData(), degrees.Size()); 
 	// count edges incoming to each vertex 
