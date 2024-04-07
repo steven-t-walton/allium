@@ -170,8 +170,8 @@ int main(int argc, char *argv[]) {
 	mfem::OptionsParser args(argc, argv); 
 	args.AddOption(&input_file, "-i", "--input", "input file name", true); 
 	args.AddOption(&lua_cmds, "-l", "--lua", "lua commands to run", false); 
-	args.AddOption(&ser_ref, "-sr", "--serial_refinements", "uniform refinements in serial"); 
-	args.AddOption(&par_ref, "-pr", "--parallel_refinements", "uniform refinements in parallel"); 
+	args.AddOption(&ser_ref, "-sr", "--serial_refinements", "additional uniform refinements in serial"); 
+	args.AddOption(&par_ref, "-pr", "--parallel_refinements", "additional uniform refinements in parallel"); 
 	args.Parse(); 
 	if (!args.Good()) {
 		args.PrintUsage(par_out); 
@@ -343,19 +343,11 @@ int main(int argc, char *argv[]) {
 	// --- make mesh and solution spaces --- 
 	sol::table mesh_node = lua["mesh"]; 
 	sol::optional<std::string> fname = mesh_node["file"]; 
-	// allow overriding lua with cmdline inputs -pr and -sr 
-	if (ser_ref > 0) {
-		mesh_node["serial_refinements"] = ser_ref; 
-	} else {
-		ser_ref = mesh_node["serial_refinements"].get_or(0);
-	}
-
-	if (par_ref > 0) {
-		mesh_node["parallel_refinements"] = par_ref; 
-	} else {
-		par_ref = mesh_node["parallel_refinements"].get_or(0);
-	}
+	// allow increasing lua refinement inputs with cmdline inputs -pr and -sr 
+	ser_ref += mesh_node["serial_refinements"].get_or(0); 
+	par_ref += mesh_node["parallel_refinements"].get_or(0); 
 	const int tot_ref = ser_ref + par_ref; 
+
 	mfem::Mesh smesh; 
 	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
 	// load from a mesh file 
