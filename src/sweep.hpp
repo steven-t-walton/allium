@@ -12,14 +12,18 @@ private:
 	mfem::ParMesh &mesh; 
 	mfem::ParFiniteElementSpace &fes; 
 	const AngularQuadrature &quad; 
-	const TransportVectorExtents &psi_ext; 
-	mfem::Coefficient &total, &inflow; 
+	mfem::GridFunction &total_data; 
+
+	// multi index extents for angular flux and the "ghost" 
+	// buffer psi_fnbr
+	TransportVectorExtents psi_ext, psi_fnbr_ext; 
 
 	// this processor owns element ids in the 
 	// range [mesh_offsets[0], mesh_offsets[1]) 
 	mfem::Array<HYPRE_BigInt> mesh_offsets; 
-	mfem::Array<HYPRE_BigInt> dof_offsets; 
+	// mesh_offsets[0] for each neighboring processor 
 	mfem::Array<HYPRE_BigInt> mesh_face_nbr_offsets; 
+	// map processor id to face neighbor index 
 	std::unordered_map<int,int> proc_to_fn; 
 	// map a ghost element id to its global id 
 	mfem::Array<HYPRE_BigInt> fnbr_to_global; 
@@ -35,11 +39,18 @@ private:
 	// the local graph object 
 	igraph_t graph; 
 
+	// data structures for storing component matrices of sweep 
 	mfem::Array<mfem::DenseMatrix*> mass_matrices, grad_matrices, face_matrices;  
+	// list of normals on each face 
 	mfem::Vector normals; 
+	// map an igraph edge id to the mesh's face id 
 	mfem::Array<int> edge_to_face_id; 
 
+	// parallel buffer for psi 
 	mutable mfem::Vector psi_fnbr; 
+	// local buffer for sending messages 
+	mutable mfem::Vector par_data_buffer; 
+	// storage space for number of incoming edges at each vertex 
 	mutable mfem::Array<igraph_integer_t> degrees; 
 
 	// number of elements to sweep before sending a message 
@@ -49,33 +60,18 @@ private:
 	int send_buffer_size = 8; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-		const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow, 
-		int reflection_bdr_attr=-1); 
+		mfem::GridFunction &_total_data, int reflection_bdr_attr=-1); 
 	~InverseAdvectionOperator(); 
-	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
 
+	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
+	void AssembleLocalMatrices(); 
 	void SetSendBufferSize(int s); 
 	void WriteGraphToDot(std::string prefix) const; 
 };
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
-	PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
-	TransportVectorView source_view); 
-
-void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
-	const TransportVectorExtents &psi_ext,
-	std::function<double(const mfem::Vector &x, const mfem::Vector &y)> source_func, 
-	std::function<double(const mfem::Vector &x, const mfem::Vector &y)> inflow_func, 
-	mfem::Vector &source_vec); 
-
-void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
-	const TransportVectorExtents &psi_ext,
-	std::function<double(double x, double y, double z, double mu, double eta, double xi)> source_func, 
-	std::function<double(double x, double y, double z, double mu, double eta, double xi)> inflow_func, 
-	mfem::Vector &source_vec); 
-
-void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
-	const TransportVectorExtents &psi_ext, mfem::Coefficient &source, mfem::Coefficient &inflow, mfem::Vector &source_vec); 
+	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 
+	PhaseSpaceCoefficient &inflow_coef, TransportVectorView source_view); 
 
 class FaceMassMatricesIntegrator : public mfem::BilinearFormIntegrator 
 {

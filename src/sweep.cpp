@@ -2,13 +2,16 @@
 #include <deque>
 #include "config.hpp"
 
-// #define INFLOW_IN_SWEEP
-
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-	const TransportVectorExtents &_psi_ext, mfem::Coefficient &_total, mfem::Coefficient &_inflow, 
-	int reflection_bdr_attr)
-	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), psi_ext(_psi_ext), total(_total), inflow(_inflow)
+	mfem::GridFunction &_total_data, int reflection_bdr_attr)
+	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total_data(_total_data)
 {
+	const auto dim = mesh.Dimension(); // dimension of mesh 
+	const auto Ne = mesh.GetNE(); // processor-local number of elements 
+	const auto Ndof = fes.GetVSize(); // local degrees of freedom 
+	const auto Nomega = quad.Size(); // number of angles 
+	const auto G = total_data.FESpace()->GetVDim(); // number of energy groups 
+	psi_ext = TransportVectorExtents(G, Nomega, Ndof); // multi index based on energy, angle, space 
 	// set operator sizes to size of psi 
 	height = width = TotalExtent(psi_ext);
 
@@ -19,12 +22,8 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	// --- create data structures not provided by mfem::ParMesh ---
 	// build local to global element map for elements straddling parallel faces 
 	// maps index into the ghost element id to its global element number
-	const auto dim = mesh.Dimension(); 
-	const auto Ne = mesh.GetNE(); 
-	const auto Ndof = fes.GetVSize(); 
-	const auto Nomega = quad.Size(); 
-	const auto nbr_el = mesh.GetNFaceNeighborElements(); 
-	const auto num_face_nbrs = mesh.GetNFaceNeighbors(); 
+	const auto nbr_el = mesh.GetNFaceNeighborElements(); // number of "ghost" elements 
+	const auto num_face_nbrs = mesh.GetNFaceNeighbors(); // number of neighboring processors 
 	const mfem::Table &send_face_nbr_elements = mesh.send_face_nbr_elements; 
 	// elements to be received by neighbor processors 
 	// ids are the local id for that processor
@@ -62,11 +61,10 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 
 	// --- generate local offsets --- 
 	// this processor owns elements [mesh_offsets[0], mesh_offsets[1])
-	// and dofs [dof_offsets[0], dof_offsets[1])
-	mfem::Array<HYPRE_BigInt> *ptr[2] = {&mesh_offsets, &dof_offsets}; 
-	HYPRE_BigInt N_hypre[2]; 
-	N_hypre[0] = Ne; N_hypre[1] = Ndof; 
-	mesh.GenerateOffsets(2, N_hypre, ptr); 
+	mfem::Array<HYPRE_BigInt> *ptr[1] = {&mesh_offsets}; 
+	HYPRE_BigInt N_hypre[1]; 
+	N_hypre[0] = Ne; 
+	mesh.GenerateOffsets(1, N_hypre, ptr); 
 
 	// --- swap offsets with parallel neighbors --- 
 	// from this info can compute global element number of ghost cells 
@@ -75,15 +73,6 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 		auto nbr_rank = mesh.GetFaceNbrRank(fn); 
 		MPI_Isend(&mesh_offsets[0], 1, HYPRE_MPI_BIG_INT, nbr_rank, 0, MPI_COMM_WORLD, &send_requests[fn]); 
 		MPI_Irecv(&mesh_face_nbr_offsets[fn], 1, HYPRE_MPI_BIG_INT, nbr_rank, 0, MPI_COMM_WORLD, &recv_requests[fn]); 
-	}
-	MPI_Waitall(num_face_nbrs, send_requests, statuses); 
-	MPI_Waitall(num_face_nbrs, recv_requests, statuses); 
-
-	mfem::Array<HYPRE_BigInt> dof_face_nbr_offsets(num_face_nbrs); 
-	for (auto fn=0; fn<num_face_nbrs; fn++) {
-		auto nbr_rank = mesh.GetFaceNbrRank(fn); 
-		MPI_Isend(&dof_offsets[0], 1, HYPRE_MPI_BIG_INT, nbr_rank, 0, MPI_COMM_WORLD, &send_requests[fn]); 
-		MPI_Irecv(&dof_face_nbr_offsets[fn], 1, HYPRE_MPI_BIG_INT, nbr_rank, 0, MPI_COMM_WORLD, &recv_requests[fn]); 
 	}
 	MPI_Waitall(num_face_nbrs, send_requests, statuses); 
 	MPI_Waitall(num_face_nbrs, recv_requests, statuses); 
@@ -157,7 +146,13 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 				auto e2 = row[1]; 
 				const auto &Omega = quad.GetOmega(a); 
 				double dot = normal*Omega; 
-				if (dot < 0) std::swap(e1,e2); 
+				bool force_swap = false; 
+				if (dot==0 and e2 >= Ne) { // dot=0 and parallel => arbitrarily choose one as upwind 
+					const auto ge1 = mesh_offsets[0] + e1; 
+					const auto ge2 = fnbr_to_global[e2 - Ne];
+					if (ge2 > ge1) force_swap = true; 
+				}
+				if (dot < 0 or force_swap) std::swap(e1,e2); 
 				auto dof1 = (e1<Ne) ? e1*Nomega + a : Ne*Nomega + (e1 - Ne)*Nomega + a; 
 				auto dof2 = (e2<Ne) ? e2*Nomega + a : Ne*Nomega + (e2 - Ne)*Nomega + a; 
 				edges.Append(dof1); 
@@ -174,7 +169,7 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 				for (int a=0; a<Nomega; a++) {
 					const auto &Omega = quad.GetOmega(a); 
 					double dot = normal * Omega; 
-					if (dot < 0) { // outflow => need to add edge to reflected angle 
+					if (dot < 0) { // inflow => need to add edge to reflected angle 
 						const auto reflect_idx = quad.GetReflectedAngleIndex(a, normal); 
 						const auto dof1 = row[0] * Nomega + reflect_idx; 
 						const auto dof2 = row[0] * Nomega + a; 
@@ -203,23 +198,351 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	const auto num_nodes = igraph_vcount(&graph); 
 	degrees.SetSize(num_nodes); 
 
+	// allocate parallel exchange buffer 
+	const auto Ndof_fnbr = fes.GetFaceNbrVSize(); // spatial DOF in ghost buffer 
+	psi_fnbr_ext = TransportVectorExtents(G, Nomega, Ndof_fnbr); 
+	psi_fnbr.SetSize(TotalExtent(psi_fnbr_ext)); 
+
+	// allocate local buffer through call to set send buffer size 
+	// call with default value for send_buffer_size 
+	SetSendBufferSize(send_buffer_size); 
+
 	// map processor number to face number index 
 	for (auto fn=0; fn<num_face_nbrs; fn++) {
 		proc_to_fn[mesh.GetFaceNbrRank(fn)] = fn; 
 	}
 
 	delete[] requests; delete[] statuses; 
+	AssembleLocalMatrices(); 
+}
 
-#ifdef SWEEP_PREASSEMBLE_LOCAL_MATRICES
-	mass_matrices.SetSize(fes.GetNE()); 
+InverseAdvectionOperator::~InverseAdvectionOperator()
+{
+	igraph_destroy(&graph); 
+	for (auto &ptr : mass_matrices) { delete ptr; }
+	for (auto &ptr : grad_matrices) { delete ptr; }
+	for (auto &ptr : face_matrices) { delete ptr; }
+}
+
+void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) const 
+{
+	assert(source.Size() == Width()); 
+	assert(psi.Size() == Height()); 
+
+	const auto num_face_nbrs = mesh.GetNFaceNeighbors(); 
+	const auto dim = mesh.Dimension(); 
+	const auto Ne = mesh.GetNE(); 
+	const auto Nomega = quad.Size(); 
+	const auto G = psi_ext.extent(0); 
+	// place to store face ids/element, dofs/element, and dofs of neighboring elements 
+	mfem::Array<int> faces, dofs, dofs2; 
+
+	// igraph vectors to store neighbors in graph traversal 
+	igraph_vector_int_t nbrs, nbr_nbrs, edges; 
+	igraph_vector_int_init(&nbrs, 0); 
+	igraph_vector_int_init(&nbr_nbrs, 0); 
+	igraph_vector_int_init(&edges, 0);
+
+	// mdspan views into data 
+	TransportVectorView psi_view(psi.GetData(), psi_ext); 
+	TransportVectorView psi_fnbr_view(psi_fnbr.GetData(), psi_fnbr_ext); 
+	TransportVectorView source_view(source.GetData(), psi_ext); 
+
+	// mdspan views into pre-assembled matrices 
+	auto mass_mat_view = Kokkos::mdspan(mass_matrices.GetData(), G, fes.GetNE()); 
+	auto grad_mat_view = Kokkos::mdspan(grad_matrices.GetData(), dim, fes.GetNE()); 
+	auto face_mat_view = Kokkos::mdspan(face_matrices.GetData(), mesh.GetNumFaces(), 2, 2); 
+
+	// --- determine roots of graph --- 
+	igraph_vector_int_t degrees_view; 
+	igraph_vector_int_view(&degrees_view, degrees.GetData(), degrees.Size()); 
+	// count edges incoming to each vertex 
+	igraph_degree(&graph, &degrees_view, igraph_vss_all(), IGRAPH_IN, 0);
+	// list of nodes to visit (not including those that depend on another processor) 
+	// initialize with roots of graph 
+	std::deque<int> local; 
+	for (int i=0; i<degrees.Size(); i++) {
+		if (degrees[i] == 0) {
+			if (i < Ne*Nomega) {
+				local.push_back(i); 
+			} 
+		}
+	}
+
+	// list of {processor index, angle/space set} to exchange 
+	mfem::Array<mfem::Connection> send_list; 
+	send_list.Reserve(send_buffer_size); 
+	// local buffer for recv meta data 
+	mfem::Array<int> node_buffer(send_buffer_size); 
+
+	// count messages sents 
+	auto message_count = 0; // incremented at each message, used as message tag 
+
+	// persistent storage of local system 
+	mfem::DenseMatrix grad, A; 
+	mfem::Vector rhs, psi2, nor(dim); 
+
+	// --- do sweep --- 
+	// vertices traversed, only count owned elements 
+	int nsweep = 0; 
+	while (nsweep < Ne*Nomega) {
+		// --- sweep on processor-local domain --- 
+		while (not(local.empty())) {
+			nsweep++; //increment sweep counter to know when to stop 
+			// get first element of queue 
+			const auto node = local.front();
+			local.pop_front(); 
+
+			// --- do work --- 
+			// deconstruct angle/space id
+			const auto a = node % Nomega; 
+			const auto e = node / Nomega; 
+			const auto &Omega = quad.GetOmega(a); 
+			mfem::VectorConstantCoefficient Q(Omega); 
+			const auto &el = *fes.GetFE(e); 
+			auto &trans = *mesh.GetElementTransformation(e); 
+			fes.GetElementDofs(e, dofs); 
+			rhs.SetSize(dofs.Size()); 
+
+			// --- assemble gradient term ---
+			grad.SetSize(dofs.Size()); 
+			grad = 0.0; 
+			for (auto d=0; d<dim; d++) {
+				grad.Add(Omega(d), *grad_mat_view(d,e)); 
+			}
+
+			// --- assemble outflow face terms --- 
+			element_to_face->GetRow(e, faces);
+			for (auto f : faces) {
+				const auto info = mesh.GetFaceInformation(f); 
+				bool keep_order = e == info.element[0].index; 
+				for (auto d=0; d<dim; d++) { nor(d) = normals(f*dim + d); }
+				if (!keep_order) nor *= -1.0; 
+				const double dot = Omega * nor; 
+				const auto idx = keep_order ? 0 : 1; 
+
+				// outflow 
+				if (dot > 0) {
+					const auto &elmat = *face_mat_view(f, idx, idx); 
+					grad.Add(dot, elmat); 
+				}
+			}
+
+			// --- assemble and solve all groups --- 
+			igraph_incident(&graph, &edges, node, IGRAPH_IN); 
+			auto edges_in_view = std::span(VECTOR(edges), igraph_vector_int_size(&edges)); 
+			for (int g=0; g<G; g++) {
+				// copy group-independent terms 
+				A = grad; 
+				// add total mass matrix for group g 
+				A.Add(1.0, *mass_mat_view(g,e)); 
+
+				// --- load source into local vector --- 
+				for (auto i=0; i<dofs.Size(); i++) { rhs[i] = source_view(g,a,dofs[i]); }
+
+				// add inflow terms to RHS 
+				for (const auto eid : edges_in_view) {
+					const auto nbr = IGRAPH_FROM(&graph, eid); 
+					const auto nbr_e = nbr / Nomega; 
+					const auto nbr_a = nbr % Nomega; 
+					const auto fid = edge_to_face_id[eid]; 
+					for (auto d=0; d<dim; d++) { nor(d) = normals(fid * dim + d); }
+					const auto info = mesh.GetFaceInformation(fid); 
+					bool keep_order = e == info.element[0].index; 
+					if (!keep_order) nor *= -1.0; 
+					const double dot = Omega * nor; 
+					const auto idx = keep_order ? 0 : 1; 
+					const auto nbr_idx = (idx + 1) % 2; 
+
+					if (nbr_e == e) { // reflection 
+						const auto &elmat = *face_mat_view(fid, idx, idx); 
+						psi2.SetSize(dofs.Size()); 
+						for (auto i=0; i<dofs.Size(); i++) { psi2(i) = psi_view(g, nbr_a, dofs[i]); }
+						elmat.AddMult(psi2, rhs, -dot);
+					} 
+
+					else { // inflow from neighbor
+						const auto &elmat = *face_mat_view(fid, idx, nbr_idx); 
+						// face neighbor data 
+						if (info.IsShared()) {
+							fes.GetFaceNbrElementVDofs(nbr_e-Ne, dofs2); 
+							psi2.SetSize(dofs2.Size()); 
+							for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_fnbr_view(g, a, dofs2[i]); }
+						}
+						// local data 
+						else {
+							fes.GetElementDofs(nbr_e, dofs2); 
+							psi2.SetSize(dofs2.Size()); 
+							for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(g, a, dofs2[i]); }						
+						}
+						elmat.AddMult(psi2, rhs, -dot); 
+					}
+				}
+				// solve, solution overwritten into rhs 
+				mfem::LinearSolve(A, rhs.GetData()); 
+
+				// scatter back 
+				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = rhs(i); }
+			}
+
+			// --- compute next + send data to other processors --- 
+			degrees[node] = -1; // already visited 
+			// get neighbors 
+			igraph_neighbors(&graph, &nbrs, node, IGRAPH_OUT);  
+			auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
+			std::set<int> send_fn_set; // store unique set of processors to send data to 
+			for (const auto &nbr : nbrs_view) {
+				degrees[(int)nbr] -= 1; // reduce degree since node has been visited 
+				// if nbr is off-processor, add to send_set regardless of degree 
+				if (nbr >= Ne*Nomega) {
+					// get neighbor of neighbor to find number of processors to send data to 
+					igraph_neighbors(&graph, &nbr_nbrs, node, IGRAPH_OUT);
+					auto nbr_nbrs_view = std::span(VECTOR(nbr_nbrs), igraph_vector_int_size(&nbr_nbrs)); 	
+					for (const auto &nbr_nbr : nbr_nbrs_view) {
+						if (nbr_nbr < Ne*Nomega) continue; // only send to off-proc neighbors 
+						const auto nbr_id = (int)nbr_nbr - Ne*Nomega; 
+						const auto fn = fnbr_to_fn[nbr_id / Nomega]; 
+						send_fn_set.insert(fn); 
+					}
+				} 
+				// neighbor is local, add to queue 
+				else {
+					if (degrees[(int)nbr] == 0) {
+						local.push_back(nbr); 						
+					}					
+				}
+			}
+
+			// append to send list 
+			for (const auto &fn : send_fn_set) {
+				send_list.Append({fn, node}); 
+			}
+
+			// send data if send buffer full or no more local work to do 
+			if (send_list.Size() >= send_buffer_size or local.empty()) {
+				send_list.Sort(); send_list.Unique(); 
+				mfem::Table send_table(num_face_nbrs, send_list); 
+				for (auto fn=0; fn<num_face_nbrs; fn++) {
+					if (send_table.RowSize(fn) == 0) continue; 
+					const auto nbr_rank = mesh.GetFaceNbrRank(fn); 
+					auto buffer_size = 0;
+					auto nodes = std::span<const int>(send_table.GetRow(fn), send_table.RowSize(fn)); 
+					for (auto n : nodes) {
+						fes.GetElementDofs(n / Nomega, dofs); 
+						buffer_size += dofs.Size(); 
+					}
+
+					buffer_size *= G; 
+					assert(par_data_buffer.Size() >= buffer_size); 
+					auto idx = 0;
+					for (auto n : nodes) {
+						const auto e = n / Nomega; 
+						const auto a = n % Nomega; 
+						fes.GetElementDofs(e, dofs); 
+						for (auto g=0; g<G; g++) {
+							for (auto i=0; i<dofs.Size(); i++) {
+								par_data_buffer[idx++] = psi_view(g,a,dofs[i]); 
+							}
+						}
+					}
+
+					MPI_Request request[2]; 
+					MPI_Isend(send_table.GetRow(fn), send_table.RowSize(fn), MPI_INT, nbr_rank, message_count++, 
+						MPI_COMM_WORLD, &request[0]); 
+					MPI_Isend(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, nbr_rank, message_count++, MPI_COMM_WORLD, &request[1]); 
+					MPI_Waitall(2, request, MPI_STATUS_IGNORE); 
+				}
+				send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
+			}
+		}
+
+		while (true) {
+			int avail; 
+			MPI_Status status[2]; 
+			MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &avail, &status[0]);
+			if (avail==0) break; 
+
+			const auto tag = status[0].MPI_TAG; 
+			const auto source = status[0].MPI_SOURCE; 
+			MPI_Probe(source, (tag % 2 == 0) ? tag + 1 : tag - 1, MPI_COMM_WORLD, &status[1]); 
+
+			if (tag % 2 == 1) {
+				std::swap(status[0], status[1]); 
+			}
+
+			int node_count, data_count; 
+			MPI_Get_count(&status[0], MPI_INT, &node_count); 
+			MPI_Get_count(&status[1], MPI_DOUBLE, &data_count); 
+
+			// make sure data can fit in buffers 
+			assert(node_buffer.Size() >= node_count); 
+			assert(par_data_buffer.Size() >= data_count); 
+
+			MPI_Request request[2]; 
+			assert(status[0].MPI_SOURCE == status[1].MPI_SOURCE); 
+			MPI_Irecv(node_buffer.GetData(), node_count, MPI_INT, source, status[0].MPI_TAG, MPI_COMM_WORLD, &request[0]); 
+			MPI_Irecv(par_data_buffer.GetData(), data_count, MPI_DOUBLE, source, status[1].MPI_TAG, MPI_COMM_WORLD, &request[1]); 
+			MPI_Waitall(2, request, MPI_STATUSES_IGNORE); 
+
+			const auto fn = proc_to_fn.at(source); 
+			int buffer_idx = 0; 
+			for (auto n=0; n<node_count; n++) {
+				const auto node = node_buffer[n]; 
+				// convert to global id so that it can be mapped to local fnbr id 
+				const auto global = mesh_face_nbr_offsets[fn] * Nomega + node;  
+				// convert tag (global idx) to a local index 
+				const auto e = global / Nomega; 
+				const auto a = global % Nomega; 
+				const auto local_e = global_to_fnbr.at(e) + Ne; 
+				const auto local_id = local_e*Nomega + a;		
+				fes.GetFaceNbrElementVDofs(local_e-Ne, dofs); 	
+				for (int g=0; g<G; g++) {
+					for (auto i=0; i<dofs.Size(); i++) {
+						psi_fnbr_view(g,a,dofs[i]) = par_data_buffer[buffer_idx++];
+					}
+				}
+
+				// mark data as recvd, traverse neighbors to add the locally owned tail to the queue 
+				// for use in the local sweep 
+				degrees[local_id] = -1; 
+				igraph_neighbors(&graph, &nbrs, local_id, IGRAPH_OUT); 
+				auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
+				for (const auto &nbr : nbrs_view) {
+					degrees[(int)nbr] -= 1; 
+					if (degrees[(int)nbr]==0) {
+						local.push_back(nbr); // add the locally owned id to the queue 
+					}
+				}				
+			}
+		}
+	}
+	// clean up data 
+	igraph_vector_int_destroy(&nbrs); 
+	igraph_vector_int_destroy(&nbr_nbrs); 
+
+	// use barrier to avoid tag clash? 
+	MPI_Barrier(MPI_COMM_WORLD); 
+}
+
+void InverseAdvectionOperator::AssembleLocalMatrices() 
+{
+	const auto dim = mesh.Dimension(); 
+	const auto G = total_data.FESpace()->GetVDim(); 
+
+	mass_matrices.SetSize(fes.GetNE()*G);
+	auto mass_mat_view = Kokkos::mdspan(mass_matrices.GetData(), G, fes.GetNE());  
 	grad_matrices.SetSize(fes.GetNE()*dim); 
 	auto grad_mat_view = Kokkos::mdspan(grad_matrices.GetData(), dim, fes.GetNE()); 
-	mfem::MassIntegrator mi(total); 
 	for (auto e=0; e<fes.GetNE(); e++) {
 		const auto &fe = *fes.GetFE(e); 
 		auto &trans = *mesh.GetElementTransformation(e);
-		mass_matrices[e] = new mfem::DenseMatrix; 
-		mi.AssembleElementMatrix(fe, trans, *mass_matrices[e]); 
+
+		for (int g=0; g<G; g++) {
+			mfem::GridFunctionCoefficient total(&total_data, g+1); // component is 1-based :( 
+			mfem::MassIntegrator mi(total); 
+			mass_mat_view(g,e) = new mfem::DenseMatrix; 
+			mi.AssembleElementMatrix(fe, trans, *mass_mat_view(g,e)); 
+		}
 
 		mfem::Vector Omega(dim); 
 		for (auto d=0; d<dim; d++) {
@@ -262,25 +585,20 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 			elmat.GetSubMatrix(dof1,dof1+dof2,dof1,dof1+dof2, *face_mat_view(f,1,1)); 			
 		}
 	}
-#endif
 }
 
 void InverseAdvectionOperator::SetSendBufferSize(int s) 
 {
-#ifdef SWEEP_BUFFER_SENDS
 	send_buffer_size = s; 
-#else 
-	if (fes.GetMyRank() == 0) 
-		MFEM_WARNING("send buffer is disabled in sweep"); 
-#endif
-}
 
-InverseAdvectionOperator::~InverseAdvectionOperator()
-{
-	igraph_destroy(&graph); 
-	for (auto &ptr : mass_matrices) { delete ptr; }
-	for (auto &ptr : grad_matrices) { delete ptr; }
-	for (auto &ptr : face_matrices) { delete ptr; }
+	// allocate maximum local buffer to send psi data in parallel 
+	const auto &face_nbr_element_dof = fes.face_nbr_element_dof; 
+	int max_send_per_fn = 0; 
+	for (int nbr_el=0; nbr_el<face_nbr_element_dof.Size(); nbr_el++) {
+		int size = face_nbr_element_dof.RowSize(nbr_el); 
+		max_send_per_fn	= std::max(size, max_send_per_fn); 
+	}
+	par_data_buffer.SetSize(send_buffer_size * max_send_per_fn * psi_ext.extent(0)); 
 }
 
 void InverseAdvectionOperator::WriteGraphToDot(std::string prefix) const 
@@ -291,558 +609,27 @@ void InverseAdvectionOperator::WriteGraphToDot(std::string prefix) const
 	fclose(file); 	
 }
 
-void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) const 
+void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
+	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 
+	PhaseSpaceCoefficient &inflow_coef, TransportVectorView source_view)
 {
-	assert(source.Size() == Width()); 
-	assert(psi.Size() == Height()); 
-
-	const auto num_face_nbrs = mesh.GetNFaceNeighbors(); 
-	const auto dim = mesh.Dimension(); 
-	const auto Ne = mesh.GetNE(); 
-	const auto Nomega = quad.Size(); 
-	const auto Ndof_fnbr = fes.GetFaceNbrVSize(); 
-	// place to store face ids/element, dofs/element, and dofs of neighboring elements 
-	mfem::Array<int> faces, dofs, dofs2; 
-
-	// igraph vectors to store neighbors in graph traversal 
-	igraph_vector_int_t nbrs, nbr_nbrs, edges; 
-	igraph_vector_int_init(&nbrs, 0); 
-	igraph_vector_int_init(&nbr_nbrs, 0); 
-	igraph_vector_int_init(&edges, 0);
-
-	// mdspan views into data 
-	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	TransportVectorView source_view(source.GetData(), psi_ext); 
-
-#ifdef SWEEP_PREASSEMBLE_LOCAL_MATRICES
-	auto grad_mat_view = Kokkos::mdspan(grad_matrices.GetData(), dim, fes.GetNE()); 
-	auto face_mat_view = Kokkos::mdspan(face_matrices.GetData(), mesh.GetNumFaces(), 2, 2); 
-#endif
-
-	// allocate face neighbor data 
-	TransportVectorExtents psi_fnbr_ext(1, Nomega, Ndof_fnbr);
-	psi_fnbr.SetSize(TotalExtent(psi_fnbr_ext)); 
-	TransportVectorView psi_fnbr_view(psi_fnbr.GetData(), psi_fnbr_ext); 
-
-	// --- determine roots of graph --- 
-	igraph_vector_int_t degrees_view; 
-	igraph_vector_int_view(&degrees_view, degrees.GetData(), degrees.Size()); 
-	// count edges incoming to each vertex 
-	igraph_degree(&graph, &degrees_view, igraph_vss_all(), IGRAPH_IN, 0);
-	// list of nodes to visit (not including those that depend on another processor) 
-	// initialize with roots of graph 
-	std::deque<int> local; 
-	for (int i=0; i<degrees.Size(); i++) {
-		if (degrees[i] == 0) {
-			if (i < Ne*Nomega) {
-				local.push_back(i); 
-			} 
-		}
-	}
-
-#ifdef SWEEP_BUFFER_SENDS
-	mfem::Array<mfem::Connection> send_list; 
-	send_list.Reserve(send_buffer_size); 
-	auto message_count = 0; 
-#endif
-	// --- do sweep --- 
-	// vertices traversed, only count owned elements 
-	int nsweep = 0; 
-	while (nsweep < Ne*Nomega) {
-		// --- sweep on processor-local domain --- 
-		while (not(local.empty())) {
-			nsweep++; //increment sweep counter to know when to stop 
-			// get first element of queue 
-			const auto node = local.front();
-			local.pop_front(); 
-
-			// --- do work --- 
-			// deconstruct angle/space id
-			const auto a = node % Nomega; 
-			const auto e = node / Nomega; 
+	const int G = energy_grid.Size() - 1; 
+	for (int g=0; g<G; g++) {
+		double E = (energy_grid[g+1] + energy_grid[g])/2; 
+		source_coef.SetEnergy(E); inflow_coef.SetEnergy(E); 
+		for (auto a=0; a<quad.Size(); a++) {
 			const auto &Omega = quad.GetOmega(a); 
+			source_coef.SetAngle(Omega); inflow_coef.SetAngle(Omega); 
+
+			mfem::ParLinearForm bform(&fes); 
+			bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
 			mfem::VectorConstantCoefficient Q(Omega); 
-			const auto &el = *fes.GetFE(e); 
-			auto &trans = *mesh.GetElementTransformation(e); 
-			fes.GetElementDofs(e, dofs); 
-
-			// -- assemble volumetric terms --
-			// volumetric streaming term 
-#ifdef SWEEP_PREASSEMBLE_LOCAL_MATRICES
-			mfem::DenseMatrix G(dofs.Size()); 
-			G = 0.0; 
-			for (auto d=0; d<dim; d++) {
-				G.Add(Omega(d), *grad_mat_view(d,e)); 
+			bform.AddBdrFaceIntegrator(new mfem::BoundaryFlowIntegrator(inflow_coef, Q, -1.0, -0.5));
+			bform.Assemble(); 
+			for (int i=0; i<bform.Size(); i++) {
+				source_view(g,a,i) = bform[i]; 
 			}
-#else 
-			mfem::DenseMatrix G; 
-			mfem::ConservativeConvectionIntegrator conv_int(Q, 1.0); 
-			conv_int.AssembleElementMatrix(el, trans, G); 
-#endif
-
-			// collision term 
-#ifdef SWEEP_PREASSEMBLE_LOCAL_MATRICES
-			mfem::DenseMatrix &Mt = *mass_matrices[e]; 
-#else
-			mfem::DenseMatrix Mt; 
-			mfem::MassIntegrator mt_int(total); 
-			mt_int.AssembleElementMatrix(el, trans, Mt); 
-#endif
-
-			// get source term 
-			mfem::Vector rhs(dofs.Size()); 
-			for (auto i=0; i<dofs.Size(); i++) { rhs[i] = source_view(0,a,dofs[i]); }
-
-#ifdef SWEEP_PREASSEMBLE_LOCAL_MATRICES
-			mfem::DenseMatrix F(dofs.Size()); 
-			F = 0.0; 
-
-			mfem::Vector nor(dim); 
-			igraph_incident(&graph, &edges, node, IGRAPH_IN); 
-			auto edges_in_view = std::span(VECTOR(edges), igraph_vector_int_size(&edges)); 
-			for (const auto eid : edges_in_view) {
-				const auto nbr = IGRAPH_FROM(&graph, eid); 
-				const auto nbr_e = nbr / Nomega; 
-				const auto nbr_a = nbr % Nomega; 
-				const auto fid = edge_to_face_id[eid]; 
-				for (auto d=0; d<dim; d++) { nor(d) = normals(fid * dim + d); }
-				const auto info = mesh.GetFaceInformation(fid); 
-				bool keep_order = e == info.element[0].index; 
-				if (!keep_order) nor *= -1.0; 
-				const double dot = Omega * nor; 
-				const auto idx = keep_order ? 0 : 1; 
-				const auto nbr_idx = (idx + 1) % 2; 
-
-				if (nbr_e == e) {
-					mfem::Vector psi2; 
-					const auto &elmat = *face_mat_view(fid, idx, idx); 
-					psi2.SetSize(dofs.Size()); 
-					for (auto i=0; i<dofs.Size(); i++) { psi2(i) = psi_view(0, nbr_a, dofs[i]); }
-					elmat.AddMult(psi2, rhs, -dot);
-				} 
-
-				else {
-					const auto &elmat = *face_mat_view(fid, idx, nbr_idx); 
-					mfem::Vector psi2; 
-					// face neighbor data 
-					if (info.IsShared()) {
-						fes.GetFaceNbrElementVDofs(nbr_e-Ne, dofs2); 
-						psi2.SetSize(dofs2.Size()); 
-						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_fnbr_view(0, a, dofs2[i]); }
-					}
-					// local data 
-					else {
-						fes.GetElementDofs(nbr_e, dofs2); 
-						psi2.SetSize(dofs2.Size()); 
-						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(0, a, dofs2[i]); }						
-					}
-					elmat.AddMult(psi2, rhs, -dot); 
-				}
-			}
-
-			element_to_face->GetRow(e, faces);
-			for (auto f : faces) {
-				const auto info = mesh.GetFaceInformation(f); 
-				bool keep_order = e == info.element[0].index; 
-				for (auto d=0; d<dim; d++) { nor(d) = normals(f*dim + d); }
-				if (!keep_order) nor *= -1.0; 
-				const double dot = Omega * nor; 
-				const auto idx = keep_order ? 0 : 1; 
-
-				// outflow 
-				if (dot > 0) {
-					const auto &elmat = *face_mat_view(f, idx, idx); 
-					F.Add(dot, elmat); 
-				}
-			}
-#else 
-			// -- do face terms -- 
-			// get faces associated with mesh element e 
-			// face are UNIQUE => normal is not always outward 
-			element_to_face->GetRow(e, faces);
-			mfem::DenseMatrix F(dofs.Size());
-			F = 0.0; 
-			double alpha = 1.0; 
-			double beta = 0.5; 
-			for (int fidx=0; fidx<faces.Size(); fidx++) {
-				const auto info = mesh.GetFaceInformation(faces[fidx]); 
-				mfem::FaceElementTransformations *face_trans; 
-				if (info.IsShared()) {
-					face_trans = mesh.GetSharedFaceTransformationsByLocalIndex(faces[fidx], true); 
-				} else {
-					face_trans = mesh.GetFaceElementTransformations(faces[fidx]); 
-				}
-				mfem::DGTraceIntegrator upw_int(Q, alpha, beta); 
-				mfem::DenseMatrix f; 
-				const auto &el1 = *fes.GetFE(face_trans->Elem1No); 
-				const auto *el2 = &el1; 
-				if (face_trans->Elem2No >= 0) {
-					el2 = fes.GetFE(face_trans->Elem2No); 
-				}
-				int ndofs1 = el1.GetDof(); 
-				int ndofs2 = el2->GetDof(); 
-				upw_int.AssembleFaceMatrix(el1, *el2, *face_trans, f); 
-				mfem::DenseMatrix f11, f12; 
-				int ep = (e==face_trans->Elem1No) ? face_trans->Elem2No : face_trans->Elem1No;
-				if (e == face_trans->Elem1No) {
-					f.GetSubMatrix(0, ndofs1, 0, ndofs1, f11); 
-					f.GetSubMatrix(0, ndofs1, ndofs1, f.Width(), f12); 				
-				} else {
-					f.GetSubMatrix(ndofs1, f.Height(), ndofs1, f.Width(), f11); 
-					f.GetSubMatrix(ndofs1, f.Height(), 0, ndofs1, f12); 
-				}
-				F += f11; 
-				if (ep>=0) {
-					mfem::Vector psi2; 
-					// face neighbor data 
-					if (info.IsShared()) {
-						fes.GetFaceNbrElementVDofs(ep-Ne, dofs2); 
-						psi2.SetSize(dofs2.Size()); 
-						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_fnbr_view(0, a, dofs2[i]); }
-					}
-					// local data 
-					else {
-						fes.GetElementDofs(ep, dofs2); 
-						psi2.SetSize(dofs2.Size()); 
-						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(0, a, dofs2[i]); }						
-					}
-					f12.AddMult(psi2, rhs, -1.0); 									
-				} 
-				#ifdef INFLOW_IN_SWEEP
-				else {
-					auto be = face_to_bdr_el.at(face_trans->ElementNo); 
-					auto &bdr_face_trans = *mesh.GetBdrFaceTransformations(be); 
-					mfem::BoundaryFlowIntegrator bdr_flow(inflow, Q, alpha, beta);
-					mfem::Vector elvec; 
-					bdr_flow.AssembleRHSElementVect(el, bdr_face_trans, elvec);  
-					rhs -= elvec; 
-				}
-				#endif
-			}  
-#endif
-
-			// form local system 
-			mfem::DenseMatrix A(G); 
-			A += F; 
-			A += Mt; 
-
-			// solve, solution overwritten into rhs 
-			mfem::LinearSolve(A, rhs.GetData()); 
-
-			// scatter back 
-			for (int i=0; i<dofs.Size(); i++) { psi_view(0, a, dofs[i]) = rhs(i); }
-
-
-			// --- compute next + send data to other processors --- 
-			degrees[node] = -1; // already visited 
-			// get neighbors 
-			igraph_neighbors(&graph, &nbrs, node, IGRAPH_OUT);  
-			auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
-			std::set<int> send_fn_set; // store unique set of processors to send data to 
-			for (const auto &nbr : nbrs_view) {
-				degrees[(int)nbr] -= 1; // reduce degree since node has been visited 
-				// if nbr is off-processor, add to send_set regardless of degree 
-				if (nbr >= Ne*Nomega) {
-					assert(node < Ne*Nomega); 
-					assert(nbr >= Ne*Nomega); 
-					// get neighbor of neighbor to find number of processors to send data to 
-					igraph_neighbors(&graph, &nbr_nbrs, node, IGRAPH_OUT);
-					auto nbr_nbrs_view = std::span(VECTOR(nbr_nbrs), igraph_vector_int_size(&nbr_nbrs)); 	
-					for (const auto &nbr_nbr : nbr_nbrs_view) {
-						if (nbr_nbr < Ne*Nomega) continue; // only send to off-proc neighbors 
-						const auto nbr_id = (int)nbr_nbr - Ne*Nomega; 
-						const auto fn = fnbr_to_fn[nbr_id / Nomega]; 
-						send_fn_set.insert(fn); 
-					}
-				} 
-				// neighbor is local, add to queue 
-				else {
-					if (degrees[(int)nbr] == 0) {
-						local.push_back(nbr); 						
-					}					
-				}
-			}
-
-			// MPI send data if available 
-			for (const auto &fn : send_fn_set) {
-			#ifdef SWEEP_BUFFER_SENDS
-				send_list.Append({fn, node}); 
-			#else 
-				auto nbr_rank = mesh.GetFaceNbrRank(fn); 
-				MPI_Request send_request; 
-				MPI_Isend(rhs.GetData(), dofs.Size(), MPI_DOUBLE, nbr_rank, node, MPI_COMM_WORLD, &send_request); 
-				MPI_Wait(&send_request, MPI_STATUS_IGNORE); 
-			#endif
-			}
-
-		#ifdef SWEEP_BUFFER_SENDS
-			if (send_list.Size() >= send_buffer_size or local.empty()) {
-				send_list.Sort(); send_list.Unique(); 
-				mfem::Table send_table(num_face_nbrs, send_list); 
-				for (auto fn=0; fn<num_face_nbrs; fn++) {
-					if (send_table.RowSize(fn) == 0) continue; 
-					const auto nbr_rank = mesh.GetFaceNbrRank(fn); 
-					auto buffer_size = 0;
-					auto nodes = std::span<const int>(send_table.GetRow(fn), send_table.RowSize(fn)); 
-					for (auto n : nodes) {
-						fes.GetElementDofs(n / Nomega, dofs); 
-						buffer_size += dofs.Size(); 
-					}
-
-					double buffer[buffer_size]; 
-					auto idx = 0;
-					for (auto n : nodes) {
-						const auto e = n / Nomega; 
-						const auto a = n % Nomega; 
-						fes.GetElementDofs(e, dofs); 
-						for (auto i=0; i<dofs.Size(); i++) {
-							buffer[idx++] = psi_view(0,a,dofs[i]); 
-						}
-					}
-
-					MPI_Request request[2]; 
-					MPI_Isend(send_table.GetRow(fn), send_table.RowSize(fn), MPI_INT, nbr_rank, message_count++, 
-						MPI_COMM_WORLD, &request[0]); 
-					MPI_Isend(buffer, buffer_size, MPI_DOUBLE, nbr_rank, message_count++, MPI_COMM_WORLD, &request[1]); 
-					MPI_Waitall(2, request, MPI_STATUS_IGNORE); 
-				}
-				send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
-			}
-		#endif
-		}
-
-		// --- receive data from other processors --- 
-		// loop until no messages remain 
-		while (true) {
-		#ifdef SWEEP_BUFFER_SENDS
-			int avail; 
-			MPI_Status status[2]; 
-			MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &avail, &status[0]);
-			if (avail==0) break; 
-
-			const auto tag = status[0].MPI_TAG; 
-			const auto source = status[0].MPI_SOURCE; 
-			MPI_Probe(source, (tag % 2 == 0) ? tag + 1 : tag - 1, MPI_COMM_WORLD, &status[1]); 
-
-			if (tag % 2 == 1) {
-				std::swap(status[0], status[1]); 
-			}
-
-			int node_count, data_count; 
-			MPI_Get_count(&status[0], MPI_INT, &node_count); 
-			MPI_Get_count(&status[1], MPI_DOUBLE, &data_count); 
-
-			int node_buffer[node_count]; 
-			double data_buffer[data_count]; 
-
-			MPI_Request request[2]; 
-			assert(status[0].MPI_SOURCE == status[1].MPI_SOURCE); 
-			MPI_Irecv(&node_buffer, node_count, MPI_INT, source, status[0].MPI_TAG, MPI_COMM_WORLD, &request[0]); 
-			MPI_Irecv(&data_buffer, data_count, MPI_DOUBLE, source, status[1].MPI_TAG, MPI_COMM_WORLD, &request[1]); 
-			MPI_Waitall(2, request, MPI_STATUSES_IGNORE); 
-
-			const auto fn = proc_to_fn.at(source); 
-			auto node_view = std::span<const int>(node_buffer, node_count); 
-			mfem::Array<int> I(node_count+1); 
-			I[0] = 0; 
-			for (int n=0; n<node_count; n++) {
-				const auto node = node_view[n]; 
-				// convert to global id so that it can be mapped to local fnbr id 
-				const auto global = mesh_face_nbr_offsets[fn] * Nomega + node;  
-				// convert tag (global idx) to a local index 
-				const auto e = global / Nomega; 
-				const auto a = global % Nomega; 
-				const auto local_e = global_to_fnbr.at(e) + Ne; 
-				const auto local_id = local_e*Nomega + a;		
-				fes.GetFaceNbrElementVDofs(local_e-Ne, dofs); 
-				I[n+1] = dofs.Size(); 
-			}	
-			I.PartialSum(); 
-
-			for (auto n=0; n<node_count; n++) {
-				const auto node = node_view[n]; 
-				// convert to global id so that it can be mapped to local fnbr id 
-				const auto global = mesh_face_nbr_offsets[fn] * Nomega + node;  
-				// convert tag (global idx) to a local index 
-				const auto e = global / Nomega; 
-				const auto a = global % Nomega; 
-				const auto local_e = global_to_fnbr.at(e) + Ne; 
-				const auto local_id = local_e*Nomega + a;		
-				fes.GetFaceNbrElementVDofs(local_e-Ne, dofs); 	
-				for (auto i=0; i<dofs.Size(); i++) { psi_fnbr_view(0,a,dofs[i]) = data_buffer[I[n] + i]; }
-
-				// mark data as recvd, traverse neighbors to add the locally owned tail to the queue 
-				// for use in the local sweep 
-				degrees[local_id] = -1; 
-				igraph_neighbors(&graph, &nbrs, local_id, IGRAPH_OUT); 
-				auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
-				for (const auto &nbr : nbrs_view) {
-					degrees[(int)nbr] -= 1; 
-					if (degrees[(int)nbr]==0) {
-						local.push_back(nbr); // add the locally owned id to the queue 
-					}
-				}				
-			}
-
-		#else
-			// probe to see if message available 
-			int avail; 
-			MPI_Status status; 
-			MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &avail, &status); 
-			// exit if no messages available 
-			if (avail==0) break; 
-
-			// iprobe has same status as if MPI_Recv was called 
-			// extract info to reproduce call to MPI_Recv 
-			// also used to find the right buffer to place data in 
-			auto tag = status.MPI_TAG; // local node id to source processor 
-			auto source = status.MPI_SOURCE; 
-			auto fn = proc_to_fn.at(source);
-			// convert to global id so that it can be mapped to local fnbr id 
-			auto global = mesh_face_nbr_offsets[fn] * Nomega + tag;  
-			// convert tag (global idx) to a local index 
-			auto e = global / Nomega; 
-			auto a = global % Nomega; 
-			auto local_e = global_to_fnbr.at(e) + Ne; 
-			auto local_id = local_e*Nomega + a;		
-			// size of message 
-			int count; 
-			MPI_Get_count(&status, MPI_DOUBLE, &count); 	
-
-			// get the data 
-			// use a buffer in case psi not striding in space first 
-			double buffer[count]; 
-			MPI_Recv(&buffer, count, MPI_DOUBLE, source, tag, MPI_COMM_WORLD, &status);
-
-			mfem::Array<int> nbr_dofs; 
-			fes.GetFaceNbrElementVDofs(local_e-Ne, nbr_dofs); 
-			for (auto i=0; i<nbr_dofs.Size(); i++) { psi_fnbr_view(0,a,nbr_dofs[i]) = buffer[i]; }
-
-			// mark data as recvd, traverse neighbors to add the locally owned tail to the queue 
-			// for use in the local sweep 
-			degrees[local_id] = -1; 
-			igraph_neighbors(&graph, &nbrs, local_id, IGRAPH_OUT); 
-			auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
-			for (const auto &nbr : nbrs_view) {
-				degrees[(int)nbr] -= 1; 
-				if (degrees[(int)nbr]==0) {
-					local.push_back(nbr); // add the locally owned id to the queue 
-				}
-			}
-		#endif
-		}
-	}
-	// clean up data 
-	igraph_vector_int_destroy(&nbrs); 
-	igraph_vector_int_destroy(&nbr_nbrs); 
-
-	// use barrier to avoid tag clash? 
-	MPI_Barrier(MPI_COMM_WORLD); 
-}
-
-void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
-	const TransportVectorExtents &psi_ext,
-	std::function<double(const mfem::Vector &x, const mfem::Vector &Omega)> source_func, 
-	std::function<double(const mfem::Vector &x, const mfem::Vector &Omega)> inflow_func, 
-	mfem::Vector &source_vec)
-{
-	const auto psi_size = TotalExtent(psi_ext); 
-	source_vec.SetSize(psi_size);
-	source_vec = 0.0;  
-	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
-	for (auto a=0; a<quad.Size(); a++) {
-		const auto &Omega = quad.GetOmega(a); 
-		auto source_for_angle = [&Omega, &source_func](const mfem::Vector &x) {
-			return source_func(x,Omega); 
-		};
-		mfem::ParLinearForm bform(&fes); 
-		mfem::FunctionCoefficient source_coef(source_for_angle); 
-		bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
-		#ifndef INFLOW_IN_SWEEP
-		auto inflow_for_angle = [&Omega, &inflow_func](const mfem::Vector &x) {
-			return inflow_func(x,Omega); 
-		};
-		mfem::FunctionCoefficient inflow_coef(inflow_for_angle); 
-		mfem::VectorConstantCoefficient Q(Omega); 
-		bform.AddBdrFaceIntegrator(new mfem::BoundaryFlowIntegrator(inflow_coef, Q, -1.0, -0.5));
-		#endif
-		bform.Assemble(); 
-		for (int i=0; i<bform.Size(); i++) {
-			source_vec_view(0,a,i) = bform[i]; 
-		}
-	}
-}
-
-void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
-	PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
-	TransportVectorView source_view) 
-{
-	for (auto a=0; a<quad.Size(); a++) {
-		const auto &Omega = quad.GetOmega(a); 
-		source_coef.SetState(Omega); inflow_coef.SetState(Omega); 
-
-		mfem::ParLinearForm bform(&fes); 
-		bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
-		#ifndef INFLOW_IN_SWEEP
-		mfem::VectorConstantCoefficient Q(Omega); 
-		bform.AddBdrFaceIntegrator(new mfem::BoundaryFlowIntegrator(inflow_coef, Q, -1.0, -0.5));
-		#endif
-		bform.Assemble(); 
-		for (int i=0; i<bform.Size(); i++) {
-			source_view(0,a,i) = bform[i]; 
-		}
-	}
-}
-
-void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
-	const TransportVectorExtents &psi_ext,
-	std::function<double(double x, double y, double z, double mu, double eta, double xi)> source_func, 
-	std::function<double(double x, double y, double z, double mu, double eta, double xi)> inflow_func, 
-	mfem::Vector &source_vec)
-{
-	const auto dim = fes.GetMesh()->Dimension(); 
-	auto source = [&dim, &source_func](const mfem::Vector &x, const mfem::Vector &Omega) {
-		double X[3]; 
-		double O[3]; 
-		for (auto d=0; d<x.Size(); d++) { X[d] = x(d); }
-		for (auto d=0; d<Omega.Size(); d++) { O[d] = Omega(d); }			
-		return source_func(X[0], X[1], X[2], O[0], O[1], O[2]); 
-	};
-	auto inflow = [&dim, &inflow_func](const mfem::Vector &x, const mfem::Vector &Omega) {
-		double X[3]; 
-		double O[3]; 
-		for (auto d=0; d<x.Size(); d++) { X[d] = x(d); }
-		for (auto d=0; d<Omega.Size(); d++) { O[d] = Omega(d); }			
-		return inflow_func(X[0], X[1], X[2], O[0], O[1], O[2]); 
-	};
-	FormTransportSource(fes, quad, psi_ext, source, inflow, source_vec); 
-}
-
-void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
-	const TransportVectorExtents &psi_ext, mfem::Coefficient &source, mfem::Coefficient &inflow, mfem::Vector &source_vec)
-{
-	const auto psi_size = TotalExtent(psi_ext); 
-	source_vec.SetSize(psi_size); 
-	source_vec = 0.0;  
-	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
-
-	mfem::ParLinearForm bform(&fes); 
-	bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source)); 
-	bform.Assemble(); 
-
-	for (auto a=0; a<quad.Size(); a++) {
-		const auto &Omega = quad.GetOmega(a); 
-		mfem::VectorConstantCoefficient Q(Omega); 
-		mfem::ParLinearForm bform2(&fes); 
-		bform2.AddBdrFaceIntegrator(new mfem::BoundaryFlowIntegrator(inflow, Q, -1.0, -0.5)); 
-		bform2.Assemble(); 
-		for (auto i=0; i<fes.GetVSize(); i++) {
-			#ifdef INFLOW_IN_SWEEP
-			source_vec_view(0,a,i) = bform[i]; 
-			#else
-			source_vec_view(0,a,i) = bform[i] + bform2[i]; 
-			#endif
-		}
+		}		
 	}
 }
 

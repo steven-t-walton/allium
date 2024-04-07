@@ -27,7 +27,7 @@ TEST(PhaseCoef, SpaceAngle) {
 	mfem::Vector Omega(2); 
 	Omega(0) = 1.0; 
 	Omega(1) = 0.5; 
-	phase.SetState(Omega); 
+	phase.SetAngle(Omega); 
 
 	auto &trans = *mesh.GetElementTransformation(0); 
 	auto &ref_cent = mfem::Geometries.GetCenter(trans.GetGeometryType()); 

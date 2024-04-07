@@ -640,10 +640,11 @@ int main(int argc, char *argv[]) {
 	mfem::Vector source_vec(psi_size); 
 	source_vec = 0.0; 
 	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
-	FormTransportSource(fes, *quad, source, inflow, source_vec_view); 
+	mfem::Array<double> energy_grid(2); energy_grid[0] = 0.0; energy_grid[1] = 1.0; 
+	FormTransportSource(fes, *quad, energy_grid, source, inflow, source_vec_view); 
 
 	// build sweep operator 
-	InverseAdvectionOperator Linv(fes, *quad, psi_ext, total, inflow, reflection_bdr_attr); 
+	InverseAdvectionOperator Linv(fes, *quad, total_gf, reflection_bdr_attr); 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -1248,8 +1249,8 @@ int main(int argc, char *argv[]) {
 				if (J_ho_tracer.Size()) {
 					out << YAML::Key << "current (HO)" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
 					for (auto d=0; d<dim; d++) { out << J_ho_tracer(ntracers*d + i); }
+					out << YAML::EndSeq; 
 				}
-				out << YAML::EndSeq; 
 				out << YAML::EndMap; 
 			}
 			out << YAML::EndSeq; 

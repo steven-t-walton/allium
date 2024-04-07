@@ -7,6 +7,7 @@ LIST(APPEND TESTS
 	test_mfem.cpp
 	test_phase_coef.cpp
 	test_linalg.cpp
+	test_opacity.cpp
 )
 
 LIST(APPEND PAR_TESTS

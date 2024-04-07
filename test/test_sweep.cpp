@@ -11,14 +11,25 @@ bool SweepConstantSolution(mfem::Mesh &smesh, int fe_order) {
 	mfem::L2_FECollection fec(fe_order, dim, mfem::BasisType::GaussLegendre); 
 	mfem::ParFiniteElementSpace fes(&mesh, &fec); 
 
-	mfem::ConstantCoefficient zero(0.0); 
-	mfem::ConstantCoefficient inflow(1.0); 
+	ConstantPhaseSpaceCoefficient szero(0.0); 
+	ConstantPhaseSpaceCoefficient inflow(1.0); 
 
-	TransportVectorExtents psi_ext(1, quad.Size(), fes.GetVSize()); 
+	mfem::Array<double> energy_grid(3); 
+	energy_grid[0] = 0; 
+	energy_grid[1] = 1; 
+	energy_grid[2] = 2; 
+	mfem::Vector zero_data(2); zero_data = 0.0; 
+	mfem::VectorConstantCoefficient zero(zero_data); 
+	mfem::FiniteElementSpace sigma_fes(&mesh, &fec, 2); 
+	mfem::GridFunction sigma(&sigma_fes); 
+	sigma.ProjectCoefficient(zero); 
+
+	TransportVectorExtents psi_ext(2, quad.Size(), fes.GetVSize()); 
 	const auto psi_size = TotalExtent(psi_ext); 
 	mfem::Vector source(psi_size), psi(psi_size); 
-	FormTransportSource(fes, quad, psi_ext, zero, inflow, source); 
-	InverseAdvectionOperator Linv(fes, quad, psi_ext, zero, inflow); 
+	TransportVectorView source_view(source.GetData(), psi_ext); 
+	FormTransportSource(fes, quad, energy_grid, szero, inflow, source_view); 
+	InverseAdvectionOperator Linv(fes, quad, sigma); 
 	Linv.Mult(source, psi); 
 	bool all_ones = true; 
 	for (const auto &i : psi) {
@@ -79,7 +90,8 @@ TEST(Sweep, ConstantSolution3Dp2) {
 
 // --- test with interaction term --- 
 // exact solution is exponential 
-double ExponentialSolution(mfem::Mesh &smesh, int fe_order, std::function<double(const mfem::Vector&, const mfem::Vector&)> exsol) {
+double ExponentialSolution(mfem::Mesh &smesh, int fe_order, std::function<double(double, const mfem::Vector&, const mfem::Vector&)> exsol) {
+	smesh.Finalize(); 
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
 	const auto dim = mesh.Dimension();
 	LevelSymmetricQuadrature lvlquad(4, dim); 
@@ -87,39 +99,52 @@ double ExponentialSolution(mfem::Mesh &smesh, int fe_order, std::function<double
 
 	mfem::L2_FECollection fec(fe_order, dim, mfem::BasisType::GaussLegendre); 
 	mfem::ParFiniteElementSpace fes(&mesh, &fec); 
+	mfem::ParFiniteElementSpace sigma_fes(&mesh, &fec, 2); 
+	mfem::Array<double> energy_grid(3); 
+	energy_grid[0] = 0; energy_grid[1] = 0.5; energy_grid[2] = 1.0; 
+	mfem::ParGridFunction total(&sigma_fes); 
+	mfem::Vector coef_data(2); 
+	coef_data[0] = 1.0; 
+	coef_data[1] = 0.5; 
+	mfem::VectorConstantCoefficient coef(coef_data); 
+	total.ProjectCoefficient(coef); 
 
-	mfem::ConstantCoefficient total(1.0); 
-	mfem::ConstantCoefficient inflow(1.0); 
-	mfem::ConstantCoefficient zero(0.0); 
+	ConstantPhaseSpaceCoefficient inflow(1.0); 
+	ConstantPhaseSpaceCoefficient zero(0.0); 
 
-	TransportVectorExtents psi_ext(1, quad.Size(), fes.GetVSize()); 
+	TransportVectorExtents psi_ext(2, quad.Size(), fes.GetVSize()); 
 	const auto psi_size = TotalExtent(psi_ext); 
 	mfem::Vector source(psi_size), psi(psi_size); 
-	FormTransportSource(fes, quad, psi_ext, zero, inflow, source); 
+	TransportVectorView source_view(source.GetData(), psi_ext); 
+	FormTransportSource(fes, quad, energy_grid, zero, inflow, source_view); 
 	psi = 0.0; 
 
-	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
+	InverseAdvectionOperator Linv(fes, quad, total); 
 	Linv.Mult(source, psi); 
 
-	auto exsol_per_angle = [&quad, &exsol](const mfem::Vector &x) {
-		const mfem::Vector &Omega = quad.GetOmega(0); 
-		return exsol(x,Omega); 
-	};
-	mfem::FunctionCoefficient exact_c(exsol_per_angle); 
+	double err = 0.0; 
+	for (int g=0; g<2; g++) {
+		auto exsol_per_angle = [val=coef_data[g], &quad, &exsol](const mfem::Vector &x) {
+			const mfem::Vector &Omega = quad.GetOmega(0); 
+			return exsol(val, x,Omega); 
+		};
+		mfem::FunctionCoefficient exact_c(exsol_per_angle); 
+		mfem::ParGridFunction sol(&fes, psi, fes.GetVSize()*g); 
+		err += sol.ComputeL2Error(exact_c); 
+	}
 
-	mfem::ParGridFunction sol(&fes, psi.GetData()); 
-	return sol.ComputeL2Error(exact_c);
+	return err; 
 }
 
-auto exp_sol_1d = [](const mfem::Vector &x, const mfem::Vector &Omega) {
-	return std::exp(-x(0)/Omega(0)); 
+auto exp_sol_1d = [](double alpha, const mfem::Vector &x, const mfem::Vector &Omega) {
+	return std::exp(-x(0)/Omega(0)*alpha); 
 }; 
 
-auto exp_sol_2d = [](const mfem::Vector &x, const mfem::Vector &Omega) {
+auto exp_sol_2d = [](double alpha, const mfem::Vector &x, const mfem::Vector &Omega) {
 	if (x(0) > x(1)) 
-		return exp(-x(1)/Omega(0)); 
+		return exp(-x(1)/Omega(0)*alpha); 
 	else 
-		return exp(-x(0)/Omega(1)); 
+		return exp(-x(0)/Omega(1)*alpha); 
 };
 
 TEST(Sweep, ExponentialSolution1Dp1) {
@@ -130,8 +155,7 @@ TEST(Sweep, ExponentialSolution1Dp1) {
 	double E1 = ExponentialSolution(mesh1, fe_order, exp_sol_1d); 
 	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_1d); 
 	double ooa = log2(E1/E2); 
-	bool within_bounds = fabs(fe_order+1 - ooa) < .1; 
-	EXPECT_TRUE(within_bounds); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.1); 
 }
 
 TEST(Sweep, ExponentialSolution1Dp2) {
@@ -142,8 +166,7 @@ TEST(Sweep, ExponentialSolution1Dp2) {
 	double E1 = ExponentialSolution(mesh1, fe_order, exp_sol_1d); 
 	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_1d); 
 	double ooa = log2(E1/E2); 
-	bool within_bounds = fabs(fe_order+1 - ooa) < .1; 
-	EXPECT_TRUE(within_bounds); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.1); 
 }
 
 TEST(Sweep, ExponentialSolution1Dp3) {
@@ -154,8 +177,7 @@ TEST(Sweep, ExponentialSolution1Dp3) {
 	double E1 = ExponentialSolution(mesh1, fe_order, exp_sol_1d); 
 	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_1d); 
 	double ooa = log2(E1/E2); 
-	bool within_bounds = fabs(fe_order+1 - ooa) < .1; 
-	EXPECT_TRUE(within_bounds); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.1); 
 }
 
 TEST(Sweep, ExponentialSolution2Dp1) {
@@ -166,20 +188,42 @@ TEST(Sweep, ExponentialSolution2Dp1) {
 	double E1 = ExponentialSolution(mesh1, fe_order, exp_sol_2d); 
 	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_2d); 
 	double ooa = log2(E1/E2); 
-	EXPECT_TRUE(fabs(ooa - 1.0) < .2); 
+	EXPECT_NEAR(ooa, 1.0, 0.2); 
 }
 
-// memory issue in parallel? 
-// TEST(Sweep, ExponentialSolution2DTRI) {
-// 	const auto fe_order = 1; 
-// 	auto Ne = 50; 
-// 	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
-// 	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne,2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
-// 	double E1 = ExponentialSolution(mesh1, fe_order, exp_sol_2d); 
-// 	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_2d); 
-// 	double ooa = log2(E1/E2); 
-// 	EXPECT_TRUE(fabs(ooa - 2.0) < .2); 
-// }
+TEST(Sweep, ExponentialSolution2DTRIp0) {
+	const auto fe_order = 0; 
+	auto Ne = 10; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne,2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	double E1 = ExponentialSolution(mesh1, fe_order, exp_sol_2d); 
+	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_2d); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); // --> mesh aligned with discontinuity => get full accuracy 
+}
+
+TEST(Sweep, ExponentialSolution2DTRIp1) {
+	const auto fe_order = 1; 
+	auto Ne = 10; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne,2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	double E1 = ExponentialSolution(mesh1, fe_order, exp_sol_2d); 
+	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_2d); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); // --> mesh aligned with discontinuity => get full accuracy 
+}
+
+TEST(Sweep, ExponentialSolution2DTRIp2) {
+	const auto fe_order = 2; 
+	auto Ne = 10; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne,2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	double E1 = ExponentialSolution(mesh1, fe_order, exp_sol_2d); 
+	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_2d); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); // --> mesh aligned with discontinuity => get full accuracy 
+}
+
 
 TEST(Sweep, ExponentialSolution2Dp2) {
 	const auto fe_order = 2; 
@@ -189,6 +233,5 @@ TEST(Sweep, ExponentialSolution2Dp2) {
 	double E1 = ExponentialSolution(mesh1, fe_order, exp_sol_2d); 
 	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_2d); 
 	double ooa = log2(E1/E2); 
-	bool within_bounds = fabs(ooa - 1.0) < .3; 
-	EXPECT_TRUE(within_bounds); 
+	EXPECT_NEAR(ooa, 1.0, 0.3); 
 }

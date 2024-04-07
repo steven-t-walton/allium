@@ -209,7 +209,7 @@ BlockDiffusionSMMSourceOperator::BlockDiffusionSMMSourceOperator(
 
 	for (auto a=0; a<quad.Size(); a++) {
 		const auto &Omega = quad.GetOmega(a); 
-		source_coef.SetState(Omega); 
+		source_coef.SetAngle(Omega); 
 		mfem::LinearForm fform(&fes); 
 		fform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
 		fform.Assemble(); 

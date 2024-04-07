@@ -7,10 +7,17 @@ PWPhaseSpaceCoefficient::PWPhaseSpaceCoefficient(const mfem::Array<int> &attrs, 
 	}
 }
 
-void PWPhaseSpaceCoefficient::SetState(const mfem::Vector &Omega_in, int g) {
+void PWPhaseSpaceCoefficient::SetAngle(const mfem::Vector &Omega_in) {
 	for (auto &it : map) {
 		if (it.second) 
-			it.second->SetState(Omega_in, g); 
+			it.second->SetAngle(Omega_in); 
+	}
+}
+
+void PWPhaseSpaceCoefficient::SetEnergy(double E) {
+	for (auto &it : map) {
+		if (it.second) 
+			it.second->SetEnergy(E); 
 	}
 }
 
@@ -45,7 +52,7 @@ double InflowPartialCurrentCoefficient::Eval(mfem::ElementTransformation &trans,
 	double Jin = 0.0; 
 	for (auto a=0; a<quad.Size(); a++) {
 		const auto &Omega = quad.GetOmega(a); 
-		phase_coef.SetState(Omega); 
+		phase_coef.SetAngle(Omega); 
 		double psi_in = phase_coef.Eval(trans, ip); 
 		double dot = Omega*nor; 
 		if (dot <= 0) {

@@ -37,14 +37,19 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order) {
 	auto inflow_mms = [](const mfem::Vector &x, const mfem::Vector &Omega) {
 		return 2.0/4/M_PI; 
 	};
-	FormTransportSource(fes, quad, psi_ext, qmms, inflow_mms, source);
+	FunctionGrayCoefficient qmms_coef(qmms); 
+	FunctionGrayCoefficient inflow_coef(inflow_mms); 
+	mfem::Array<double> energy_grid(2); 
+	FormTransportSource(fes, quad, energy_grid, qmms_coef, inflow_coef, source_view);
 
 	mfem::ParBilinearForm Ms_form(&fes); 
 	Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
 	Ms_form.Assemble(); 
 	Ms_form.Finalize(); 
 
-	InverseAdvectionOperator Linv(fes, quad, psi_ext, total, inflow); 
+	mfem::GridFunction total_data(&fes); 
+	total_data.ProjectCoefficient(total); 
+	InverseAdvectionOperator Linv(fes, quad, total_data); 
 
 	mfem::ParGridFunction phi(&fes), phi_old(&fes); 
 	phi_old = 0.0; 
@@ -76,21 +81,19 @@ TEST(MMS, LinearTransport2Dp1) {
 	double E1 = LinearTransportError(mesh1, fe_order); 
 	double E2 = LinearTransportError(mesh2, fe_order); 
 	double ooa = log2(E1/E2); 
-	bool within_bounds = (fe_order+1 - ooa) < .2; 
-	EXPECT_TRUE(within_bounds); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
 }
 
-// TEST(MMS, LinearTransport2DTRI) {
-// 	auto Ne = 10; 
-// 	const auto fe_order = 1; 
-// 	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
-// 	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
-// 	double E1 = LinearTransportError(mesh1, fe_order); 
-// 	double E2 = LinearTransportError(mesh2, fe_order); 
-// 	double ooa = log2(E1/E2); 
-// 	bool within_bounds = (fe_order+1 - ooa) < .2; 
-// 	EXPECT_TRUE(within_bounds); 
-// }
+TEST(MMS, LinearTransport2DTRI) {
+	auto Ne = 10; 
+	const auto fe_order = 1; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	double E1 = LinearTransportError(mesh1, fe_order); 
+	double E2 = LinearTransportError(mesh2, fe_order); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
+}
 
 TEST(MMS, LinearTransport2Dp2) {
 	auto Ne = 10; 
@@ -100,8 +103,7 @@ TEST(MMS, LinearTransport2Dp2) {
 	double E1 = LinearTransportError(mesh1, fe_order); 
 	double E2 = LinearTransportError(mesh2, fe_order); 
 	double ooa = log2(E1/E2); 
-	bool within_bounds = (fe_order+1 - ooa) < .2; 
-	EXPECT_TRUE(within_bounds); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
 }
 
 TEST(MMS, LinearTransport2Dp3) {
@@ -112,6 +114,5 @@ TEST(MMS, LinearTransport2Dp3) {
 	double E1 = LinearTransportError(mesh1, fe_order); 
 	double E2 = LinearTransportError(mesh2, fe_order); 
 	double ooa = log2(E1/E2); 
-	bool within_bounds = (fe_order+1 - ooa) < .2; 
-	EXPECT_TRUE(within_bounds); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
 }

@@ -7,19 +7,21 @@ class PhaseSpaceCoefficient : public mfem::Coefficient
 {
 protected:
 	mfem::Vector Omega; 
-	int group; 
+	double energy; 
 public:
 	PhaseSpaceCoefficient() {
 		Omega.SetSize(3); 
 		Omega = 0.0;
 	}
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) = 0; 
-	virtual void SetState(const mfem::Vector &Omega_in, int g=0) {
+	virtual void SetAngle(const mfem::Vector &Omega_in) {
 		// copy Omega preserving Omega.Size() = 3 
 		for (int d=0; d<Omega_in.Size(); d++) {
 			Omega(d) = Omega_in(d); 
-		}
-		group = g; 
+		}		
+	}
+	virtual void SetEnergy(double E) {
+		energy = E; 
 	}
 };
 
@@ -29,7 +31,8 @@ protected:
 	std::unordered_map<int,PhaseSpaceCoefficient*> map; 
 public:
 	PWPhaseSpaceCoefficient(const mfem::Array<int> &attrs, const mfem::Array<PhaseSpaceCoefficient*> &coefs); 
-	void SetState(const mfem::Vector &Omega_in, int g=0); 
+	void SetAngle(const mfem::Vector &Omega_in);
+	void SetEnergy(double E);  
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
 };
 

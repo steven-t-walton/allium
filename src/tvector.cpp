@@ -7,7 +7,7 @@ void ProjectPsi(const mfem::FiniteElementSpace &fes, const AngularQuadrature &qu
 	mfem::Vector vals; 
 	for (auto a=0; a<quad.Size(); a++) {
 		const auto &Omega = quad.GetOmega(a); 
-		f.SetState(Omega); 
+		f.SetAngle(Omega); 
 		for (auto e=0; e<fes.GetNE(); e++) {
 			fes.GetElementDofs(e, dofs); 
 			vals.SetSize(dofs.Size()); 
