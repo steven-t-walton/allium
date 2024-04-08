@@ -113,10 +113,6 @@ else()
 message(FATAL_ERROR "TRANSPORT_VECTOR_LAYOUT = ${TRANSPORT_VECTOR_LAYOUT_UPPER} not supported")
 endif()
 
-# options controlling performance of sweep 
-option(SWEEP_PREASSEMBLE_LOCAL_MATRICES "increase storage to reduce FE assembly in sweep" ON)
-option(SWEEP_BUFFER_SENDS "use a queue to pack messages in the sweep" ON)
-
 # create config file 
 set(CONFIG_LOCATION "${CMAKE_BINARY_DIR}/config")
 configure_file(data/config.hpp.in ${CONFIG_LOCATION}/config.hpp)
@@ -147,11 +143,9 @@ endforeach()
 
 # --- tests --- 
 # put tests under option so GoogleTest is optional requirement
-option(ENABLE_TESTS "turn testing on, requires GoogleTest" OFF) 
-if (${ENABLE_TESTS})
+option(ENABLE_UNIT_TESTS "turn testing on, requires GoogleTest" OFF) 
+if (${ENABLE_UNIT_TESTS})
 	enable_testing()
-endif()
-if (${CMAKE_TESTING_ENABLED})
 	message(STATUS "unit tests enabled")
 	# find GoogleTest 
 	# specify location setting GTEST_ROOT to cmake install dir of gtest 
