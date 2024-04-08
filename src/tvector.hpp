@@ -36,3 +36,5 @@ T TotalExtent(const Kokkos::extents<T,Extents...> &ext) {
 
 void ProjectPsi(const mfem::FiniteElementSpace &fes, const AngularQuadrature &quad, 
 	PhaseSpaceCoefficient &f, TransportVectorView psi); 
+void ProjectPsi(const mfem::FiniteElementSpace &fes, const AngularQuadrature &quad, 
+	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &f, mfem::Vector &psi); 

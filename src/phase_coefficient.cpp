@@ -35,6 +35,14 @@ double FunctionGrayCoefficient::Eval(mfem::ElementTransformation &trans, const m
 	return f(x, Omega); 
 }
 
+double FunctionPhaseSpaceCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {
+	mfem::Vector x(3); 
+	mfem::Vector transip(x, 0, 3); 
+	trans.Transform(ip, transip); 	
+	if (f) return f(x,Omega,energy);
+	else return ftd(x,Omega,energy,GetTime());  
+}
+
 double InflowPartialCurrentCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {
 	assert(trans.ElementType == mfem::ElementTransformation::BDR_FACE); 
 	auto *ftrans = dynamic_cast<mfem::FaceElementTransformations*>(&trans); 

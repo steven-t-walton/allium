@@ -65,6 +65,21 @@ public:
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
 };
 
+class FunctionPhaseSpaceCoefficient : public PhaseSpaceCoefficient 
+{
+private:
+	// 6D function signature 
+	using PhaseFunction = std::function<double(const mfem::Vector &x, const mfem::Vector &Omega, double E)>; 
+	// 7D function signature 
+	using PhaseFunctionTD = std::function<double(const mfem::Vector &x, const mfem::Vector &Omega, double E, double time)>; 
+	PhaseFunction f; 
+	PhaseFunctionTD ftd; 
+public:
+	FunctionPhaseSpaceCoefficient(PhaseFunction F) : f(std::move(F)) { }
+	FunctionPhaseSpaceCoefficient(PhaseFunctionTD Ftd) : ftd(std::move(Ftd)) { }
+	double Eval(mfem::ElementTransformation &T, const mfem::IntegrationPoint &ip); 
+};
+
 class InflowPartialCurrentCoefficient : public mfem::Coefficient 
 {
 private:
