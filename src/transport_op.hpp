@@ -93,15 +93,18 @@ public:
 	auto &MomentTimer() const { return moment_timer; }
 };
 
+// computes moments of angular flux psi -> (phi,...)
+// transpose sets psi = 1/4pi (phi + ... ) 
 class DiscreteToMoment : public mfem::Operator {
 private:
 	const AngularQuadrature &quad; 
 	const TransportVectorExtents &extents_psi;
 	const MomentVectorExtents &extents_phi;  
 public:
-	DiscreteToMoment(const AngularQuadrature &_quad, 
-		const TransportVectorExtents &_extents_psi, 
-		const MomentVectorExtents &_extents_phi) : quad(_quad), extents_psi(_extents_psi), extents_phi(_extents_phi) {
+	DiscreteToMoment(const AngularQuadrature &_quad, const TransportVectorExtents &_extents_psi, 
+		const MomentVectorExtents &_extents_phi) 
+		: quad(_quad), extents_psi(_extents_psi), extents_phi(_extents_phi) 
+	{
 		auto psi_size = TotalExtent(extents_psi); 
 		auto phi_size = TotalExtent(extents_phi); 
 		height = phi_size; 
@@ -115,4 +118,5 @@ public:
 
 	void Mult(const mfem::Vector &psi, mfem::Vector &phi) const; 
 	void MultTranspose(const mfem::Vector &phi, mfem::Vector &psi) const; 
+	void AddMultTranspose(const mfem::Vector &phi, mfem::Vector &psi, double alpha=1.0) const override; 
 };
