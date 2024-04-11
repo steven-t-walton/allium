@@ -15,6 +15,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/io.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/log.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/opacity.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/constants.hpp
 )
 
 LIST(APPEND srcs 

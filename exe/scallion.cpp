@@ -1,0 +1,850 @@
+#include "mfem.hpp"
+#include "yaml-cpp/yaml.h"
+#include "sol/sol.hpp"
+
+#include "comment_stream.hpp"
+#include "io.hpp"
+#include "sweep.hpp"
+#include "transport_op.hpp"
+#include "constants.hpp"
+
+using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
+
+class SNTimeMassMatrix : public mfem::Operator
+{
+private:
+	const mfem::FiniteElementSpace &fes; 
+	const TransportVectorExtents &psi_ext; 
+	mfem::Array<mfem::DenseMatrix*> mats; 
+public:
+	SNTimeMassMatrix(const mfem::FiniteElementSpace &fes, const TransportVectorExtents &ext)
+		: fes(fes), psi_ext(ext) 
+	{
+		mats.SetSize(fes.GetNE()); 
+		mfem::Array<int> dofs; 
+		mfem::MassIntegrator mi; 
+		for (int e=0; e<fes.GetNE(); e++) {
+			fes.GetElementDofs(e, dofs); 
+			mats[e] = new mfem::DenseMatrix(dofs.Size()); 
+			mi.AssembleElementMatrix(*fes.GetFE(e), *fes.GetElementTransformation(e), *mats[e]); 
+		}
+	}
+	~SNTimeMassMatrix() {
+		for (auto *ptr : mats) { delete ptr; }
+	}
+
+	void Mult(const mfem::Vector &psi, mfem::Vector &Mpsi) const {
+		auto psi_view = ConstTransportVectorView(psi.GetData(), psi_ext); 
+		auto Mpsi_view = TransportVectorView(Mpsi.GetData(), psi_ext); 
+		mfem::Array<int> dofs; 
+		mfem::Vector psi_local, Mpsi_local; 
+		for (int g=0; g<psi_ext.extent(0); g++) {
+			for (int a=0; a<psi_ext.extent(1); a++) {
+				for (int e=0; e<fes.GetNE(); e++) {
+					fes.GetElementDofs(e, dofs); 
+					const auto &elmat = *mats[e]; 
+					psi_local.SetSize(dofs.Size()); 
+					Mpsi_local.SetSize(dofs.Size()); 					
+					for (int n=0; n<dofs.Size(); n++) psi_local(n) = psi_view(g,a,dofs[n]); 
+					elmat.Mult(psi_local, Mpsi_local); 
+					for (int n=0; n<dofs.Size(); n++) Mpsi_view(g,a,dofs[n]) = Mpsi_local(n); 
+				}
+			}
+		}
+	}
+};
+
+class BlackBodyEmissionCoefficient : public mfem::Coefficient
+{
+private:
+	mfem::Coefficient &sigma; 
+	const mfem::FiniteElement &fe; 
+	const mfem::Vector &temperature; 
+	mfem::Vector shape; 
+public:
+	BlackBodyEmissionCoefficient(mfem::Coefficient &s, const mfem::FiniteElement &el, 
+		const mfem::Vector &temp)
+		: sigma(s), fe(el), temperature(temp), shape(el.GetDof())
+	{ }
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
+	{
+		fe.CalcShape(ip, shape); 
+		double T = shape * temperature; 
+		return sigma.Eval(trans, ip) * constants::Stefan * pow(T, 4); 
+	}
+};
+
+class GradBlackBodyEmissionCoefficient : public mfem::Coefficient
+{
+private:
+	mfem::Coefficient &sigma; 
+	const mfem::FiniteElement &fe; 
+	const mfem::Vector &temperature; 
+	mfem::Vector shape; 
+public:
+	GradBlackBodyEmissionCoefficient(mfem::Coefficient &s, const mfem::FiniteElement &el, 
+		const mfem::Vector &temp)
+		: sigma(s), fe(el), temperature(temp), shape(el.GetDof())
+	{ }
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
+	{
+		fe.CalcShape(ip, shape); 
+		double T = shape * temperature; 
+		return sigma.Eval(trans, ip) * constants::Stefan * 4.0 * pow(T, 3); 
+	}	
+};
+
+class EnergyBalanceNonlinearFormIntegrator : public mfem::NonlinearFormIntegrator 
+{
+private:
+	mfem::Coefficient &alpha, &sigma; 
+	mfem::Vector B, dB, shape; 
+public:
+	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &a, mfem::Coefficient &s) 
+		: alpha(a), sigma(s)
+	{ }
+	void AssembleElementVector(const mfem::FiniteElement &el, mfem::ElementTransformation &trans, 
+		const mfem::Vector &elfun, mfem::Vector &elvec) override 
+	{
+		const auto dof = el.GetDof(); 
+		B.SetSize(dof); 
+		BlackBodyEmissionCoefficient planck_emission(sigma, el, elfun); 
+		el.Project(planck_emission, trans, B); // evaluate emission at nodes 
+
+		const mfem::IntegrationRule *ir = IntRule;
+		if (!ir)
+		{
+			ir = &(mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder())); // <---
+		}
+
+		elvec.SetSize(dof); 
+		shape.SetSize(dof); 
+		elvec = 0.0; 
+
+		for (int n=0; n<ir->GetNPoints(); n++) {
+			const auto &ip = ir->IntPoint(n); 
+			trans.SetIntPoint(&ip); 
+			el.CalcShape(ip, shape); 
+			double T = elfun * shape; // interpolate T 
+			// double B_at_ip = shape * B; // interpolate (T^4) instead of evaluating T^4 
+			double B_at_ip = planck_emission.Eval(trans, ip); 
+			elvec.Add((alpha.Eval(trans, ip)*T + B_at_ip) * ip.weight * trans.Weight(), shape); 
+		}
+	}
+
+	void AssembleElementGrad(const mfem::FiniteElement &el, mfem::ElementTransformation &trans, 
+		const mfem::Vector &elfun, mfem::DenseMatrix &elmat) override 
+	{
+		const auto dof = el.GetDof(); 
+		dB.SetSize(dof); 
+		GradBlackBodyEmissionCoefficient grad_plank_emission(sigma, el, elfun); 
+		el.Project(grad_plank_emission, trans, dB); // evaluate Jacobian at nodes 
+
+		const mfem::IntegrationRule *ir = IntRule;
+		if (!ir)
+		{
+			ir = &(mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder())); // <---
+		}
+
+		shape.SetSize(dof); 
+		elmat.SetSize(dof); 
+		elmat = 0.0; 
+
+		for (int n=0; n<ir->GetNPoints(); n++) {
+			const auto &ip = ir->IntPoint(n); 
+			trans.SetIntPoint(&ip); 
+			el.CalcShape(ip, shape); 
+			// double dB_at_ip = shape * dB; // interpolate power instead of taking powers of interpolation 
+			double dB_at_ip = grad_plank_emission.Eval(trans, ip); 
+			AddMult_a_VVt(trans.Weight() * ip.weight * (alpha.Eval(trans,ip) + dB_at_ip), shape, elmat); 
+		}
+	}
+};
+
+class NonlinearFormBlockInverse : public mfem::Operator 
+{
+private:
+	const mfem::NonlinearForm &nform; 
+	const mfem::Vector &data; 
+public:
+	NonlinearFormBlockInverse(const mfem::NonlinearForm &nf, const mfem::Vector &d) 
+		: nform(nf), data(d) 
+	{
+		height = width = nform.FESpace()->GetVSize(); 
+	}
+	// apply inverse of local gradient assembled using nonlinear data in data 
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const override
+	{
+		const auto &dnfi = *nform.GetDNFI(); 
+		const auto &fnfi = nform.GetInteriorFaceIntegrators(); 
+		const auto &bfnfi = nform.GetBdrFaceIntegrators(); 
+		assert(fnfi.Size()==0 and bfnfi.Size()==0); 
+
+		auto *fes = nform.FESpace(); 
+		auto *mesh = fes->GetMesh(); 
+
+		mfem::Vector el_data, el_x; 
+		const mfem::FiniteElement *fe; 
+		mfem::ElementTransformation *T; 
+		mfem::DofTransformation *doftrans; 
+		mfem::DenseMatrix A, elmat; 
+		mfem::Array<int> vdofs; 
+		for (int i = 0; i < fes->GetNE(); i++)
+		{
+			fe = fes->GetFE(i);
+			doftrans = fes->GetElementVDofs(i, vdofs);
+			T = fes->GetElementTransformation(i);
+			data.GetSubVector(vdofs, el_data);
+			if (doftrans) {doftrans->InvTransformPrimal(el_data); }
+			A.SetSize(vdofs.Size()); 
+			A = 0.0; 
+			for (int k = 0; k < dnfi.Size(); k++)
+			{
+				dnfi[k]->AssembleElementGrad(*fe, *T, el_data, elmat);
+				if (doftrans) { doftrans->TransformDual(elmat); }
+				A += elmat; 
+			}
+			x.GetSubVector(vdofs, el_x); 
+			mfem::LinearSolve(A, el_x.GetData()); 
+			y.SetSubVector(vdofs, el_x); 		
+		}
+	}
+};
+
+int main(int argc, char *argv[]) {
+	// initialize MPI 
+	// automatically calls MPI_Finalize 
+	mfem::Mpi::Init(argc, argv); 
+	// must call hypre init for BoomerAMG now? 
+	mfem::Hypre::Init(); 
+
+	const auto rank = mfem::Mpi::WorldRank(); 
+	const bool root = rank == 0; 
+
+	// stream for output to terminal
+	mfem::OutStream par_out(std::cout);
+	// enable only for root so non-root procs don't clutter cout 
+	if (rank!=0) par_out.Disable();
+
+	// make mfem print everything with 
+	// yaml comment preceeding 
+	// helps keep output yaml parse-able 
+	CommentStreamBuf comm_buf(mfem::out, '#'); 
+
+	if (root) {
+		mfem::out << "\033[1;31m                       ___    ___                           \033[0m\n";
+		mfem::out << "\033[1;31m                      /\\_ \\  /\\_ \\    __                    \033[0m\n";
+		mfem::out << "\033[1;31m  ____    ___     __  \\//\\ \\ \\//\\ \\  /\\_\\    ___     ___    \033[0m\n";
+		mfem::out << "\033[1;31m /',__\\  /'___\\ /'__`\\  \\ \\ \\  \\ \\ \\ \\/\\ \\  / __`\\ /' _ `\\  \033[0m\n";
+		mfem::out << "\033[1;31m/\\__, `\\/\\ \\__//\\ \\L\\.\\_ \\_\\ \\_ \\_\\ \\_\\ \\ \\/\\ \\L\\ \\ /\\ \\/\\ \033[0m\n";
+		mfem::out << "\033[1;31m\\/\\____/\\ \\____\\ \\__/\\._\\/\\____\\/\\____\\\\ \\_\\ \\____/\\ \\_\\ \\_\\\033[0m\n";
+		mfem::out << "\033[1;31m \\/___/  \\/____/\\/__/\\/_/\\/____/\\/____/ \\/_/\\/___/  \\/_/\\/_/\033[0m\n";
+		mfem::out << "\n                         a thermal radiative transfer solver\n"; 
+		mfem::out << std::endl; 
+	}
+
+	// parse cmdline arguments 
+	std::string input_file, lua_cmds; 
+	int par_ref = 0, ser_ref = 0; 
+	mfem::OptionsParser args(argc, argv); 
+	args.AddOption(&input_file, "-i", "--input", "input file name", true); 
+	args.AddOption(&lua_cmds, "-l", "--lua", "lua commands to run", false); 
+	args.AddOption(&ser_ref, "-sr", "--serial_refinements", "additional uniform refinements in serial"); 
+	args.AddOption(&par_ref, "-pr", "--parallel_refinements", "additional uniform refinements in parallel"); 
+	args.Parse(); 
+	if (!args.Good()) {
+		args.PrintUsage(par_out); 
+		return 1; 
+	}
+	if (root) { 
+		args.PrintOptions(mfem::out); 
+		mfem::out << std::endl; 
+	}
+
+	// YAML output 
+	YAML::Emitter out(par_out);
+	out.SetDoublePrecision(8); 
+	out << YAML::BeginMap; 
+
+	// --- load lua file --- 
+	sol::state lua; 
+	lua.open_libraries(); // allows using standard libraries (e.g. math) in input
+	lua.script_file(input_file); // load from first cmd line argument 
+
+	// overwrite input script with lua commands provided 
+	// through cmdline 
+	if (!lua_cmds.empty()) {
+		lua.script(lua_cmds); 
+	}
+
+	#ifdef ALLIUM_GIT_COMMIT 
+	out << YAML::Key << "git" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "branch" << YAML::Value << ALLIUM_GIT_BRANCH; 
+		out << YAML::Key << "commit" << YAML::Value << ALLIUM_GIT_COMMIT; 
+		#ifdef ALLIUM_GIT_TAG 
+		out << YAML::Key << "tag" << YAML::Value << ALLIUM_GIT_TAG; 
+		#endif
+		#ifdef MFEM_GIT_STRING
+		out << YAML::Key << "mfem" << YAML::Value << MFEM_GIT_STRING; 
+		#endif
+	out << YAML::EndMap; 
+	#endif
+	out << YAML::Key << "input file" << YAML::Value << io::ResolveRelativePath(input_file); 
+
+	// --- extract list of materials --- 
+	std::vector<std::string> attr_list; 
+	sol::table materials = lua["materials"]; 
+	if (materials.valid()) {
+		for (const auto &material : materials) {
+			auto key = material.first.as<std::string>(); 
+			attr_list.push_back(key); 
+		}
+	} else { MFEM_ABORT("materials not defined"); }
+
+	// get data from lua 
+	auto nattr = attr_list.size(); 
+	mfem::Vector total_list(nattr), scattering_list(nattr), cv_list(nattr); 
+	// must store the lua object so data doesn't go out of scope 
+	// for the source coefficients 
+	std::vector<sol::object> lua_source_objs(nattr); 
+	mfem::Array<PhaseSpaceCoefficient*> source_list(nattr); 
+	for (auto i=0; i<attr_list.size(); i++) {
+		sol::table data = materials[attr_list[i].c_str()]; 
+		if (!data.valid()) MFEM_ABORT("material named " << attr_list[i] << " not found"); 
+		total_list(i) = data["total"]; 
+		scattering_list(i) = data["scattering"]; 
+		cv_list(i) = data["heat_capacity"]; 
+		lua_source_objs[i] = data["source"]; 
+		if (lua_source_objs[i].get_type() == sol::type::number) {
+			auto source_val = lua_source_objs[i].as<double>(); 
+			source_list[i] = new ConstantPhaseSpaceCoefficient(source_val); 
+		} else if (lua_source_objs[i].get_type() == sol::type::function) {
+			LuaPhaseFunction lua_source = lua_source_objs[i].as<sol::function>(); 
+			auto source_func = [lua_source](const mfem::Vector &x, const mfem::Vector &Omega) {
+				return lua_source(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
+			};
+			source_list[i] = new FunctionGrayCoefficient(source_func); 
+		}
+	}
+
+	// print materials list to cout 
+	out << YAML::Key << "materials" << YAML::Value << YAML::BeginSeq; 
+	for (auto i=0; i<attr_list.size(); i++) {
+		out << YAML::BeginMap << YAML::Key << "name" << YAML::Value << attr_list[i]; 
+		out << YAML::Key << "attribute" << YAML::Value << i+1; 
+		out << YAML::Key << "total" << YAML::Value << total_list(i); 
+		out << YAML::Key << "scattering" << YAML::Value << scattering_list(i); 
+		out << YAML::Key << "heat capacity" << YAML::Value << cv_list(i); 
+		out << YAML::Key << "source" << YAML::Value; 
+		if (lua_source_objs[i].get_type() == sol::type::number) {
+			out << lua_source_objs[i].as<double>(); 
+		} else {
+			out << "function"; 
+		}
+		out << YAML::EndMap; 
+	}
+	out << YAML::EndSeq; 
+
+	// map string material id to integer
+	// start from 1 since MFEM expects attributes to be >0
+	std::unordered_map<std::string,int> attr_map; 
+	for (int i=0; i<attr_list.size(); i++) {
+		attr_map[attr_list[i]] = i+1; 
+	}
+
+	// --- extract list of boundary conditions --- 
+	std::vector<std::string> bdr_attr_list; 
+	sol::table bcs = lua["boundary_conditions"]; 
+	if (bcs.valid()) {
+		for (const auto &bc : bcs) {
+			auto key = bc.first.as<std::string>(); 
+			bdr_attr_list.push_back(key); 
+		}
+	} else { MFEM_ABORT("boundary conditions not defined"); }
+
+	// get values 
+	auto nbattr = bdr_attr_list.size(); 
+	std::vector<sol::object> lua_bc_objs(nbattr); 
+	mfem::Array<PhaseSpaceCoefficient*> inflow_list(nbattr); 
+	int reflection_bdr_attr = -1; 
+	for (auto i=0; i<bdr_attr_list.size(); i++) {
+		sol::table data = bcs[bdr_attr_list[i].c_str()]; 
+		std::string type = data["type"]; 
+		io::ValidateOption<std::string>("boundary_conditions::type", type, {"inflow", "reflective", "vacuum"}); 
+		if (type == "inflow") {
+			sol::object value = data["value"]; 
+			lua_bc_objs[i] = value; // keep lua data in scope  
+			if (value.get_type() == sol::type::number) {
+				auto val = value.as<double>(); 
+				inflow_list[i] = new ConstantPhaseSpaceCoefficient(constants::Stefan * pow(val,4) / 4.0 / constants::pi); 
+				// inflow_list[i] = new ConstantPhaseSpaceCoefficient(val); 
+			} else if (value.get_type() == sol::type::function) {
+				// auto lua_func = value.as<LuaPhaseFunction>();
+				// auto func = [lua_func](const mfem::Vector &x, const mfem::Vector &Omega) {
+				// 	return lua_func(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
+				// };
+				// inflow_list[i] = new FunctionGrayCoefficient(func);  
+				MFEM_ABORT("functions disabled currently"); 
+			}			
+		} else if (type == "reflective") {
+			if (reflection_bdr_attr<0) {
+				reflection_bdr_attr = i+1; 
+			}
+			inflow_list[i] = nullptr; 
+		} 
+		else if (type == "vacuum") {
+			inflow_list[i] = nullptr; 
+		}
+	}
+
+	// print list to screen 
+	out << YAML::Key << "boundary conditions" << YAML::Value << YAML::BeginSeq; 
+	for (auto i=0; i<bdr_attr_list.size(); i++) {
+		out << YAML::BeginMap; 
+		out << YAML::Key << "name" << YAML::Value << bdr_attr_list[i]; 
+		out << YAML::Key << "type" << YAML::Value << std::string(bcs[bdr_attr_list[i].c_str()]["type"]); 
+		if (inflow_list[i]) {
+			out << YAML::Key << "value" << YAML::Value; 
+			if (lua_bc_objs[i].get_type() == sol::type::number) {
+				out << lua_bc_objs[i].as<double>(); 
+			} else {
+				out << "function"; 
+			}			
+		}
+		out << YAML::Key << "bdr attribute" << YAML::Value << i+1; 
+		out << YAML::EndMap; 
+	}
+	out << YAML::EndSeq; 
+
+	// map string to bdr attribute integer 
+	// start from 1 since MFEM expects >0
+	std::unordered_map<std::string,int> bdr_attr_map; 
+	for (int i=0; i<bdr_attr_list.size(); i++) {
+		bdr_attr_map[bdr_attr_list[i]] = i+1; 
+	}
+
+	// --- make mesh and solution spaces --- 
+	sol::table mesh_node = lua["mesh"]; 
+	sol::optional<std::string> fname = mesh_node["file"]; 
+	// allow increasing lua refinement inputs with cmdline inputs -pr and -sr 
+	ser_ref += mesh_node["serial_refinements"].get_or(0); 
+	par_ref += mesh_node["parallel_refinements"].get_or(0); 
+	const int tot_ref = ser_ref + par_ref; 
+
+	mfem::Mesh smesh; 
+	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
+	// load from a mesh file 
+	if (fname) {
+		smesh = mfem::Mesh::LoadFromFile(fname.value(), 1, 1);
+		out << YAML::Key << "file name" << YAML::Value << io::ResolveRelativePath(fname.value()); 
+	} 
+
+	// create a cartesian mesh from extents and elements/axis 
+	else {
+		sol::table ne = mesh_node["num_elements"]; 
+		sol::table extents = mesh_node["extents"]; 
+		assert(ne.size() == extents.size()); 
+		int num_dim = ne.size(); 
+		io::ValidateOption("mesh::num_dim", num_dim, {1,2,3}, root); 
+		std::string eltype_str; 
+		mfem::Element::Type eltype; 
+		bool sfc_ordering = mesh_node["sfc_ordering"].get_or(false); 
+		if (num_dim==1) {
+			eltype_str = io::GetAndValidateOption(mesh_node, "element_type", {"segment"}, "segment", root); 
+			smesh = mfem::Mesh::MakeCartesian1D(ne[1], extents[1]);
+		} else if (num_dim==2) {
+			eltype_str = io::GetAndValidateOption(mesh_node, "element_type", 
+				{"quadrilateral", "triangle"}, "quadrilateral", root); 
+			if (eltype_str == "quadrilateral") {
+				eltype = mfem::Element::QUADRILATERAL; 
+			} 
+			else if (eltype_str == "triangle") {
+				eltype = mfem::Element::TRIANGLE; 
+			} 
+			smesh = mfem::Mesh::MakeCartesian2D(ne[1], ne[2], eltype, true, extents[1], extents[2], sfc_ordering); 
+		} else if (num_dim==3) {
+			eltype_str = io::GetAndValidateOption(mesh_node, "element_type", 
+				{"hexahedron", "tetrahedron"}, "hexahedron", root); 
+			if (eltype_str == "hexahedron") {
+				eltype = mfem::Element::HEXAHEDRON; 
+			} 
+			else if (eltype_str == "tetrahedron") {
+				eltype = mfem::Element::TETRAHEDRON; 
+			}
+			smesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], eltype, extents[1], extents[2], extents[3], sfc_ordering); 
+		}
+
+		out << YAML::Key << "extents" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+		for (auto i=1; i<=extents.size(); i++) {
+			out << (double)extents[i]; 
+		} 
+		out << YAML::EndSeq; 
+
+		out << YAML::Key << "elements/axis" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+		for (auto i=1; i<=ne.size(); i++) {
+			out << (int)ne[i] * pow(2,tot_ref); 
+		} 
+		out << YAML::EndSeq; 		
+		out << YAML::Key << "element type" << YAML::Value << eltype_str; 
+		out << YAML::Key << "space filling ordering" << YAML::Value << sfc_ordering; 
+	}
+	// apply serial refinements 
+	for (int sr=0; sr<ser_ref; sr++) {
+		smesh.UniformRefinement(); 
+	}
+	// need at minimum WorldSize() elements in serial mesh 
+	if (smesh.GetNE() < mfem::Mpi::WorldSize() and root) {
+		MFEM_ABORT("serial mesh with " << smesh.GetNE() << " elements too small to decompose on " 
+			<< mfem::Mpi::WorldSize() << " processors"); 
+	}
+	const auto dim = smesh.Dimension(); 
+
+	// --- assign materials to elements --- 
+	sol::function geom_func = lua["material_map"]; 
+	for (int e=0; e<smesh.GetNE(); e++) {
+		double c[3]; 
+		mfem::Vector cvec(c, dim); 
+		smesh.GetElementCenter(e, cvec);
+		std::string attr_name = geom_func(c[0], c[1], c[2]); 
+		if (!attr_map.contains(attr_name)) {
+			MFEM_ABORT("material named \"" << attr_name << "\" not defined"); 
+		}
+		int attr = attr_map[attr_name]; 
+		smesh.SetAttribute(e, attr); 
+	}			
+
+	// --- assign boundary conditions to boundary elements --- 
+	sol::function bdr_func = lua["boundary_map"]; 
+	for (int e=0; e<smesh.GetNBE(); e++) {
+		const mfem::Element &el = *smesh.GetBdrElement(e); 
+		int geom = smesh.GetBdrElementGeometry(e);
+		mfem::ElementTransformation &trans = *smesh.GetBdrElementTransformation(e); 
+		double c[3]; 
+		mfem::Vector cvec(c, dim);  
+		trans.Transform(mfem::Geometries.GetCenter(geom), cvec); 
+		std::string attr_name = bdr_func(c[0], c[1], c[2]); 
+		if (!bdr_attr_map.contains(attr_name)) {
+			MFEM_ABORT("boundary condition named \"" << attr_name << "\" not defined"); 
+		}
+		smesh.SetBdrAttribute(e, bdr_attr_map[attr_name]); 
+	}
+
+	// --- create parallel mesh --- 
+	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
+	for (int pr=0; pr<par_ref; pr++) {
+		mesh.UniformRefinement(); 
+	}
+	mesh.ExchangeFaceNbrData(); // create parallel communication data needed for sweep 
+	mesh.SetAttributes(); 
+	// print mesh characteristics 
+	double hmin, hmax, kmin, kmax; 
+	mesh.GetCharacteristics(hmin, hmax, kmin, kmax); 
+	const auto global_ne = mesh.ReduceInt(mesh.GetNE()); 
+	out << YAML::Key << "dim" << YAML::Value << dim; 
+	out << YAML::Key << "elements" << YAML::Value << global_ne; 
+	out << YAML::Key << "mesh size" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "min" << YAML::Value << hmin; 
+		out << YAML::Key << "max" << YAML::Value << hmax; 
+	out << YAML::EndMap; 
+	out << YAML::Key << "mesh conditioning" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "min" << YAML::Value << kmin; 
+		out << YAML::Key << "max" << YAML::Value << kmax; 
+	out << YAML::EndMap; 
+	out << YAML::Key << "MPI ranks" << YAML::Value << mfem::Mpi::WorldSize(); 
+	out << YAML::Key << "refinements" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "serial" << YAML::Value << ser_ref; 
+		out << YAML::Key << "parallel" << YAML::Value << par_ref; 
+	out << YAML::EndMap; 
+	out << YAML::EndMap; 
+
+	// --- load algorithmic parameters --- 
+	sol::table driver = lua["driver"]; 
+	const int fe_order = driver["fe_order"]; 
+	const int sigma_fe_order = driver["sigma_fe_order"].get_or(fe_order); 
+	std::string basis_type_str = io::GetAndValidateOption(driver, "basis_type", 
+		{"lobatto", "legendre", "positive"}, "lobatto", root); 
+
+	// load energy grid 
+	mfem::Array<double> energy_grid(2); 
+	energy_grid[0] = 0.0; energy_grid[1] = 1.0; 
+
+	// --- build solution space --- 
+	// DG space for transport solution 
+	int basis_type; 
+	if (basis_type_str == "legendre") {
+		basis_type = mfem::BasisType::GaussLegendre; 
+	} else if (basis_type_str == "lobatto") {
+		basis_type = mfem::BasisType::GaussLobatto; 
+	} else if (basis_type_str == "positive") {
+		basis_type = mfem::BasisType::Positive; 
+	}
+	mfem::L2_FECollection fec(fe_order, dim, basis_type); 
+	mfem::ParFiniteElementSpace fes(&mesh, &fec); // scalar finite element space 
+	mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); // vector finite element space, dim copies of fes 
+	fes.ExchangeFaceNbrData(); // create parallel degree of freedom maps used in sweep 
+
+	// piecewise constant used for plotting and storing cross section data 
+	mfem::L2_FECollection sigma_fec(sigma_fe_order, dim, basis_type); 
+	mfem::ParFiniteElementSpace sigma_fes(&mesh, &sigma_fec); 
+
+	// --- create coefficients for input material data ---
+	mfem::PWConstCoefficient total_attr(total_list); 
+	mfem::ParGridFunction total_gf(&sigma_fes); 
+	total_gf.ProjectCoefficient(total_attr); 
+	total_gf.ExchangeFaceNbrData(); 
+	mfem::GridFunctionCoefficient total(&total_gf); 
+
+	// scattering 
+	mfem::PWConstCoefficient scattering_attr(scattering_list); 
+	mfem::ParGridFunction scattering_gf(&sigma_fes); 
+	scattering_gf.ProjectCoefficient(scattering_attr); 
+	scattering_gf.ExchangeFaceNbrData(); 
+	mfem::GridFunctionCoefficient scattering(&scattering_gf); 
+
+	// heat capacity 
+	mfem::PWConstCoefficient heat_capacity(cv_list); 
+
+	mfem::SumCoefficient absorption(total, scattering, 1, -1); 
+
+	// piecewise constant isotropic source 
+	mfem::Array<int> attrs(nattr); 
+	for (int i=0; i<nattr; i++) { attrs[i] = i+1; }
+	PWPhaseSpaceCoefficient source(attrs, source_list); 
+	mfem::Array<int> battrs(nbattr); 
+	for (int i=0; i<nbattr; i++) { battrs[i] = i+1; }
+	PWPhaseSpaceCoefficient inflow(battrs, inflow_list); 
+
+	// --- angular quadrature rule --- 
+	const int sn_order = driver["sn_order"]; 
+	const std::string sn_type = io::GetAndValidateOption(driver, "sn_quadrature_type", 
+		{"level symmetric", "abu shumays"}, "level symmetric", root); 
+	AngularQuadrature *quad; 
+	if (sn_type == "level symmetric") {
+		quad = new LevelSymmetricQuadrature(sn_order, dim); 
+	} 
+	else if (sn_type == "abu shumays") {
+		quad = new AbuShumaysQuadrature(sn_order, dim); 
+	}
+	const auto Nomega = quad->Size(); 
+
+	TransportVectorExtents psi_ext(1, Nomega, fes.GetVSize());
+	const auto psi_size = TotalExtent(psi_ext); 
+	const auto psi_size_global = mesh.ReduceInt(psi_size); 
+
+	MomentVectorExtents phi_ext(1, 1, fes.GetVSize()); 
+	const auto phi_size = TotalExtent(phi_ext); 
+	const auto phi_size_global = mesh.ReduceInt(phi_size); 
+
+	// temporal parameters 
+	const double final_time = driver["final_time"]; 
+	const double time_step = driver["time_step"]; 
+	const int max_cycles = driver["max_cycles"].get_or(std::numeric_limits<int>::max()); 
+
+	// implicit solver 
+	sol::table solver = driver["solver"]; 
+	auto *outer_solver = io::CreateIterativeSolver(solver, MPI_COMM_WORLD);
+	const int max_iter = solver["max_iter"]; 
+	const double abs_tol = solver["abstol"]; 
+
+	// --- output algorithmic options used --- 
+	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "fe order" << YAML::Value << fe_order; 
+		out << YAML::Key << "data fe order" << YAML::Value << sigma_fe_order; 
+		out << YAML::Key << "sn order" << YAML::Value << sn_order; 
+		out << YAML::Key << "sn quadrature type" << YAML::Value << sn_type; 
+		out << YAML::Key << "num angles" << YAML::Value << Nomega; 			
+		out << YAML::Key << "basis type" << YAML::Value << basis_type_str; 
+		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
+		out << YAML::Key << "final time" << YAML::Value << final_time; 
+		out << YAML::Key << "time step size" << YAML::Key << time_step; 
+		out << YAML::Key << "solver" << YAML::Value << solver; 
+	out << YAML::EndMap; 
+
+	// --- sweep setup --- 
+	// global scattering operator 
+	mfem::BilinearForm Ms_form(&fes); 
+	Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
+	Ms_form.Assemble(); 
+	Ms_form.Finalize();
+
+	mfem::BilinearForm Mtot(&fes); 
+	Mtot.AddDomainIntegrator(new mfem::MassIntegrator(total)); 
+	Mtot.Assemble(); 
+	Mtot.Finalize(); 
+
+	SNTimeMassMatrix Mpsi(fes, psi_ext); 
+	mfem::BilinearForm Mtemp(&fes); 
+	Mtemp.AddDomainIntegrator(new mfem::MassIntegrator(heat_capacity)); 
+	Mtemp.Assemble(); 
+	Mtemp.Finalize(); 
+
+	mfem::Array<int> offsets(3); 
+	offsets[0] = 0; 
+	offsets[1] = psi_size; 
+	offsets[2] = fes.GetVSize(); 
+	offsets.PartialSum(); 
+	mfem::BlockVector x(offsets), x0(offsets); 
+
+	auto &psi = x.GetBlock(0); auto &psi0 = x0.GetBlock(0); 
+	mfem::ParGridFunction T(&fes, x.GetBlock(1), 0); 
+	mfem::ParGridFunction T0(&fes, x0.GetBlock(1), 0); 
+
+	// project initial condition 
+	sol::function ic_lua = lua["initial_condition"]; 
+	auto ic_func = [&ic_lua](const mfem::Vector &x) {
+		return ic_lua(x(0), x(1), x(2)); 
+	};
+	mfem::FunctionCoefficient ic_coef(ic_func);
+	T0.ProjectCoefficient(ic_coef);  
+	T = T0; 
+
+	mfem::ParGridFunction phi(&fes), phi0(&fes); 
+	for (int i=0; i<fes.GetVSize(); i++) {
+		phi(i) = constants::Stefan * pow(T0(i), 4);
+	}
+
+	mfem::Vector resid(phi_size), em_source(phi_size), em_source0(phi_size), temp_resid(phi_size), dT(phi_size); 
+
+	// form fixed source term 
+	mfem::Vector source_vec(psi_size); 
+	source_vec = 0.0; 
+	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
+	FormTransportSource(fes, *quad, energy_grid, source, inflow, source_vec_view); 
+
+	// build sweep operator 
+	// total_gf += 1.0/time_step; // <-- hack, needs better design 
+	mfem::ParGridFunction total_gf_dt(total_gf); 
+	total_gf_dt += 1.0/time_step/constants::SpeedOfLight; 
+	InverseAdvectionOperator Linv(fes, *quad, total_gf_dt, reflection_bdr_attr); 
+
+	DiscreteToMoment D(*quad, psi_ext, phi_ext); 
+	D.MultTranspose(phi, psi0);
+	psi = 0.0; 
+	TransportOperator transport_op(D, Linv, Ms_form, psi); 
+	outer_solver->SetOperator(transport_op); 
+
+	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
+	mfem::NonlinearForm meb_form(&fes); 
+	meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(Cvdt, total)); 
+
+	mfem::ConstantCoefficient zero(0.0); 
+	mfem::NonlinearForm emission_form(&fes); 
+	emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(zero, total)); 
+
+	mfem::SumCoefficient total_dt(1.0/time_step/constants::SpeedOfLight, total); 
+	mfem::Vector nor(dim); nor = 0.0; nor(0) = 1.0; 
+	double alpha = ComputeAlpha(*quad, nor); 
+	BlockLDGDiffusionDiscretization block_ldg(fes, vfes, total_dt, total_dt, alpha, nor, false, reflection_bdr_attr, 
+		FULL_RANGE); 
+	const auto &S = block_ldg.SchurComplement(); 
+	mfem::CGSolver cgsolver(MPI_COMM_WORLD); 
+	cgsolver.SetRelTol(1e-10); 
+	mfem::HypreBoomerAMG amg(S);
+	amg.SetPrintLevel(0); 
+	cgsolver.SetPreconditioner(amg); 
+	cgsolver.SetOperator(S); 
+	cgsolver.SetMaxIter(100); 
+
+	double time = 0.0; 
+	mfem::ParaViewDataCollection dc("solution", &mesh); 
+	dc.RegisterField("phi", &phi); 
+	dc.RegisterField("T", &T); 
+	dc.SetCycle(0); dc.SetTime(0.0); dc.SetTimeStep(time_step); 
+	dc.Save(); 
+	const int output_freq = driver["output_freq"].get_or(1); 
+	out << YAML::Key << "time integration" << YAML::BeginSeq; 
+	for (int cycle=1; cycle<=max_cycles; cycle++) {
+		phi0 = phi; 
+		Mpsi.Mult(psi0, psi0); 
+		add(source_vec, 1.0/time_step/constants::SpeedOfLight, psi0, psi0); 
+		int outer; 
+		double norm; 
+		double max_temp_norm = 0; 
+		mfem::Array<int> inners; 
+		inners.Reserve(max_iter); 
+		for (outer=1; outer<=max_iter; outer++) {
+			double temp_norm;
+			int it; 
+			// out << YAML::BeginSeq; 
+			for (it=1; it<=20; it++) {
+				// form residual 
+				meb_form.Mult(T, temp_resid); 
+				Mtot.AddMult(phi, temp_resid, -1.0); 
+				Mtemp.AddMult(T0, temp_resid, -1.0/time_step); 
+
+				// form and solve Jacobian 
+				NonlinearFormBlockInverse inv(meb_form, T);
+				inv.Mult(temp_resid, dT); 
+
+				// update temperature 
+				T -= dT; 
+				double mag = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, T, T)); 
+				temp_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)) / mag; 
+				// out << YAML::BeginMap; 
+				// 	out << YAML::Key << "it" << YAML::Value << it; 
+				// 	out << YAML::Key << "residual" << YAML::Value << temp_norm; 
+				// 	out << YAML::Key << "norm" << YAML::Value << mag; 
+				// out << YAML::EndMap; 
+				if (temp_norm < abs_tol/100) break; 
+			}
+			max_temp_norm = std::max(max_temp_norm, temp_norm); 
+			// out << YAML::EndSeq; 
+			inners.Append(it); 
+
+			for (int i=0; i<T.Size(); i++) {
+				if (T(i) < 0) T(i) = 1e-8; 
+			}
+
+			emission_form.Mult(T, em_source); 
+			D.MultTranspose(em_source, psi); 
+			psi += psi0; 
+			Linv.Mult(psi, psi); 
+			for (int i=0; i<psi.Size(); i++) {
+				if (psi(i) < 0) psi(i) = 1e-8; 
+			}
+
+			D.Mult(psi, phi); 
+
+			phi0 -= phi; 
+			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi0, phi0)); 
+			norm /= sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi, phi)); 
+			if (norm < abs_tol) break; 
+			phi0 = phi; 
+		}
+
+		// prepare for next time step 
+		time += time_step; 
+		psi0 = psi; 
+		T0 = T; 
+
+		// output progress 
+		out << YAML::BeginMap; 
+			out << YAML::Key << "cycle" << YAML::Value << cycle; 
+			out << YAML::Key << "time" << YAML::Value << time; 
+			out << YAML::Key << "mag" << YAML::Value << phi.Norml2(); 
+			out << YAML::Key << "it" << YAML::Value << outer; 
+			out << YAML::Key << "norm" << YAML::Value << norm;  
+			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "max" << YAML::Value << inners.Max(); 
+				out << YAML::Key << "min" << YAML::Value << inners.Min(); 
+				out << YAML::Key << "avg" << YAML::Value << (double)inners.Sum()/inners.Size(); 
+				out << YAML::Key << "total" << YAML::Value << inners.Sum(); 
+				out << YAML::Key << "max norm" << YAML::Value << max_temp_norm; 
+			out << YAML::EndMap; 
+		out << YAML::EndMap << YAML::Newline; 
+
+		bool done = time >= final_time - 1e-12; 
+
+		if (cycle % output_freq == 0 or done) {
+			dc.SetCycle(cycle); 
+			dc.SetTime(time); 
+			dc.SetTimeStep(time_step); 
+			dc.Save(); 			
+		}
+
+		if (done) break; 
+	}
+	out << YAML::EndSeq; 
+	// --- end yaml output --- 
+	out << YAML::EndMap << YAML::Newline; 
+}
