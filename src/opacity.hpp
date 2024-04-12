@@ -7,11 +7,33 @@ protected:
 	mfem::Coefficient *temperature = nullptr, *density = nullptr; 
 public:
 	OpacityCoefficient(int G) : mfem::VectorCoefficient(G) { } 
-	void SetTemperature(mfem::Coefficient &T) {
+	virtual void SetTemperature(mfem::Coefficient &T) {
 		temperature = &T; 
 	}
-	void SetDensity(mfem::Coefficient &rho) {
+	virtual void SetDensity(mfem::Coefficient &rho) {
 		density = &rho; 
+	}
+};
+
+class PWOpacityCoefficient : public OpacityCoefficient {
+private:
+	std::unordered_map<int,OpacityCoefficient*> map; 
+public:
+	PWOpacityCoefficient(const mfem::Array<int> &attrs, const mfem::Array<OpacityCoefficient*> &coefs); 
+	void SetTemperature(mfem::Coefficient &T) override; 
+	void SetDensity(mfem::Coefficient &rho) override; 
+
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
+};
+
+class ConstantOpacityCoefficient : public OpacityCoefficient {
+private:
+	mfem::Vector constants; 
+public:
+	ConstantOpacityCoefficient(const mfem::Vector &c) : constants(c), OpacityCoefficient(c.Size()) { }
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &T, const mfem::IntegrationPoint &ip)
+	{
+		v = constants; 
 	}
 };
 

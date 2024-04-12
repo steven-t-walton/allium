@@ -1,10 +1,11 @@
 #include "sweep.hpp"
 #include <deque>
 #include "config.hpp"
+#include "log.hpp"
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-	mfem::GridFunction &_total_data, int reflection_bdr_attr)
-	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total_data(_total_data)
+	mfem::GridFunction &_total_data, int reflection_bdr_attr, bool use_lumping)
+	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total_data(_total_data), lump(use_lumping)
 {
 	const auto dim = mesh.Dimension(); // dimension of mesh 
 	const auto Ne = mesh.GetNE(); // processor-local number of elements 
@@ -228,6 +229,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 {
 	assert(source.Size() == Width()); 
 	assert(psi.Size() == Height()); 
+	assert(mass_matrices[0]); 
 
 	const auto num_face_nbrs = mesh.GetNFaceNeighbors(); 
 	const auto dim = mesh.Dimension(); 
@@ -279,8 +281,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	auto message_count = 0; // incremented at each message, used as message tag 
 
 	// persistent storage of local system 
-	mfem::DenseMatrix grad, A; 
-	mfem::Vector rhs, psi2, nor(dim); 
+	mfem::DenseMatrix grad, A, lu; 
+	mfem::Vector rhs, psi2, psi_fixup, nor(dim), ones, fixup_weights; 
 
 	// --- do sweep --- 
 	// vertices traversed, only count owned elements 
@@ -378,8 +380,30 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 						elmat.AddMult(psi2, rhs, -dot); 
 					}
 				}
-				// solve, solution overwritten into rhs 
-				mfem::LinearSolve(A, rhs.GetData()); 
+				// solve, solution overwritten into rhs, matrix is modified 
+				lu = A; 
+				mfem::LinearSolve(lu, rhs.GetData()); 
+
+				if (zas_fixup) {
+					bool fixedup = false; 
+					psi_fixup = rhs; 
+					for (int i=0; i<rhs.Size(); i++) {
+						if (rhs(i) < 0) {
+							fixedup = true; 
+							rhs(i) = 0.0; 
+						}
+					}
+
+					if (fixedup) {
+						ones.SetSize(rhs.Size()); 
+						ones = 1.0; 
+						fixup_weights.SetSize(rhs.Size()); 
+						A.MultTranspose(ones, fixup_weights); 
+						double scaling = (fixup_weights * psi_fixup) / (fixup_weights * rhs); 
+						rhs *= scaling; 
+						EventLog["fixup applied"] += 1; 
+					}
+				}
 
 				// scatter back 
 				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = rhs(i); }
@@ -542,6 +566,7 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			mfem::MassIntegrator mi(total); 
 			mass_mat_view(g,e) = new mfem::DenseMatrix; 
 			mi.AssembleElementMatrix(fe, trans, *mass_mat_view(g,e)); 
+			if (lump) mass_mat_view(g,e)->Lump(); 
 		}
 
 		mfem::Vector Omega(dim); 
@@ -583,6 +608,12 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			elmat.GetSubMatrix(0,dof1,dof1,dof1+dof2, *face_mat_view(f,0,1)); 
 			elmat.GetSubMatrix(dof1,dof1+dof2,0,dof1, *face_mat_view(f,1,0)); 
 			elmat.GetSubMatrix(dof1,dof1+dof2,dof1,dof1+dof2, *face_mat_view(f,1,1)); 			
+		}
+		if (lump) {
+			face_mat_view(f,0,0)->Lump(); 
+			if (face_trans->Elem2No >= 0) {
+				face_mat_view(f,1,1)->Lump(); 				
+			}
 		}
 	}
 }

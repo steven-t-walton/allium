@@ -58,14 +58,19 @@ private:
 	// at the expense of making downwind neighbors wait longer 
 	// to receive data 
 	int send_buffer_size = 8; 
+	// use zero and scale fixup inside sweep 
+	bool zas_fixup = false; 
+	// use lumping 
+	bool lump = true; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-		mfem::GridFunction &_total_data, int reflection_bdr_attr=-1); 
+		mfem::GridFunction &_total_data, int reflection_bdr_attr=-1, bool lump=false); 
 	~InverseAdvectionOperator(); 
 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
 	void AssembleLocalMatrices(); 
 	void SetSendBufferSize(int s); 
+	void UseFixup(bool use=true) { zas_fixup = use; }
 	void WriteGraphToDot(std::string prefix) const; 
 };
 
