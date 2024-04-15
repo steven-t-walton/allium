@@ -61,7 +61,8 @@ private:
 	// use zero and scale fixup inside sweep 
 	bool zas_fixup = false; 
 	// use lumping 
-	bool lump = true; 
+	bool lump = false; 
+	const double psi_min = 1e-8; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 		mfem::GridFunction &_total_data, int reflection_bdr_attr=-1, bool lump=false); 

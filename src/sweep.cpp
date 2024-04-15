@@ -390,7 +390,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					for (int i=0; i<rhs.Size(); i++) {
 						if (rhs(i) < 0) {
 							fixedup = true; 
-							rhs(i) = 0.0; 
+							rhs(i) = psi_min; 
 						}
 					}
 
