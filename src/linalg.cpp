@@ -134,3 +134,23 @@ void FixedPointIterationSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 	final_iter = i; 
 	final_norm = norm; 
 }
+
+void BlockLDUInverseOperator::Mult(const mfem::Vector &b, mfem::Vector &x) const 
+{
+	mfem::BlockVector block_b(const_cast<mfem::Vector&>(b), offsets); 
+	mfem::BlockVector block_x(x, offsets); 
+	tmp.Update(offsets); 
+
+	// backward solve U 
+	Dinv.Mult(block_b.GetBlock(1), tmp.GetBlock(1)); // D^{-1} b_2 -> tmp_2 
+	B.Mult(tmp.GetBlock(1), tmp.GetBlock(0)); // B D^{-1} b_2 -> tmp_1 
+	add(block_b.GetBlock(0), -1.0, tmp.GetBlock(0), tmp.GetBlock(0)); // b_1 - B D^{-1} b_2 -> tmp_1 
+
+	// diagonal solve 
+	Sinv.Mult(tmp.GetBlock(0), block_x.GetBlock(0)); 
+
+	// forward solve L 
+	C.Mult(block_x.GetBlock(0), block_x.GetBlock(1)); // C x_1 -> x_2 
+	add(block_b.GetBlock(1), -1.0, block_x.GetBlock(1), tmp.GetBlock(1)); // b_2 - C x_1 -> tmp_2 
+	Dinv.Mult(tmp.GetBlock(1), block_x.GetBlock(1)); // D^{-1} (b_2 - C x_1) 
+}

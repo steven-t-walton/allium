@@ -131,3 +131,34 @@ public:
 		z.SetSize(width); 
 	}
 };
+
+
+// [A, B] = [I  B D^{-1}] [ S 0 ] [I        0 ]
+// [C, D]   [0      I   ] [ 0 D ] [D^{-1} C I ]
+//        = [I  B D^{-1}] [S 0]
+//          [0      I   ] [C D]
+//        = [S + B D^{-1} C  B ]
+//          [     C          D ]
+//        = [A B] 
+//          [C D]
+// S = A - B D^{-1} C 
+class BlockLDUInverseOperator : public mfem::Operator
+{
+private:
+	const mfem::Operator &Sinv, &Dinv, &B, &C; 
+	mfem::Array<int> offsets; 
+	mutable mfem::BlockVector tmp; 
+public:
+	BlockLDUInverseOperator(const mfem::Operator &sinv, const mfem::Operator &dinv, 
+		const mfem::Operator &b, const mfem::Operator &c)
+		: Sinv(sinv), Dinv(dinv), B(b), C(c)
+	{
+		offsets.SetSize(3); 
+		offsets[0] = 0; 
+		offsets[1] = Sinv.Height(); 
+		offsets[2] = Dinv.Height(); 
+		offsets.PartialSum(); 
+		height = width = offsets.Last(); 
+	}
+	void Mult(const mfem::Vector &b, mfem::Vector &x) const; 
+};
