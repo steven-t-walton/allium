@@ -52,6 +52,7 @@ public:
 		assert(density); 
 		v.SetSize(1); 
 		v(0) = coef * pow(density->Eval(T, ip), nrho) * pow(temperature->Eval(T, ip), nT);  
+		if (v(0) < 0) MFEM_ABORT("negative opacity"); 
 	}
 };
 
