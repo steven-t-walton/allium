@@ -101,14 +101,15 @@ class EnergyBalanceNonlinearFormIntegrator : public mfem::NonlinearFormIntegrato
 {
 private:
 	mfem::Coefficient &alpha, &sigma; 
+	int sigma_fe_order; 
 	mfem::Vector B, dB, shape; 
 	mfem::IntegrationRules *rules = nullptr; 
 public:
-	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &a, mfem::Coefficient &s) 
-		: alpha(a), sigma(s)
+	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &a, mfem::Coefficient &s, int sorder) 
+		: alpha(a), sigma(s), sigma_fe_order(sorder)
 	{ }
-	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &a, mfem::Coefficient &s, int btype)
-		: alpha(a), sigma(s)
+	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &a, mfem::Coefficient &s, int sorder, int btype)
+		: alpha(a), sigma(s), sigma_fe_order(sorder)
 	{
 		int type; 
 		if (btype == mfem::BasisType::GaussLegendre) 
@@ -133,7 +134,7 @@ public:
 		if (rules) { // lump with nodal quadrature 
 			ir = &rules->Get(el.GetGeomType(), el.GetOrder()); 
 		} else {
-			ir = &mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder()); 
+			ir = &mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder() + sigma_fe_order); 
 		}
 
 		elvec.SetSize(dof); 
@@ -163,7 +164,7 @@ public:
 		if (rules) { // lump with nodal quadrature 
 			ir = &rules->Get(el.GetGeomType(), el.GetOrder()); 
 		} else {
-			ir = &mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder()); 
+			ir = &mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder() + sigma_fe_order); 
 		}
 
 		shape.SetSize(dof); 
@@ -333,6 +334,7 @@ int main(int argc, char *argv[]) {
 	mfem::Vector cv_list(nattr), density_list(nattr); 
 	// must store the lua object so data doesn't go out of scope 
 	// for the source coefficients 
+	bool temp_dependent_opacity = false; 
 	std::vector<sol::object> lua_source_objs(nattr); 
 	mfem::Array<OpacityCoefficient*> total_list(nattr); 
 	mfem::Array<PhaseSpaceCoefficient*> source_list(nattr); 
@@ -355,6 +357,7 @@ int main(int argc, char *argv[]) {
 			int nrho = total["nrho"]; 
 			int nT = total["nT"]; 
 			total_list[i] = new AnalyticGrayOpacityCoefficient(coef, nrho, nT); 
+			temp_dependent_opacity = true; 
 		}
 		cv_list(i) = data["heat_capacity"]; 
 		density_list(i) = data["density"].get_or(1.0); 
@@ -599,12 +602,14 @@ int main(int argc, char *argv[]) {
 		basis_type = mfem::BasisType::Positive; 
 	}
 	mfem::L2_FECollection fec(fe_order, dim, basis_type); 
+	mfem::L2_FECollection fec0(0, dim); 
 	mfem::ParFiniteElementSpace fes(&mesh, &fec); // scalar finite element space 
+	mfem::ParFiniteElementSpace fes0(&mesh, &fec0); 
 	mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); // vector finite element space, dim copies of fes 
 	fes.ExchangeFaceNbrData(); // create parallel degree of freedom maps used in sweep 
 
 	// piecewise constant used for plotting and storing cross section data 
-	mfem::L2_FECollection sigma_fec(sigma_fe_order, dim, mfem::BasisType::GaussLegendre); 
+	mfem::L2_FECollection sigma_fec(sigma_fe_order, dim, mfem::BasisType::Positive); 
 	mfem::ParFiniteElementSpace sigma_fes(&mesh, &sigma_fec); 
 
 	// --- create coefficients for input material data ---
@@ -692,6 +697,7 @@ int main(int argc, char *argv[]) {
 
 	auto &psi = x.GetBlock(0); auto &psi0 = x0.GetBlock(0); 
 	mfem::ParGridFunction T(&fes, x.GetBlock(1), 0); 
+	mfem::ParGridFunction Tpw(&fes0); 
 	mfem::ParGridFunction T0(&fes, x0.GetBlock(1), 0); 
 
 	// project initial condition 
@@ -702,6 +708,7 @@ int main(int argc, char *argv[]) {
 	mfem::FunctionCoefficient ic_coef(ic_func);
 	T0.ProjectCoefficient(ic_coef);  
 	T = T0; 
+	Tpw.ProjectGridFunction(T); 
 
 	mfem::GridFunctionCoefficient Tcoef(&T); 
 	total_coef.SetTemperature(Tcoef); 
@@ -709,18 +716,11 @@ int main(int argc, char *argv[]) {
 	total_gf.ProjectCoefficient(total_coef); 
 	mfem::GridFunctionCoefficient total(&total_gf); 
 
-	mfem::BilinearForm Mtot(&fes); 
-	if (lump) 
-		Mtot.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(total))); 
-	else
-		Mtot.AddDomainIntegrator(new mfem::MassIntegrator(total)); 
-	Mtot.Assemble(); 
-	Mtot.Finalize(); 
-
 	mfem::ParGridFunction phi(&fes), phi0(&fes); 
 	for (int i=0; i<fes.GetVSize(); i++) {
 		phi(i) = constants::StefanBoltzmann * pow(T0(i), 4);
 	}
+	phi0 = phi; 
 
 	mfem::Vector resid(phi_size), em_source(phi_size), em_source0(phi_size), temp_resid(phi_size), dT(phi_size); 
 
@@ -732,8 +732,9 @@ int main(int argc, char *argv[]) {
 
 	// build sweep operator 
 	// total_gf += 1.0/time_step; // <-- hack, needs better design 
-	mfem::ParGridFunction total_gf_dt(total_gf); 
-	total_gf_dt += 1.0/time_step/constants::SpeedOfLight; 
+	mfem::SumCoefficient total_dt_coef(1.0/time_step/constants::SpeedOfLight, total); 
+	mfem::ParGridFunction total_gf_dt(&sigma_fes); 
+	total_gf_dt.ProjectCoefficient(total_dt_coef); 
 	InverseAdvectionOperator Linv(fes, *quad, total_gf_dt, reflection_bdr_attr, lump); 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
@@ -750,53 +751,63 @@ int main(int argc, char *argv[]) {
 
 	DiscreteToMoment D(*quad, psi_ext, phi_ext); 
 	D.MultTranspose(phi, psi0);
-	psi = 0.0; 
+	psi = psi0; 
 
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	mfem::NonlinearForm meb_form(&fes);
 	if (lump) 
-		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(Cvdt, total, basis_type)); 
+		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(Cvdt, total, sigma_fe_order, basis_type)); 
 	else
-		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(Cvdt, total)); 
+		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(Cvdt, total, sigma_fe_order)); 
 
 	mfem::ConstantCoefficient zero(0.0); 
 	mfem::NonlinearForm emission_form(&fes); 
 	if (lump) 
-		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(zero, total, basis_type)); 
+		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(zero, total, sigma_fe_order, basis_type)); 
 	else
-		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(zero, total)); 
+		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(zero, total, sigma_fe_order)); 
 
-	mfem::SumCoefficient total_dt(1.0/time_step/constants::SpeedOfLight, total); 
-	mfem::Vector nor(dim); nor = 0.0; nor(0) = 1.0; 
-	double alpha = ComputeAlpha(*quad, nor); 
-	BlockLDGDiffusionDiscretization block_ldg(fes, vfes, total_dt, total_dt, alpha, nor, false, reflection_bdr_attr, 
-		FULL_RANGE); 
-	const auto &S = block_ldg.SchurComplement(); 
-	mfem::CGSolver cgsolver(MPI_COMM_WORLD); 
-	cgsolver.SetRelTol(1e-10); 
-	mfem::HypreBoomerAMG amg(S);
-	amg.SetPrintLevel(0); 
-	cgsolver.SetPreconditioner(amg); 
-	cgsolver.SetOperator(S); 
-	cgsolver.SetMaxIter(100); 
+	// mfem::Vector nor(dim); nor = 0.0; nor(0) = 1.0; 
+	// double alpha = ComputeAlpha(*quad, nor); 
+	// BlockLDGDiffusionDiscretization block_ldg(fes, vfes, total_dt, total_dt, alpha, nor, false, reflection_bdr_attr, 
+	// 	FULL_RANGE); 
+	// const auto &S = block_ldg.SchurComplement(); 
+	// mfem::CGSolver cgsolver(MPI_COMM_WORLD); 
+	// cgsolver.SetRelTol(1e-10); 
+	// mfem::HypreBoomerAMG amg(S);
+	// amg.SetPrintLevel(0); 
+	// cgsolver.SetPreconditioner(amg); 
+	// cgsolver.SetOperator(S); 
+	// cgsolver.SetMaxIter(100); 
 
 	sol::table output = lua["output"]; 
-	const int output_freq = output["frequency"].get_or(1); 
+	const int output_freq = output["frequency"].get_or(std::numeric_limits<int>::max()); 
 	mfem::ParaViewDataCollection dc(output["paraview"], &mesh); 
 	dc.RegisterField("phi", &phi); 
 	dc.RegisterField("T", &T); 
+	dc.RegisterField("Tpw", &Tpw); 
+	dc.RegisterField("sigma", &total_gf); 
 	dc.SetCycle(0); dc.SetTime(0.0); dc.SetTimeStep(time_step); 
 	dc.Save(); 
 
+	mfem::BilinearForm Mtot(&fes); 
+	if (lump) 
+		Mtot.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(total))); 
+	else
+		Mtot.AddDomainIntegrator(new mfem::MassIntegrator(total)); 
+	Mtot.Assemble(); 
+	Mtot.Finalize(); 
+
 	mfem::StopWatch cycle_timer; 
 	double time = 0.0; 
-	const double under_relax = 0.1; 
+	const double under_relax = 0.05; 
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
 	for (int cycle=1; cycle<=max_cycles; cycle++) {
 		cycle_timer.Restart(); 
 		phi0 = phi; 
 		Mpsi.Mult(psi0, psi0); 
 		add(source_vec, 1.0/time_step/constants::SpeedOfLight, psi0, psi0); 
+
 		int outer; 
 		double norm; 
 		double max_temp_norm = 0; 
@@ -812,13 +823,14 @@ int main(int argc, char *argv[]) {
 				Mtemp.AddMult(T0, temp_resid, -1.0/time_step); 
 
 				// form and solve Jacobian 
-				NonlinearFormBlockInverse inv(meb_form, T, lump);
+				NonlinearFormBlockInverse inv(meb_form, T);
 				inv.Mult(temp_resid, dT); 
 
 				// update temperature 
 				for (int i=0; i<T.Size(); i++) {
 					double Tnew = T(i) - dT(i); 
 					if (Tnew < 0) {
+						EventLog["under relax"] += 1; 
 						T(i) = (1 - under_relax) * T(i) - under_relax * dT(i); 
 					} else {
 						T(i) = Tnew; 
@@ -846,6 +858,16 @@ int main(int argc, char *argv[]) {
 			phi0 = phi; 
 		}
 
+		// update opacity and opacity-dependent terms 
+		if (temp_dependent_opacity) {
+			total_gf.ProjectCoefficient(total_coef); 
+			total_gf_dt.ProjectCoefficient(total_dt_coef); 
+			Linv.AssembleLocalMatrices(); 
+			delete Mtot.LoseMat();
+			Mtot.Assemble(); 
+			Mtot.Finalize(); 			
+		}
+
 		// prepare for next time step 
 		time += time_step; 
 		psi0 = psi; 
@@ -854,6 +876,7 @@ int main(int argc, char *argv[]) {
 		bool done = time >= final_time - 1e-12; 
 
 		if (cycle % output_freq == 0 or done) {
+			Tpw.ProjectGridFunction(T); 
 			dc.SetCycle(cycle); 
 			dc.SetTime(time); 
 			dc.SetTimeStep(time_step); 
@@ -892,6 +915,14 @@ int main(int argc, char *argv[]) {
 		if (done) break; 
 	}
 	out << YAML::EndSeq; 
+
+	// --- clean up hanging pointers --- 
+	delete outer_solver; 
+	delete quad;
+	for (int i=0; i<nattr; i++) { delete total_list[i]; } 
+	for (int i=0; i<nattr; i++) { delete source_list[i]; }
+	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
+
 	// --- end yaml output --- 
 	out << YAML::EndMap << YAML::Newline; 
 }
