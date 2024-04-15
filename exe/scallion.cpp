@@ -8,236 +8,10 @@
 #include "transport_op.hpp"
 #include "constants.hpp"
 #include "opacity.hpp"
+#include "trt_op.hpp"
+#include "trt_integrators.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
-
-class SNTimeMassMatrix : public mfem::Operator
-{
-private:
-	const mfem::FiniteElementSpace &fes; 
-	const TransportVectorExtents &psi_ext; 
-	mfem::Array<mfem::DenseMatrix*> mats; 
-public:
-	SNTimeMassMatrix(const mfem::FiniteElementSpace &fes, const TransportVectorExtents &ext, bool lump=false)
-		: fes(fes), psi_ext(ext) 
-	{
-		mats.SetSize(fes.GetNE()); 
-		mfem::Array<int> dofs; 
-		mfem::MassIntegrator mi; 
-		for (int e=0; e<fes.GetNE(); e++) {
-			fes.GetElementDofs(e, dofs); 
-			mats[e] = new mfem::DenseMatrix(dofs.Size()); 
-			if (lump)
-				mats[e]->Lump(); 
-			mi.AssembleElementMatrix(*fes.GetFE(e), *fes.GetElementTransformation(e), *mats[e]); 
-		}
-	}
-	~SNTimeMassMatrix() {
-		for (auto *ptr : mats) { delete ptr; }
-	}
-
-	void Mult(const mfem::Vector &psi, mfem::Vector &Mpsi) const {
-		auto psi_view = ConstTransportVectorView(psi.GetData(), psi_ext); 
-		auto Mpsi_view = TransportVectorView(Mpsi.GetData(), psi_ext); 
-		mfem::Array<int> dofs; 
-		mfem::Vector psi_local, Mpsi_local; 
-		for (int g=0; g<psi_ext.extent(0); g++) {
-			for (int a=0; a<psi_ext.extent(1); a++) {
-				for (int e=0; e<fes.GetNE(); e++) {
-					fes.GetElementDofs(e, dofs); 
-					const auto &elmat = *mats[e]; 
-					psi_local.SetSize(dofs.Size()); 
-					Mpsi_local.SetSize(dofs.Size()); 					
-					for (int n=0; n<dofs.Size(); n++) psi_local(n) = psi_view(g,a,dofs[n]); 
-					elmat.Mult(psi_local, Mpsi_local); 
-					for (int n=0; n<dofs.Size(); n++) Mpsi_view(g,a,dofs[n]) = Mpsi_local(n); 
-				}
-			}
-		}
-	}
-};
-
-class BlackBodyEmissionCoefficient : public mfem::Coefficient
-{
-private:
-	mfem::Coefficient &sigma; 
-	const mfem::FiniteElement &fe; 
-	const mfem::Vector &temperature; 
-	mfem::Vector shape; 
-public:
-	BlackBodyEmissionCoefficient(mfem::Coefficient &s, const mfem::FiniteElement &el, 
-		const mfem::Vector &temp)
-		: sigma(s), fe(el), temperature(temp), shape(el.GetDof())
-	{ }
-	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
-	{
-		fe.CalcShape(ip, shape); 
-		double T = shape * temperature; 
-		return sigma.Eval(trans, ip) * constants::StefanBoltzmann * pow(T, 4); 
-	}
-};
-
-class GradBlackBodyEmissionCoefficient : public mfem::Coefficient
-{
-private:
-	mfem::Coefficient &sigma; 
-	const mfem::FiniteElement &fe; 
-	const mfem::Vector &temperature; 
-	mfem::Vector shape; 
-public:
-	GradBlackBodyEmissionCoefficient(mfem::Coefficient &s, const mfem::FiniteElement &el, 
-		const mfem::Vector &temp)
-		: sigma(s), fe(el), temperature(temp), shape(el.GetDof())
-	{ }
-	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
-	{
-		fe.CalcShape(ip, shape); 
-		double T = shape * temperature; 
-		return sigma.Eval(trans, ip) * constants::StefanBoltzmann * 4.0 * pow(T, 3); 
-	}	
-};
-
-class EnergyBalanceNonlinearFormIntegrator : public mfem::NonlinearFormIntegrator 
-{
-private:
-	mfem::Coefficient &alpha, &sigma; 
-	int sigma_fe_order; 
-	mfem::Vector B, dB, shape; 
-	mfem::IntegrationRules *rules = nullptr; 
-public:
-	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &a, mfem::Coefficient &s, int sorder) 
-		: alpha(a), sigma(s), sigma_fe_order(sorder)
-	{ }
-	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &a, mfem::Coefficient &s, int sorder, int btype)
-		: alpha(a), sigma(s), sigma_fe_order(sorder)
-	{
-		int type; 
-		if (btype == mfem::BasisType::GaussLegendre) 
-			type = mfem::Quadrature1D::GaussLegendre; 
-		else if (btype == mfem::BasisType::GaussLobatto) 
-			type = mfem::Quadrature1D::GaussLobatto; 
-		rules = new mfem::IntegrationRules(0, type); 
-	}
-	~EnergyBalanceNonlinearFormIntegrator() 
-	{
-		if (rules) delete rules; 
-	}
-	void AssembleElementVector(const mfem::FiniteElement &el, mfem::ElementTransformation &trans, 
-		const mfem::Vector &elfun, mfem::Vector &elvec) override 
-	{
-		const auto dof = el.GetDof(); 
-		// B.SetSize(dof); 
-		BlackBodyEmissionCoefficient planck_emission(sigma, el, elfun); 
-		// el.Project(planck_emission, trans, B); // evaluate emission at nodes 
-
-		const mfem::IntegrationRule *ir = IntRule; 
-		if (rules) { // lump with nodal quadrature 
-			ir = &rules->Get(el.GetGeomType(), el.GetOrder()); 
-		} else {
-			ir = &mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder() + sigma_fe_order); 
-		}
-
-		elvec.SetSize(dof); 
-		shape.SetSize(dof); 
-		elvec = 0.0; 
-
-		for (int n=0; n<ir->GetNPoints(); n++) {
-			const auto &ip = ir->IntPoint(n); 
-			trans.SetIntPoint(&ip); 
-			el.CalcShape(ip, shape); 
-			double T = elfun * shape; // interpolate T 
-			// double B_at_ip = shape * B; // interpolate (T^4) instead of evaluating T^4 
-			double B_at_ip = planck_emission.Eval(trans, ip); 
-			elvec.Add((alpha.Eval(trans, ip)*T + B_at_ip) * ip.weight * trans.Weight(), shape); 
-		}
-	}
-
-	void AssembleElementGrad(const mfem::FiniteElement &el, mfem::ElementTransformation &trans, 
-		const mfem::Vector &elfun, mfem::DenseMatrix &elmat) override 
-	{
-		const auto dof = el.GetDof(); 
-		// dB.SetSize(dof); 
-		GradBlackBodyEmissionCoefficient grad_plank_emission(sigma, el, elfun); 
-		// el.Project(grad_plank_emission, trans, dB); // evaluate Jacobian at nodes 
-
-		const mfem::IntegrationRule *ir = IntRule; 
-		if (rules) { // lump with nodal quadrature 
-			ir = &rules->Get(el.GetGeomType(), el.GetOrder()); 
-		} else {
-			ir = &mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder() + sigma_fe_order); 
-		}
-
-		shape.SetSize(dof); 
-		elmat.SetSize(dof); 
-		elmat = 0.0; 
-
-		for (int n=0; n<ir->GetNPoints(); n++) {
-			const auto &ip = ir->IntPoint(n); 
-			trans.SetIntPoint(&ip); 
-			el.CalcShape(ip, shape); 
-			// double dB_at_ip = shape * dB; // interpolate power instead of taking powers of interpolation 
-			double dB_at_ip = grad_plank_emission.Eval(trans, ip); 
-			AddMult_a_VVt(trans.Weight() * ip.weight * (alpha.Eval(trans,ip) + dB_at_ip), shape, elmat); 
-		}
-	}
-};
-
-class NonlinearFormBlockInverse : public mfem::Operator 
-{
-private:
-	const mfem::NonlinearForm &nform; 
-	const mfem::Vector &data; 
-	bool lump; 
-public:
-	NonlinearFormBlockInverse(const mfem::NonlinearForm &nf, const mfem::Vector &d, bool lump=false) 
-		: nform(nf), data(d), lump(lump)
-	{
-		height = width = nform.FESpace()->GetVSize(); 
-	}
-	// apply inverse of local gradient assembled using nonlinear data in data 
-	void Mult(const mfem::Vector &x, mfem::Vector &y) const override
-	{
-		const auto &dnfi = *nform.GetDNFI(); 
-		const auto &fnfi = nform.GetInteriorFaceIntegrators(); 
-		const auto &bfnfi = nform.GetBdrFaceIntegrators(); 
-		assert(fnfi.Size()==0 and bfnfi.Size()==0); 
-
-		auto *fes = nform.FESpace(); 
-		auto *mesh = fes->GetMesh(); 
-
-		mfem::Vector el_data, el_x; 
-		const mfem::FiniteElement *fe; 
-		mfem::ElementTransformation *T; 
-		mfem::DofTransformation *doftrans; 
-		mfem::DenseMatrix A, elmat; 
-		mfem::Array<int> vdofs; 
-		for (int i = 0; i < fes->GetNE(); i++)
-		{
-			fe = fes->GetFE(i);
-			doftrans = fes->GetElementVDofs(i, vdofs);
-			T = fes->GetElementTransformation(i);
-			data.GetSubVector(vdofs, el_data);
-			if (doftrans) {doftrans->InvTransformPrimal(el_data); }
-			A.SetSize(vdofs.Size()); 
-			A = 0.0; 
-			for (int k = 0; k < dnfi.Size(); k++)
-			{
-				dnfi[k]->AssembleElementGrad(*fe, *T, el_data, elmat);
-				if (doftrans) { doftrans->TransformDual(elmat); }
-				A += elmat; 
-			}
-			x.GetSubVector(vdofs, el_x);
-			if (lump) {
-				for (int r=0; r<A.Height(); r++) {
-					el_x(r) /= A(r,r); 
-				}
-			} else {
-				mfem::LinearSolve(A, el_x.GetData()); 				
-			}
-			y.SetSubVector(vdofs, el_x); 		
-		}
-	}
-};
 
 int main(int argc, char *argv[]) {
 	// initialize MPI 
@@ -755,17 +529,22 @@ int main(int argc, char *argv[]) {
 
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	mfem::NonlinearForm meb_form(&fes);
-	if (lump) 
-		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(Cvdt, total, sigma_fe_order, basis_type)); 
-	else
-		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(Cvdt, total, sigma_fe_order)); 
-
 	mfem::ConstantCoefficient zero(0.0); 
+	if (lump) {
+		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order, basis_type)); 
+		meb_form.AddDomainIntegrator(
+			new LinearCoefficientNFIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt)))); 
+	}
+	else {
+		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order)); 
+		meb_form.AddDomainIntegrator(new LinearCoefficientNFIntegrator(new mfem::MassIntegrator(Cvdt))); 
+	}
+
 	mfem::NonlinearForm emission_form(&fes); 
 	if (lump) 
-		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(zero, total, sigma_fe_order, basis_type)); 
+		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order, basis_type)); 
 	else
-		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(zero, total, sigma_fe_order)); 
+		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order)); 
 
 	// mfem::Vector nor(dim); nor = 0.0; nor(0) = 1.0; 
 	// double alpha = ComputeAlpha(*quad, nor); 
