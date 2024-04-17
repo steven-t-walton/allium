@@ -400,7 +400,9 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 						fixup_weights.SetSize(rhs.Size()); 
 						A.MultTranspose(ones, fixup_weights); 
 						double scaling = (fixup_weights * psi_fixup) / (fixup_weights * rhs); 
-						rhs *= scaling; 
+						if (scaling < 0) EventLog["fixup scaling negative"] += 1; 
+						else 
+							rhs *= scaling; 
 						EventLog["fixup applied"] += 1; 
 					}
 				}
