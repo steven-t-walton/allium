@@ -10,10 +10,20 @@
 #include "opacity.hpp"
 #include "trt_op.hpp"
 #include "trt_integrators.hpp"
+#include "mip.hpp"
+#include "fields.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
 
+class MockSolver : public mfem::Solver {
+public:
+	void SetOperator(const mfem::Operator &op) { }
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const { y = x; }
+};
+
 int main(int argc, char *argv[]) {
+	mfem::StopWatch wall_timer; 
+	wall_timer.Start(); 
 	// initialize MPI 
 	// automatically calls MPI_Finalize 
 	mfem::Mpi::Init(argc, argv); 
@@ -431,9 +441,10 @@ int main(int argc, char *argv[]) {
 
 	// implicit solver 
 	sol::table solver = driver["solver"]; 
+	sol::table newton_solver = driver["newton_solver"]; 
 	auto *outer_solver = io::CreateIterativeSolver(solver, MPI_COMM_WORLD);
-	const int max_iter = solver["max_iter"]; 
-	const double abs_tol = solver["abstol"]; 
+	const int max_iter = newton_solver["max_iter"]; 
+	const double abs_tol = newton_solver["abstol"]; 
 	const bool lump = driver["lump"].get_or(false); 
 	sol::optional<sol::table> sweep_opts_avail = driver["sweep_opts"]; 
 
@@ -454,25 +465,37 @@ int main(int argc, char *argv[]) {
 	out << YAML::EndMap; 
 
 	SNTimeMassMatrix Mpsi(fes, psi_ext); 
-	mfem::BilinearForm Mtemp(&fes); 
+	mfem::BilinearForm Mcv(&fes); 
 	if (lump)
-		Mtemp.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(heat_capacity))); 
+		Mcv.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(heat_capacity))); 
 	else
-		Mtemp.AddDomainIntegrator(new mfem::MassIntegrator(heat_capacity)); 
-	Mtemp.Assemble(); 
-	Mtemp.Finalize(); 
+		Mcv.AddDomainIntegrator(new mfem::MassIntegrator(heat_capacity)); 
+	Mcv.Assemble(); 
+	Mcv.Finalize(); 
 
-	mfem::Array<int> offsets(3); 
+	enum SolutionIndex {
+		PHI = 0, 
+		PSI = 1, 
+		TEMP = 2
+	};
+	mfem::Array<int> offsets(4); 
 	offsets[0] = 0; 
-	offsets[1] = psi_size; 
-	offsets[2] = fes.GetVSize(); 
+	offsets[1] = phi_size; 
+	offsets[2] = psi_size; 
+	offsets[3] = fes.GetVSize(); 
 	offsets.PartialSum(); 
 	mfem::BlockVector x(offsets), x0(offsets); 
+	mfem::Vector psi(x.GetBlock(SolutionIndex::PSI), 0, psi_size); 
+	mfem::Vector psi0(x0.GetBlock(SolutionIndex::PSI), 0, psi_size); 
+	mfem::ParGridFunction phi(&fes, x.GetBlock(SolutionIndex::PHI), 0); 
+	mfem::ParGridFunction phi0(&fes, x0.GetBlock(SolutionIndex::PHI), 0); 
+	mfem::ParGridFunction T(&fes, x.GetBlock(SolutionIndex::TEMP), 0); 
+	mfem::ParGridFunction T0(&fes, x0.GetBlock(SolutionIndex::TEMP), 0); 
 
-	auto &psi = x.GetBlock(0); auto &psi0 = x0.GetBlock(0); 
-	mfem::ParGridFunction T(&fes, x.GetBlock(1), 0); 
 	mfem::ParGridFunction Tpw(&fes0); 
-	mfem::ParGridFunction T0(&fes, x0.GetBlock(1), 0); 
+
+	// working vectors 
+	mfem::Vector temp_resid(fes.GetVSize()), em_source(fes.GetVSize()), phi_source(fes.GetVSize()), dT(fes.GetVSize()); 
 
 	// project initial condition 
 	sol::function ic_lua = lua["initial_condition"]; 
@@ -480,8 +503,8 @@ int main(int argc, char *argv[]) {
 		return ic_lua(x(0), x(1), x(2)); 
 	};
 	mfem::FunctionCoefficient ic_coef(ic_func);
-	T0.ProjectCoefficient(ic_coef);  
-	T = T0; 
+	T.ProjectCoefficient(ic_coef);  
+	T0 = T; 
 	Tpw.ProjectGridFunction(T); 
 
 	mfem::GridFunctionCoefficient Tcoef(&T); 
@@ -490,17 +513,12 @@ int main(int argc, char *argv[]) {
 	total_gf.ProjectCoefficient(total_coef); 
 	mfem::GridFunctionCoefficient total(&total_gf); 
 
-	mfem::ParGridFunction phi(&fes), phi0(&fes); 
 	for (int i=0; i<fes.GetVSize(); i++) {
-		phi(i) = constants::StefanBoltzmann * pow(T0(i), 4);
+		phi(i) = constants::StefanBoltzmann * pow(T(i), 4);
 	}
-	phi0 = phi; 
-
-	mfem::Vector resid(phi_size), em_source(phi_size), em_source0(phi_size), temp_resid(phi_size), dT(phi_size); 
 
 	// form fixed source term 
 	mfem::Vector source_vec(psi_size); 
-	source_vec = 0.0; 
 	TransportVectorView source_vec_view(source_vec.GetData(), psi_ext); 
 	FormTransportSource(fes, *quad, energy_grid, source, inflow, source_vec_view); 
 
@@ -510,6 +528,7 @@ int main(int argc, char *argv[]) {
 	mfem::ParGridFunction total_gf_dt(&sigma_fes); 
 	total_gf_dt.ProjectCoefficient(total_dt_coef); 
 	InverseAdvectionOperator Linv(fes, *quad, total_gf_dt, reflection_bdr_attr, lump); 
+	bool use_fixup = false; 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -518,10 +537,9 @@ int main(int argc, char *argv[]) {
 		sol::optional<int> send_buffer_size = sweep_opts["send_buffer_size"]; 
 		if (send_buffer_size) 
 			Linv.SetSendBufferSize(send_buffer_size.value()); 
-		sol::optional<bool> use_fixup = sweep_opts["use_fixup"]; 
-		if (use_fixup) 
-			Linv.UseFixup(use_fixup.value()); 
+		use_fixup = sweep_opts["use_fixup"].get_or(false); 
 	}
+	Linv.UseFixup(use_fixup); 
 
 	DiscreteToMoment D(*quad, psi_ext, phi_ext); 
 	D.MultTranspose(phi, psi0);
@@ -529,35 +547,21 @@ int main(int argc, char *argv[]) {
 
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	mfem::NonlinearForm meb_form(&fes);
-	mfem::ConstantCoefficient zero(0.0); 
 	if (lump) {
-		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order, basis_type)); 
+		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, basis_type)); 
 		meb_form.AddDomainIntegrator(
 			new LinearCoefficientNFIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt)))); 
 	}
 	else {
-		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order)); 
+		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order, 2, 2)); 
 		meb_form.AddDomainIntegrator(new LinearCoefficientNFIntegrator(new mfem::MassIntegrator(Cvdt))); 
 	}
 
 	mfem::NonlinearForm emission_form(&fes); 
 	if (lump) 
-		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order, basis_type)); 
+		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, basis_type)); 
 	else
-		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order)); 
-
-	// mfem::Vector nor(dim); nor = 0.0; nor(0) = 1.0; 
-	// double alpha = ComputeAlpha(*quad, nor); 
-	// BlockLDGDiffusionDiscretization block_ldg(fes, vfes, total_dt, total_dt, alpha, nor, false, reflection_bdr_attr, 
-	// 	FULL_RANGE); 
-	// const auto &S = block_ldg.SchurComplement(); 
-	// mfem::CGSolver cgsolver(MPI_COMM_WORLD); 
-	// cgsolver.SetRelTol(1e-10); 
-	// mfem::HypreBoomerAMG amg(S);
-	// amg.SetPrintLevel(0); 
-	// cgsolver.SetPreconditioner(amg); 
-	// cgsolver.SetOperator(S); 
-	// cgsolver.SetMaxIter(100); 
+		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order, 2, 2)); 
 
 	sol::table output = lua["output"]; 
 	const int output_freq = output["frequency"].get_or(std::numeric_limits<int>::max()); 
@@ -577,64 +581,173 @@ int main(int argc, char *argv[]) {
 	Mtot.Assemble(); 
 	Mtot.Finalize(); 
 
+	mfem::Vector nor(dim); 
+	nor = 0.0; nor(0) = 1.0; 
+	const double alpha = ComputeAlpha(*quad, nor); 
+
 	mfem::StopWatch cycle_timer; 
 	double time = 0.0; 
 	const double under_relax = 0.05; 
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
-	for (int cycle=1; cycle<=max_cycles; cycle++) {
+	std::map<std::string,int> log; 
+	int cycle = 0; 
+	while (true) {
 		cycle_timer.Restart(); 
-		phi0 = phi; 
-		Mpsi.Mult(psi0, psi0); 
-		add(source_vec, 1.0/time_step/constants::SpeedOfLight, psi0, psi0); 
+		Mpsi.Mult(psi0, psi0); // operator designed to work in-place 
+		add(source_vec, 1.0/time_step/constants::SpeedOfLight, psi0, psi0); // source_vec + 1/c/dt psi0 -> psi0
+		Mcv.Mult(T, T0); // assume T = T0 to get Mcv T0 -> T0 
+		T0 *= 1.0/time_step; 
 
-		int outer; 
+		int outer = 0; 
 		double norm; 
-		double max_temp_norm = 0; 
+		double max_inner_norm = 0; 
 		mfem::Array<int> inners; 
 		inners.Reserve(max_iter); 
-		for (outer=1; outer<=max_iter; outer++) {
-			double temp_norm;
-			int it; 
-			for (it=1; it<=20; it++) {
-				// form residual 
-				meb_form.Mult(T, temp_resid); 
-				Mtot.AddMult(phi, temp_resid, -1.0); 
-				Mtemp.AddMult(T0, temp_resid, -1.0/time_step); 
+		// for (outer=1; outer<=max_iter; outer++) {
+		// 	double temp_norm;
+		// 	int it; 
+		// 	for (it=1; it<=20; it++) {
+		// 		// form residual 
+		// 		meb_form.Mult(T, temp_resid); 
+		// 		Mtot.AddMult(phi, temp_resid, -1.0); 
+		// 		Mcv.AddMult(T0, temp_resid, -1.0/time_step); 
 
-				// form and solve Jacobian 
-				NonlinearFormBlockInverse inv(meb_form, T);
-				inv.Mult(temp_resid, dT); 
+		// 		// form and solve Jacobian 
+		// 		NonlinearFormBlockInverse inv(meb_form, T);
+		// 		inv.Mult(temp_resid, dT); 
 
-				// update temperature 
+		// 		// update temperature 
+		// 		for (int i=0; i<T.Size(); i++) {
+		// 			double Tnew = T(i) - dT(i); 
+		// 			if (Tnew < 0) {
+		// 				EventLog["under relax"] += 1; 
+		// 				T(i) = (1 - under_relax) * T(i) - under_relax * dT(i); 
+		// 			} else {
+		// 				T(i) = Tnew; 
+		// 			}
+		// 			if (T(i) < 0) MFEM_ABORT("negativity"); 
+		// 		}
+		// 		// T -= dT; 
+		// 		double mag = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, T, T)); 
+		// 		temp_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)) / mag; 
+		// 		if (temp_norm < abs_tol/100) break; 
+		// 	}
+		// 	max_temp_norm = std::max(max_temp_norm, temp_norm); 
+		// 	inners.Append(it); 
+
+		// 	emission_form.Mult(T, em_source); 
+		// 	D.MultTranspose(em_source, psi); 
+		// 	psi += psi0; 
+		// 	Linv.Mult(psi, psi); 
+		// 	D.Mult(psi, phi); 
+
+		// 	phi0 -= phi; 
+		// 	norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi0, phi0)); 
+		// 	norm /= sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi, phi)); 
+		// 	if (norm < abs_tol) break; 
+		// 	phi0 = phi; 
+		// }
+
+		// mfem::ParBilinearForm Kform(&fes); 
+		// mfem::RatioCoefficient diffco(1.0/3, total); 
+		// mfem::ConstantCoefficient alpha_c(alpha/2);
+		// double kappa = pow(fe_order+1,2)*4; 
+		// Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
+		// Kform.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(total))); 
+		// Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2, lump)); 
+		// Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+		// Kform.Assemble(); 
+		// Kform.Finalize(); 
+		// auto dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform.ParallelAssemble());
+
+		// mfem::CGSolver cgsolver(MPI_COMM_WORLD); 
+		// cgsolver.SetRelTol(1e-10); 
+		// mfem::HypreBoomerAMG amg(*dsa_mat);
+		// amg.SetPrintLevel(0); 
+		// cgsolver.SetOperator(*dsa_mat); 
+		// cgsolver.SetPreconditioner(amg); 
+		// cgsolver.SetMaxIter(100); 
+
+		Linv.UseFixup(false); 
+		while (true) {
+			// --- form RHS --- 
+			meb_form.Mult(T, temp_resid); 
+			add(T0, -1.0, temp_resid, temp_resid); // T0 - temp_resid -> temp_resid 
+
+			// invert (cv/dt + 4a sigma T^3)
+			NonlinearFormBlockInverse dplanck_dt_inv(meb_form, T); 
+			// ( 4a sigma T^3 u, v)
+			const auto &dplanck = emission_form.GetGradient(T); 
+			mfem::ProductOperator linearized_elim(&dplanck, &dplanck_dt_inv, false, false); 
+
+			// form transport residual 
+			emission_form.Mult(T, em_source); 
+			// eliminate down to phi
+			linearized_elim.Mult(temp_resid, phi_source);
+			em_source += phi_source; 
+			D.MultTranspose(em_source, psi); 
+			psi += psi0; 
+			Linv.Mult(psi, psi);
+			D.Mult(psi, phi_source); 
+
+			// apply I - D Linv dB (dBt)^{-1} Msigma 
+			mfem::TripleProductOperator Ms_form(&dplanck, &dplanck_dt_inv, &Mtot, false, false, false); 
+			TransportOperator transport_op(D, Linv, Ms_form, psi); 
+			// MockSolver mock_solver; 
+			// outer_solver->SetPreconditioner(mock_solver); 
+			outer_solver->SetOperator(transport_op); 
+			// outer_solver->SetPreconditioner(cgsolver); 
+			outer_solver->Mult(phi_source, phi); 
+			inners.Append(outer_solver->GetNumIterations()); 
+			max_inner_norm = std::max(max_inner_norm, outer_solver->GetFinalNorm()); 
+			if (!outer_solver->GetConverged()) log["schur solve failed"] += 1; 
+
+			// solve for temperature update 
+			Mtot.Mult(phi, phi_source); 
+			phi_source += temp_resid; 
+			dplanck_dt_inv.Mult(phi_source, dT); 
+
+			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
+			bool done = norm < abs_tol or outer == max_iter; 
+			if (done) {
+				Linv.UseFixup(use_fixup); 
+				// sweep to recover psi 
+				Ms_form.Mult(phi, phi_source); 
+				em_source += phi_source;
+				D.MultTranspose(em_source, psi); 
+				psi += psi0; 
+				Linv.Mult(psi, psi); 
+				D.Mult(psi, phi); 
+				if (phi.Min() < 0) MFEM_ABORT("negative energy density"); 
+
+				// re-evaulate temperature given positive phi 
+				Mtot.Mult(phi, phi_source); 
+				temp_resid += phi_source;
+				dplanck_dt_inv.Mult(temp_resid, dT); 
 				for (int i=0; i<T.Size(); i++) {
-					double Tnew = T(i) - dT(i); 
+					double Tnew = T(i) + dT(i); 
 					if (Tnew < 0) {
 						EventLog["under relax"] += 1; 
-						T(i) = (1 - under_relax) * T(i) - under_relax * dT(i); 
+						T(i) = (1.0 - under_relax) * T(i) + under_relax*dT(i); 
+						// T(i) = T(i) + dT(i)*under_relax; 
 					} else {
 						T(i) = Tnew; 
 					}
-					if (T(i) < 0) MFEM_ABORT("negativity"); 
 				}
-				// T -= dT; 
-				double mag = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, T, T)); 
-				temp_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)) / mag; 
-				if (temp_norm < abs_tol/100) break; 
+				break;
+			} else {
+				for (int i=0; i<T.Size(); i++) {
+					double Tnew = T(i) + dT(i); 
+					if (Tnew < 0) {
+						EventLog["under relax"] += 1; 
+						T(i) = (1.0 - under_relax) * T(i) + under_relax*dT(i); 
+						// T(i) = T(i) + dT(i)*under_relax; 
+					} else {
+						T(i) = Tnew; 
+					}
+				}
 			}
-			max_temp_norm = std::max(max_temp_norm, temp_norm); 
-			inners.Append(it); 
-
-			emission_form.Mult(T, em_source); 
-			D.MultTranspose(em_source, psi); 
-			psi += psi0; 
-			Linv.Mult(psi, psi); 
-			D.Mult(psi, phi); 
-
-			phi0 -= phi; 
-			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi0, phi0)); 
-			norm /= sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi, phi)); 
-			if (norm < abs_tol) break; 
-			phi0 = phi; 
+			outer++; 
 		}
 
 		// update opacity and opacity-dependent terms 
@@ -649,10 +762,10 @@ int main(int argc, char *argv[]) {
 
 		// prepare for next time step 
 		time += time_step; 
-		psi0 = psi; 
-		T0 = T; 
+		cycle++; 
+		x0 = x; 
 
-		bool done = time >= final_time - 1e-12; 
+		bool done = time >= final_time - 1e-12 or cycle == max_cycles; 
 
 		if (cycle % output_freq == 0 or done) {
 			Tpw.ProjectGridFunction(T); 
@@ -666,6 +779,7 @@ int main(int argc, char *argv[]) {
 
 		cycle_timer.Stop(); 
 		double cycle_time = cycle_timer.RealTime(); 
+		log["max schur solves"] = std::max(inners.Max(), log["max schur solves"]); 
 		// output progress 
 		out << YAML::BeginMap; 
 			out << YAML::Key << "cycle" << YAML::Value << cycle; 
@@ -678,7 +792,7 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "min" << YAML::Value << inners.Min(); 
 				out << YAML::Key << "avg" << YAML::Value << (double)inners.Sum()/inners.Size(); 
 				out << YAML::Key << "total" << YAML::Value << inners.Sum(); 
-				out << YAML::Key << "max norm" << YAML::Value << max_temp_norm; 
+				out << YAML::Key << "max norm" << YAML::Value << max_inner_norm; 
 			out << YAML::EndMap;
 			if (EventLog.size()) {
 				out << YAML::Key << "event log" << YAML::Value << YAML::BeginMap; 
@@ -695,12 +809,24 @@ int main(int argc, char *argv[]) {
 	}
 	out << YAML::EndSeq; 
 
+	if (log.size()) {
+		out << YAML::Key << "log" << YAML::Value << YAML::BeginMap; 
+		for (const auto &it : log) {
+			out << YAML::Key << it.first << YAML::Value << it.second; 
+		}
+		out << YAML::EndMap; 
+	}
+
 	// --- clean up hanging pointers --- 
 	delete outer_solver; 
 	delete quad;
 	for (int i=0; i<nattr; i++) { delete total_list[i]; } 
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
+
+	wall_timer.Stop(); 
+	double wall_time = wall_timer.RealTime(); 
+	out << YAML::Key << "wall time" << YAML::Value << io::FormatTimeString(wall_time); 
 
 	// --- end yaml output --- 
 	out << YAML::EndMap << YAML::Newline; 
