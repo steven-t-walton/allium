@@ -11,7 +11,7 @@ void EnergyBalanceNonlinearFormIntegrator::AssembleElementVector(
 	if (rules) { // lump with nodal quadrature 
 		ir = &rules->Get(el.GetGeomType(), el.GetOrder()); 
 	} else {
-		ir = &mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder() + sigma_fe_order); 
+		ir = &mfem::IntRules.Get(el.GetGeomType(), oa*el.GetOrder() + sigma_fe_order + ob); 
 	}
 
 	elvec.SetSize(dof); 
@@ -39,7 +39,7 @@ void EnergyBalanceNonlinearFormIntegrator::AssembleElementGrad(
 	if (rules) { // lump with nodal quadrature 
 		ir = &rules->Get(el.GetGeomType(), el.GetOrder()); 
 	} else {
-		ir = &mfem::IntRules.Get(el.GetGeomType(), 2*el.GetOrder() + sigma_fe_order); 
+		ir = &mfem::IntRules.Get(el.GetGeomType(), oa*el.GetOrder() + sigma_fe_order + ob); 
 	}
 
 	shape.SetSize(dof); 

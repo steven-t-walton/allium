@@ -74,12 +74,13 @@ private:
 	int sigma_fe_order; 
 	mfem::Vector shape; 
 	mfem::IntegrationRules *rules = nullptr; 
+	int oa, ob; 
 public:
-	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &s, int sorder) 
-		: sigma(s), sigma_fe_order(sorder)
+	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &s, int sorder, int a, int b) 
+		: sigma(s), sigma_fe_order(sorder), oa(a), ob(b)
 	{ }
-	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &s, int sorder, int btype)
-		: sigma(s), sigma_fe_order(sorder)
+	EnergyBalanceNonlinearFormIntegrator(mfem::Coefficient &s, int btype)
+		: sigma(s)
 	{
 		int type; 
 		if (btype == mfem::BasisType::GaussLegendre) 
