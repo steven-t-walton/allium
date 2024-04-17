@@ -237,4 +237,25 @@ void MIPDiffusionIntegrator::AssembleFaceMatrix(
          elmat(i,i) *= (sigma - 1.);
       }
    }
+
+   if (lump) {
+      for (int i=0; i<ndof1; i++) {
+         double L = 0.0; 
+         for (int j=0; j<ndof1; j++) {
+            L += elmat(i,j); 
+            elmat(i,j) = 0.0; 
+         }
+         elmat(i,i) = L; 
+      }
+      if (ndof2) {
+         for (int i=ndof1; i<ndofs; i++) {
+            double L = 0.0; 
+            for (int j=ndof1; j<ndofs; j++) {
+               L += elmat(i,j); 
+               elmat(i,j) = 0.0; 
+            }
+            elmat(i,i) = L; 
+         }
+      }
+   }
 }
