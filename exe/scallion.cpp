@@ -537,6 +537,8 @@ int main(int argc, char *argv[]) {
 		if (send_buffer_size) 
 			Linv.SetSendBufferSize(send_buffer_size.value()); 
 		use_fixup = sweep_opts["use_fixup"].get_or(false); 
+		sol::optional<double> psi_min = sweep_opts["psi_min"]; 
+		if (psi_min) Linv.SetMinimumSolution(psi_min.value()); 
 	}
 	Linv.UseFixup(use_fixup); 
 
@@ -562,6 +564,8 @@ int main(int argc, char *argv[]) {
 	else
 		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order, 2, 2)); 
 
+	mfem::ParGridFunction cvgf(&fes0); cvgf.ProjectCoefficient(heat_capacity); 
+	mfem::ParGridFunction density_gf(&fes0); density_gf.ProjectCoefficient(density); 
 	sol::table output = lua["output"]; 
 	const int output_freq = output["frequency"].get_or(std::numeric_limits<int>::max()); 
 	mfem::ParaViewDataCollection dc(output["paraview"], &mesh); 
@@ -569,6 +573,9 @@ int main(int argc, char *argv[]) {
 	dc.RegisterField("T", &T); 
 	dc.RegisterField("Tpw", &Tpw); 
 	dc.RegisterField("sigma", &total_gf); 
+	dc.RegisterField("cv", &cvgf); 
+	dc.RegisterField("density", &density_gf); 
+	dc.RegisterField("fixup diff", &phi0); 
 	dc.SetCycle(0); dc.SetTime(0.0); dc.SetTimeStep(time_step); 
 	dc.Save(); 
 
@@ -716,6 +723,11 @@ int main(int argc, char *argv[]) {
 				D.MultTranspose(em_source, psi); 
 				psi += psi0; 
 				Linv.Mult(psi, psi); 
+				D.Mult(psi, phi0); 
+				phi0 -= phi; 
+				double mag = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi, phi)); 
+				phi0 *= (1.0/mag); 
+				for (int i=0; i<phi0.Size(); i++) { phi0(i) = std::fabs(phi0(i)); }
 				D.Mult(psi, phi); 
 				if (phi.Min() < 0) MFEM_ABORT("negative energy density"); 
 
@@ -762,7 +774,6 @@ int main(int argc, char *argv[]) {
 		// prepare for next time step 
 		time += time_step; 
 		cycle++; 
-		x0 = x; 
 
 		bool done = time >= final_time - 1e-12 or cycle == max_cycles; 
 
@@ -773,6 +784,8 @@ int main(int argc, char *argv[]) {
 			dc.SetTimeStep(time_step); 
 			dc.Save(); 			
 		}
+
+		x0 = x; 
 
 		EventLog.Synchronize(); 
 

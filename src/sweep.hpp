@@ -62,7 +62,7 @@ private:
 	bool zas_fixup = false; 
 	// use lumping 
 	bool lump = false; 
-	const double psi_min = 1e-8; 
+	double psi_min = 1e-8; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 		mfem::GridFunction &_total_data, int reflection_bdr_attr=-1, bool lump=false); 
@@ -73,6 +73,7 @@ public:
 	void SetSendBufferSize(int s); 
 	void UseFixup(bool use=true) { zas_fixup = use; }
 	void WriteGraphToDot(std::string prefix) const; 
+	void SetMinimumSolution(double min) { psi_min = min; }
 };
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 

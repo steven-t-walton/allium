@@ -282,7 +282,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 	// persistent storage of local system 
 	mfem::DenseMatrix grad, A, lu; 
-	mfem::Vector rhs, psi2, psi_fixup, nor(dim), ones, fixup_weights; 
+	mfem::Vector rhs, sol, psi2, psi_fixup, nor(dim), ones, fixup_weights; 
 
 	// --- do sweep --- 
 	// vertices traversed, only count owned elements 
@@ -382,33 +382,33 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				}
 				// solve, solution overwritten into rhs, matrix is modified 
 				lu = A; 
-				mfem::LinearSolve(lu, rhs.GetData()); 
+				sol = rhs; 
+				mfem::LinearSolve(lu, sol.GetData()); 
 
 				if (zas_fixup) {
 					bool fixedup = false; 
-					psi_fixup = rhs; 
-					for (int i=0; i<rhs.Size(); i++) {
-						if (rhs(i) < 0) {
+					for (int i=0; i<sol.Size(); i++) {
+						if (sol(i) < psi_min) {
 							fixedup = true; 
-							rhs(i) = psi_min; 
 						}
 					}
 
 					if (fixedup) {
-						ones.SetSize(rhs.Size()); 
+						sol = psi_min; 
+						ones.SetSize(sol.Size()); 
 						ones = 1.0; 
-						fixup_weights.SetSize(rhs.Size()); 
+						fixup_weights.SetSize(sol.Size()); 
 						A.MultTranspose(ones, fixup_weights); 
-						double scaling = (fixup_weights * psi_fixup) / (fixup_weights * rhs); 
+						double scaling = (ones * rhs) / (fixup_weights * sol); 
 						if (scaling < 0) EventLog["fixup scaling negative"] += 1; 
 						else 
-							rhs *= scaling; 
+							sol *= scaling; 
 						EventLog["fixup applied"] += 1; 
 					}
 				}
 
 				// scatter back 
-				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = rhs(i); }
+				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = sol(i); }
 			}
 
 			// --- compute next + send data to other processors --- 
