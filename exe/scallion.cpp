@@ -435,7 +435,18 @@ int main(int argc, char *argv[]) {
 
 	// temporal parameters 
 	const double final_time = driver["final_time"]; 
-	const double time_step = driver["time_step"]; 
+
+	sol::optional<sol::function> time_step_func_avail = driver["time_step"]; 
+	sol::optional<double> time_step_value_avail = driver["time_step"]; 
+	double time_step; 
+	if (time_step_func_avail) {
+		time_step = time_step_func_avail.value()(0.0); 
+	} else if (time_step_value_avail) {
+		time_step = time_step_value_avail.value(); 
+	} else {
+		MFEM_ABORT("must supply time step"); 
+	}
+
 	const int max_cycles = driver["max_cycles"].get_or(std::numeric_limits<int>::max()); 
 
 	// implicit solver 
@@ -458,7 +469,12 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "lump" << YAML::Value << lump; 
 		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
 		out << YAML::Key << "final time" << YAML::Value << final_time; 
-		out << YAML::Key << "time step size" << YAML::Key << time_step; 
+		out << YAML::Key << "time step" << YAML::Key << YAML::BeginMap; 
+			out << YAML::Key << "type" << YAML::Value; 
+			if (time_step_func_avail) out << "function"; 
+			else out << "constant"; 
+			out << YAML::Key << "initial value" << YAML::Value << time_step; 
+		out << YAML::EndMap; 
 		out << YAML::Key << "solver" << YAML::Value << solver; 
 		if (sweep_opts_avail) out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value(); 
 	out << YAML::EndMap; 
@@ -528,6 +544,8 @@ int main(int argc, char *argv[]) {
 	total_gf_dt.ProjectCoefficient(total_dt_coef); 
 	InverseAdvectionOperator Linv(fes, *quad, total_gf_dt, reflection_bdr_attr, lump); 
 	bool use_fixup = false; 
+	NegativeFluxFixupOperator *nff_op = nullptr; 
+	mfem::SLBQPOptimizer *nff_optimizer = nullptr; 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -536,11 +554,31 @@ int main(int argc, char *argv[]) {
 		sol::optional<int> send_buffer_size = sweep_opts["send_buffer_size"]; 
 		if (send_buffer_size) 
 			Linv.SetSendBufferSize(send_buffer_size.value()); 
-		use_fixup = sweep_opts["use_fixup"].get_or(false); 
-		sol::optional<double> psi_min = sweep_opts["psi_min"]; 
-		if (psi_min) Linv.SetMinimumSolution(psi_min.value()); 
+		sol::optional<sol::table> fixup_avail = sweep_opts["fixup"]; 
+		if (fixup_avail) {
+			sol::table fixup = fixup_avail.value(); 
+			use_fixup = true; 
+			std::string type = fixup["type"]; 
+			io::ValidateOption<std::string>("fixup type", type, 
+				{"zero and scale", "local optimization"}, root); 
+			double min = fixup["psi_min"].get_or(0.0); 
+			if (type == "zero and scale") {
+				nff_op = new ZeroAndScaleFixupOperator(min); 
+			} else if (type == "local optimization") {
+				nff_optimizer = new mfem::SLBQPOptimizer; 
+				double abstol = fixup["abstol"].get_or(1e-18); 
+				double reltol = fixup["reltol"].get_or(1e-12); 
+				int max_iter = fixup["max_iter"].get_or(20); 
+				int print_level = fixup["print_level"].get_or(-1); 
+				nff_optimizer->SetAbsTol(abstol); 
+				nff_optimizer->SetRelTol(reltol); 
+				nff_optimizer->SetMaxIter(max_iter); 
+				nff_optimizer->SetPrintLevel(print_level); 
+				nff_op = new LocalOptimizationFixupOperator(*nff_optimizer, min); 
+			}
+			Linv.SetFixupOperator(*nff_op); 
+		}
 	}
-	Linv.UseFixup(use_fixup); 
 
 	DiscreteToMoment D(*quad, psi_ext, phi_ext); 
 	D.MultTranspose(phi, psi0);
@@ -729,7 +767,7 @@ int main(int argc, char *argv[]) {
 				phi0 *= (1.0/mag); 
 				for (int i=0; i<phi0.Size(); i++) { phi0(i) = std::fabs(phi0(i)); }
 				D.Mult(psi, phi); 
-				if (phi.Min() < 0) MFEM_ABORT("negative energy density"); 
+				// if (phi.Min() < 0) MFEM_ABORT("negative energy density"); 
 
 				// re-evaulate temperature given positive phi 
 				Mtot.Mult(phi, phi_source); 
@@ -761,22 +799,13 @@ int main(int argc, char *argv[]) {
 			outer++; 
 		}
 
-		// update opacity and opacity-dependent terms 
-		if (temp_dependent_opacity) {
-			total_gf.ProjectCoefficient(total_coef); 
-			total_gf_dt.ProjectCoefficient(total_dt_coef); 
-			Linv.AssembleLocalMatrices(); 
-			delete Mtot.LoseMat();
-			Mtot.Assemble(); 
-			Mtot.Finalize(); 			
-		}
+		if (outer==max_iter) 
+			log["newton non-convergence"] += 1; 
 
 		// prepare for next time step 
 		time += time_step; 
 		cycle++; 
-
-		bool done = time >= final_time - 1e-12 or cycle == max_cycles; 
-
+		bool done = time >= final_time - 1e-14 or cycle == max_cycles; 
 		if (cycle % output_freq == 0 or done) {
 			Tpw.ProjectGridFunction(T); 
 			dc.SetCycle(cycle); 
@@ -785,6 +814,28 @@ int main(int argc, char *argv[]) {
 			dc.Save(); 			
 		}
 
+		// check for new time step size 
+		bool time_step_changed = false; 
+		if (time_step_func_avail) {
+			double new_time_step = time_step_func_avail.value()(time); 
+			time_step_changed = std::fabs(new_time_step - time_step) > 1e-14; 
+			time_step = new_time_step; 
+			total_dt_coef.SetAConst(1.0/time_step/constants::SpeedOfLight); 
+			Cvdt.SetAConst(1.0/time_step); 
+		}
+
+		if (T.Min() < 0) MFEM_ABORT("negative temperature"); 
+		// update opacity and opacity-dependent terms 
+		if (temp_dependent_opacity or time_step_changed) {
+			total_gf.ProjectCoefficient(total_coef); 
+			total_gf_dt.ProjectCoefficient(total_dt_coef); 
+			Linv.AssembleLocalMatrices(); 
+			delete Mtot.LoseMat();
+			Mtot.Assemble(); 
+			Mtot.Finalize(); 			
+		}
+
+		// store time step 
 		x0 = x; 
 
 		EventLog.Synchronize(); 
@@ -796,6 +847,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::BeginMap; 
 			out << YAML::Key << "cycle" << YAML::Value << cycle; 
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
+			out << YAML::Key << "time step size" << YAML::Value << time_step; 
 			out << YAML::Key << "||phi||" << YAML::Value << phi.Norml2(); 
 			out << YAML::Key << "it" << YAML::Value << outer; 
 			out << YAML::Key << "norm" << YAML::Value << norm;  
@@ -817,6 +869,8 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap << YAML::Newline; 
 		EventLog.clear(); 
 
+		if (cycle == max_cycles and root) 
+			MFEM_WARNING("max cycles reached. simulation end time not equal to final time"); 
 		if (done) break; 
 	}
 	out << YAML::EndSeq; 

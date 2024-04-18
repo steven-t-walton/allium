@@ -5,6 +5,7 @@
 #include "mfem.hpp"
 #include "igraph.h"
 #include "phase_coefficient.hpp"
+#include "fixup.hpp"
 
 class InverseAdvectionOperator : public mfem::Operator 
 {
@@ -58,11 +59,11 @@ private:
 	// at the expense of making downwind neighbors wait longer 
 	// to receive data 
 	int send_buffer_size = 8; 
-	// use zero and scale fixup inside sweep 
-	bool zas_fixup = false; 
 	// use lumping 
 	bool lump = false; 
-	double psi_min = 1e-8; 
+
+	bool apply_fixup = false; 
+	NegativeFluxFixupOperator *fixup_op = nullptr; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 		mfem::GridFunction &_total_data, int reflection_bdr_attr=-1, bool lump=false); 
@@ -70,15 +71,25 @@ public:
 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
 	void AssembleLocalMatrices(); 
-	void SetSendBufferSize(int s); 
-	void UseFixup(bool use=true) { zas_fixup = use; }
+	void SetSendBufferSize(int s);
+	// allow disabling or re-enabling fixup 
+	void UseFixup(bool use=true) { apply_fixup = use; }
+	void SetFixupOperator(NegativeFluxFixupOperator &op) {
+		fixup_op = &op; 
+		apply_fixup = true; 
+	}
 	void WriteGraphToDot(std::string prefix) const; 
-	void SetMinimumSolution(double min) { psi_min = min; }
 };
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 
 	PhaseSpaceCoefficient &inflow_coef, TransportVectorView source_view); 
+
+class LumpedIntegrationRule : public mfem::IntegrationRule
+{
+public:
+	LumpedIntegrationRule(const mfem::FiniteElement &fe);
+};
 
 class FaceMassMatricesIntegrator : public mfem::BilinearFormIntegrator 
 {

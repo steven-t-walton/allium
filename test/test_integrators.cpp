@@ -302,5 +302,48 @@ TEST(Integrators, SweepFaceIntegrator) {
 	M.GetSubMatrix(4,8, M22); 
 	ex22 -= M22; 
 	EXPECT_NEAR(ex22.FNorm(), 0.0, 1e-14); 
+}
 
+TEST(Integrators, SweepFaceIntegratorLumped) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(2,1, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace fes(&mesh, &fec); 
+
+	mfem::FaceElementTransformations *trans; 
+	for (auto f=0; f<mesh.GetNumFaces(); f++) {
+		trans = mesh.GetInteriorFaceTransformations(f); 
+		if (trans) break; 
+	}
+
+	const auto &trace_fe = *fec.TraceFiniteElementForGeometry(trans->GetGeometryType()); 
+	LumpedIntegrationRule rule(trace_fe); 
+
+	FaceMassMatricesIntegrator bfi; 
+	bfi.SetIntegrationRule(rule); 
+	mfem::DenseMatrix M; 
+	bfi.AssembleFaceMatrix(*fes.GetFE(trans->Elem1No), *fes.GetFE(trans->Elem2No), *trans, M); 
+	mfem::DenseMatrix ex11({{0,0,0,0}, {0,1./2,0,0.0}, {0,0,0,0}, {0,0.0,0,1./2}}); 
+	mfem::DenseMatrix M11; 
+	M.GetSubMatrix(0,4,M11); 
+	ex11 -= M11; 
+	EXPECT_NEAR(ex11.FNorm(), 0.0, 1e-14); 
+
+	mfem::DenseMatrix ex12({{0,0,0,0}, {1./2,0,0,0}, {0,0,0,0}, {0,0,1./2,0}}); 
+	mfem::DenseMatrix M12; 
+	M.GetSubMatrix(0,4,4,8,M12); 
+	ex12 -= M12; 
+	EXPECT_NEAR(ex12.FNorm(), 0.0, 1e-14); 
+
+	mfem::DenseMatrix M21; 
+	M.GetSubMatrix(4,8,0,4,M21); 
+	M21.Transpose(); 
+	M21 -= M12; 
+	EXPECT_NEAR(M21.FNorm(), 0.0, 1e-14); 
+
+	mfem::DenseMatrix ex22({{1./2,0,0,0}, {0,0,0,0}, {0,0,1./2,0}, {0,0,0,0}}); 
+	mfem::DenseMatrix M22; 
+	M.GetSubMatrix(4,8, M22); 
+	ex22 -= M22; 
+	EXPECT_NEAR(ex22.FNorm(), 0.0, 1e-14); 
 }

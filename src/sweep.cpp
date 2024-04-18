@@ -7,6 +7,13 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	mfem::GridFunction &_total_data, int reflection_bdr_attr, bool use_lumping)
 	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total_data(_total_data), lump(use_lumping)
 {
+	if (lump) {
+		const auto *fec = fes.FEColl(); 
+		const auto btype = dynamic_cast<const mfem::L2_FECollection*>(fec)->GetBasisType(); 
+		if (btype != mfem::BasisType::GaussLobatto) {
+			MFEM_ABORT("only lobatto supported with lumping"); 
+		}
+	}
 	const auto dim = mesh.Dimension(); // dimension of mesh 
 	const auto Ne = mesh.GetNE(); // processor-local number of elements 
 	const auto Ndof = fes.GetVSize(); // local degrees of freedom 
@@ -385,30 +392,15 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				sol = rhs; 
 				mfem::LinearSolve(lu, sol.GetData()); 
 
-				if (zas_fixup) {
-					bool fixedup = false; 
-					for (int i=0; i<sol.Size(); i++) {
-						if (sol(i) < psi_min) {
-							fixedup = true; 
-						}
-					}
-
-					if (fixedup) {
-						sol = psi_min; 
-						ones.SetSize(sol.Size()); 
-						ones = 1.0; 
-						fixup_weights.SetSize(sol.Size()); 
-						A.MultTranspose(ones, fixup_weights); 
-						double scaling = (ones * rhs) / (fixup_weights * sol); 
-						if (scaling < 0) EventLog["fixup scaling negative"] += 1; 
-						else 
-							sol *= scaling; 
-						EventLog["fixup applied"] += 1; 
-					}
+				if (fixup_op and apply_fixup) {
+					fixup_op->SetLocalSystem(A, rhs); 
+					fixup_op->Mult(sol, rhs); 
+				} else {
+					rhs = sol; 
 				}
 
 				// scatter back 
-				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = sol(i); }
+				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = rhs(i); }
 			}
 
 			// --- compute next + send data to other processors --- 
@@ -562,13 +554,14 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 	for (auto e=0; e<fes.GetNE(); e++) {
 		const auto &fe = *fes.GetFE(e); 
 		auto &trans = *mesh.GetElementTransformation(e);
+		LumpedIntegrationRule lumped_ir(fe); 
 
 		for (int g=0; g<G; g++) {
 			mfem::GridFunctionCoefficient total(&total_data, g+1); // component is 1-based :( 
 			mfem::MassIntegrator mi(total); 
 			mass_mat_view(g,e) = new mfem::DenseMatrix; 
+			if (lump) mi.SetIntegrationRule(lumped_ir); 
 			mi.AssembleElementMatrix(fe, trans, *mass_mat_view(g,e)); 
-			if (lump) mass_mat_view(g,e)->Lump(); 
 		}
 
 		mfem::Vector Omega(dim); 
@@ -578,6 +571,7 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			Omega(d) = 1.0; 
 			mfem::VectorConstantCoefficient Q(Omega); 
 			mfem::ConservativeConvectionIntegrator conv_int(Q, 1.0); 
+			if (lump) conv_int.SetIntegrationRule(lumped_ir); 
 			conv_int.AssembleElementMatrix(fe, trans, *grad_mat_view(d,e)); 
 		}
 	}	
@@ -602,6 +596,12 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 		if (face_trans->Elem2No >= 0) {
 			el2 = fes.GetFE(face_trans->Elem2No); 
 		}
+
+		// setup lumped integration rule 
+		const auto &trace_fe = *fes.GetTraceElement(face_trans->Elem1No, face_trans->GetGeometryType()); 
+		LumpedIntegrationRule lumped_ir(trace_fe); 
+		if (lump) fmi.SetIntegrationRule(lumped_ir); 
+
 		fmi.AssembleFaceMatrix(el1, *el2, *face_trans, elmat);
 		const auto dof1 = el1.GetDof(); 
 		elmat.GetSubMatrix(0,dof1,0,dof1, *face_mat_view(f,0,0)); 
@@ -610,12 +610,6 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			elmat.GetSubMatrix(0,dof1,dof1,dof1+dof2, *face_mat_view(f,0,1)); 
 			elmat.GetSubMatrix(dof1,dof1+dof2,0,dof1, *face_mat_view(f,1,0)); 
 			elmat.GetSubMatrix(dof1,dof1+dof2,dof1,dof1+dof2, *face_mat_view(f,1,1)); 			
-		}
-		if (lump) {
-			face_mat_view(f,0,0)->Lump(); 
-			if (face_trans->Elem2No >= 0) {
-				face_mat_view(f,1,1)->Lump(); 				
-			}
 		}
 	}
 }
@@ -663,6 +657,17 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 				source_view(g,a,i) = bform[i]; 
 			}
 		}		
+	}
+}
+
+LumpedIntegrationRule::LumpedIntegrationRule(const mfem::FiniteElement &fe)
+{
+	const auto &nodes = fe.GetNodes(); 
+	SetSize(nodes.Size()); 
+	double w = 1.0/nodes.Size(); 
+	for (int i=0; i<Size(); i++) {
+		(*this)[i] = nodes[i]; 
+		(*this)[i].weight = w; 
 	}
 }
 
