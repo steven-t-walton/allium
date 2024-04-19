@@ -889,6 +889,8 @@ int main(int argc, char *argv[]) {
 	for (int i=0; i<nattr; i++) { delete total_list[i]; } 
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
+	delete nff_optimizer; 
+	delete nff_op; 
 
 	wall_timer.Stop(); 
 	double wall_time = wall_timer.RealTime(); 
