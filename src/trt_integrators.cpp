@@ -1,17 +1,16 @@
 #include "trt_integrators.hpp"
+#include "lumped_intrule.hpp"
+#include "constants.hpp"
 
-void EnergyBalanceNonlinearFormIntegrator::AssembleElementVector(
+void BlackBodyEmissionNFI::AssembleElementVector(
 	const mfem::FiniteElement &el, mfem::ElementTransformation &trans, 
 	const mfem::Vector &elfun, mfem::Vector &elvec) 
 {
 	const auto dof = el.GetDof(); 
-	BlackBodyEmissionCoefficient planck_emission(sigma, el, elfun); 
 
 	const mfem::IntegrationRule *ir = IntRule; 
-	if (rules) { // lump with nodal quadrature 
-		ir = &rules->Get(el.GetGeomType(), el.GetOrder()); 
-	} else {
-		ir = &mfem::IntRules.Get(el.GetGeomType(), oa*el.GetOrder() + sigma_fe_order + ob); 
+	if (!ir) {
+		ir = &mfem::IntRules.Get(el.GetGeomType(), oa*el.GetOrder() + ob); 
 	}
 
 	elvec.SetSize(dof); 
@@ -23,23 +22,20 @@ void EnergyBalanceNonlinearFormIntegrator::AssembleElementVector(
 		trans.SetIntPoint(&ip); 
 		el.CalcShape(ip, shape); 
 		double T = elfun * shape; // interpolate T 
-		double B_at_ip = planck_emission.Eval(trans, ip); 
+		double B_at_ip = sigma.Eval(trans, ip) * constants::StefanBoltzmann * pow(T, 4); 
 		elvec.Add(B_at_ip * ip.weight * trans.Weight(), shape); 
 	}
 }
 
-void EnergyBalanceNonlinearFormIntegrator::AssembleElementGrad(
+void BlackBodyEmissionNFI::AssembleElementGrad(
 	const mfem::FiniteElement &el, mfem::ElementTransformation &trans, 
 	const mfem::Vector &elfun, mfem::DenseMatrix &elmat) 
 {
 	const auto dof = el.GetDof(); 
-	GradBlackBodyEmissionCoefficient grad_plank_emission(sigma, el, elfun); 
 
 	const mfem::IntegrationRule *ir = IntRule; 
-	if (rules) { // lump with nodal quadrature 
-		ir = &rules->Get(el.GetGeomType(), el.GetOrder()); 
-	} else {
-		ir = &mfem::IntRules.Get(el.GetGeomType(), oa*el.GetOrder() + sigma_fe_order + ob); 
+	if (!ir) {
+		ir = &mfem::IntRules.Get(el.GetGeomType(), oa*el.GetOrder() + ob); 
 	}
 
 	shape.SetSize(dof); 
@@ -50,7 +46,8 @@ void EnergyBalanceNonlinearFormIntegrator::AssembleElementGrad(
 		const auto &ip = ir->IntPoint(n); 
 		trans.SetIntPoint(&ip); 
 		el.CalcShape(ip, shape); 
-		double dB_at_ip = grad_plank_emission.Eval(trans, ip); 
+		double T = shape * elfun; 
+		double dB_at_ip = sigma.Eval(trans, ip) * 4.0 * constants::StefanBoltzmann * pow(T, 3); 
 		AddMult_a_VVt(dB_at_ip * ip.weight * trans.Weight(), shape, elmat); 
 	}
 }
