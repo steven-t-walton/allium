@@ -85,12 +85,6 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 
 	PhaseSpaceCoefficient &inflow_coef, TransportVectorView source_view); 
 
-class LumpedIntegrationRule : public mfem::IntegrationRule
-{
-public:
-	LumpedIntegrationRule(const mfem::FiniteElement &fe);
-};
-
 class FaceMassMatricesIntegrator : public mfem::BilinearFormIntegrator 
 {
 private:

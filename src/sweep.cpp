@@ -2,6 +2,7 @@
 #include <deque>
 #include "config.hpp"
 #include "log.hpp"
+#include "lumped_intrule.hpp"
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	mfem::GridFunction &_total_data, int reflection_bdr_attr, bool use_lumping)
@@ -657,17 +658,6 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 				source_view(g,a,i) = bform[i]; 
 			}
 		}		
-	}
-}
-
-LumpedIntegrationRule::LumpedIntegrationRule(const mfem::FiniteElement &fe)
-{
-	const auto &nodes = fe.GetNodes(); 
-	SetSize(nodes.Size()); 
-	double w = 1.0/nodes.Size(); 
-	for (int i=0; i<Size(); i++) {
-		(*this)[i] = nodes[i]; 
-		(*this)[i].weight = w; 
 	}
 }
 
