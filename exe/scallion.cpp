@@ -550,6 +550,8 @@ int main(int argc, char *argv[]) {
 	mfem::SumCoefficient total_dt_coef(1.0/time_step/constants::SpeedOfLight, total); 
 	mfem::ParGridFunction total_gf_dt(&sigma_fes); 
 	total_gf_dt.ProjectCoefficient(total_dt_coef); 
+	total_gf_dt.ExchangeFaceNbrData(); 
+	mfem::GridFunctionCoefficient total_dt(&total_gf_dt); 
 	InverseAdvectionOperator Linv(fes, *quad, total_gf_dt, reflection_bdr_attr, lump); 
 	bool use_fixup = false; 
 	NegativeFluxFixupOperator *nff_op = nullptr; 
@@ -705,11 +707,11 @@ int main(int argc, char *argv[]) {
 		// }
 
 		mfem::ParBilinearForm Kform(&fes); 
-		mfem::RatioCoefficient diffco(1.0/3, total_dt_coef); 
+		mfem::RatioCoefficient diffco(1.0/3, total_dt); 
 		mfem::ConstantCoefficient alpha_c(alpha/2);
 		double kappa = pow(fe_order+1,2)*4; 
 		Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
-		Kform.AddDomainIntegrator(new mfem::MassIntegrator(total_dt_coef)); 
+		Kform.AddDomainIntegrator(new mfem::MassIntegrator(total_dt)); 
 		for (auto &ptr : *Kform.GetDBFI()) {
 			ptr->SetIntegrationRule(lumped_intrule); 
 		}
@@ -875,6 +877,7 @@ int main(int argc, char *argv[]) {
 		if (temp_dependent_opacity or time_step_changed) {
 			total_gf.ProjectCoefficient(total_coef); 
 			total_gf_dt.ProjectCoefficient(total_dt_coef); 
+			total_gf_dt.ExchangeFaceNbrData(); 
 			Linv.AssembleLocalMatrices(); 
 			delete Mtot.LoseMat();
 			Mtot.Assemble(); 
