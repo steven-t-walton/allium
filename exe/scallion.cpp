@@ -14,6 +14,7 @@
 #include "lumped_intrule.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
+using IterationLog = std::map<std::string,mfem::Array<int>>; 
 
 class MockSolver : public mfem::Solver {
 public:
@@ -643,6 +644,27 @@ int main(int argc, char *argv[]) {
 	nor = 0.0; nor(0) = 1.0; 
 	const double alpha = ComputeAlpha(*quad, nor); 
 
+	mfem::ParBilinearForm Kform(&fes); 
+	mfem::RatioCoefficient diffco(1.0/3, total_dt); 
+	mfem::ConstantCoefficient alpha_c(alpha/2);
+	double kappa = pow(fe_order+1,2)*4; 
+	Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
+	Kform.AddDomainIntegrator(new mfem::MassIntegrator(total_dt)); 
+	for (auto &ptr : *Kform.GetDBFI()) {
+		ptr->SetIntegrationRule(lumped_intrule); 
+	}
+	Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2)); 
+	Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+	for (auto &ptr : *Kform.GetBBFI()) {
+		ptr->SetIntegrationRule(lumped_intrule_face); 
+	}
+	for (auto &ptr : *Kform.GetFBFI()) {
+		ptr->SetIntegrationRule(lumped_intrule_face); 
+	}
+	Kform.Assemble(); 
+	Kform.Finalize(); 
+	auto dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform.ParallelAssemble()); 
+
 	mfem::StopWatch cycle_timer; 
 	double time = 0.0; 
 	const double under_relax = 0.05; 
@@ -661,71 +683,6 @@ int main(int argc, char *argv[]) {
 		double max_inner_norm = 0; 
 		mfem::Array<int> inners; 
 		inners.Reserve(max_iter); 
-		// for (outer=1; outer<=max_iter; outer++) {
-		// 	double temp_norm;
-		// 	int it; 
-		// 	for (it=1; it<=20; it++) {
-		// 		// form residual 
-		// 		meb_form.Mult(T, temp_resid); 
-		// 		Mtot.AddMult(phi, temp_resid, -1.0); 
-		// 		Mcv.AddMult(T0, temp_resid, -1.0/time_step); 
-
-		// 		// form and solve Jacobian 
-		// 		NonlinearFormBlockInverse inv(meb_form, T);
-		// 		inv.Mult(temp_resid, dT); 
-
-		// 		// update temperature 
-		// 		for (int i=0; i<T.Size(); i++) {
-		// 			double Tnew = T(i) - dT(i); 
-		// 			if (Tnew < 0) {
-		// 				EventLog["under relax"] += 1; 
-		// 				T(i) = (1 - under_relax) * T(i) - under_relax * dT(i); 
-		// 			} else {
-		// 				T(i) = Tnew; 
-		// 			}
-		// 			if (T(i) < 0) MFEM_ABORT("negativity"); 
-		// 		}
-		// 		// T -= dT; 
-		// 		double mag = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, T, T)); 
-		// 		temp_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)) / mag; 
-		// 		if (temp_norm < abs_tol/100) break; 
-		// 	}
-		// 	max_temp_norm = std::max(max_temp_norm, temp_norm); 
-		// 	inners.Append(it); 
-
-		// 	emission_form.Mult(T, em_source); 
-		// 	D.MultTranspose(em_source, psi); 
-		// 	psi += psi0; 
-		// 	Linv.Mult(psi, psi); 
-		// 	D.Mult(psi, phi); 
-
-		// 	phi0 -= phi; 
-		// 	norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi0, phi0)); 
-		// 	norm /= sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi, phi)); 
-		// 	if (norm < abs_tol) break; 
-		// 	phi0 = phi; 
-		// }
-
-		mfem::ParBilinearForm Kform(&fes); 
-		mfem::RatioCoefficient diffco(1.0/3, total_dt); 
-		mfem::ConstantCoefficient alpha_c(alpha/2);
-		double kappa = pow(fe_order+1,2)*4; 
-		Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
-		Kform.AddDomainIntegrator(new mfem::MassIntegrator(total_dt)); 
-		for (auto &ptr : *Kform.GetDBFI()) {
-			ptr->SetIntegrationRule(lumped_intrule); 
-		}
-		Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2)); 
-		Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
-		for (auto &ptr : *Kform.GetBBFI()) {
-			ptr->SetIntegrationRule(lumped_intrule_face); 
-		}
-		for (auto &ptr : *Kform.GetFBFI()) {
-			ptr->SetIntegrationRule(lumped_intrule_face); 
-		}
-		Kform.Assemble(); 
-		Kform.Finalize(); 
-		auto dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform.ParallelAssemble());
 
 		mfem::CGSolver cgsolver(MPI_COMM_WORLD); 
 		cgsolver.SetRelTol(1e-14); 
@@ -799,37 +756,41 @@ int main(int argc, char *argv[]) {
 
 				// re-evaulate temperature given positive phi 
 				Mtot.Mult(phi, phi_source); 
-				// temp_resid += phi_source;
-				// dplanck_dt_inv.Mult(temp_resid, dT); 
-				// T += dT; 
-				// for (int i=0; i<T.Size(); i++) {
-				// 	double Tnew = T(i) + dT(i); 
-				// 	if (Tnew < 0) {
-				// 		EventLog["under relax (final)"] += 1; 
-				// 		// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
-				// 		T(i) = T(i) + dT(i)*under_relax; 
-				// 	} else {
-				// 		T(i) = Tnew; 
-				// 	}
-				// }
 
-				phi_source += T0; 
-				while (true) {
-					meb_form.Mult(T, temp_resid); 
-					temp_resid -= phi_source; 
-					NonlinearFormBlockInverse local_block_inv(meb_form, T); 
-					local_block_inv.Mult(temp_resid, dT); 
+				if (outer < max_iter) {
+					temp_resid += phi_source;
+					dplanck_dt_inv.Mult(temp_resid, dT); 
 					for (int i=0; i<T.Size(); i++) {
-						double Tnew = T(i) - dT(i); 
+						double Tnew = T(i) + dT(i); 
 						if (Tnew < 0) {
-							T(i) = T(i) - dT(i)*under_relax; 
+							EventLog["under relax (final)"] += 1; 
+							// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
+							T(i) = T(i) + dT(i)*under_relax; 
 						} else {
 							T(i) = Tnew; 
 						}
+					}					
+				}
+
+				else {					
+					phi_source += T0; 
+					while (true) {
+						meb_form.Mult(T, temp_resid); 
+						temp_resid -= phi_source; 
+						NonlinearFormBlockInverse local_block_inv(meb_form, T); 
+						local_block_inv.Mult(temp_resid, dT); 
+						for (int i=0; i<T.Size(); i++) {
+							double Tnew = T(i) - dT(i); 
+							if (Tnew < 0) {
+								T(i) = T(i) - dT(i)*under_relax; 
+							} else {
+								T(i) = Tnew; 
+							}
+						}
+						inner_t_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
+						inner_t_iter++; 
+						if (inner_t_norm < abs_tol or inner_t_iter == 20) break; 
 					}
-					inner_t_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
-					inner_t_iter++; 
-					if (inner_t_norm < abs_tol or inner_t_iter == 20) break; 
 				}
 
 				break;
@@ -881,7 +842,12 @@ int main(int argc, char *argv[]) {
 			Linv.AssembleLocalMatrices(); 
 			delete Mtot.LoseMat();
 			Mtot.Assemble(); 
-			Mtot.Finalize(); 			
+			Mtot.Finalize(); 	
+
+			delete Kform.LoseMat(); 
+			Kform.Assemble(); 
+			Kform.Finalize(); 
+			dsa_mat.reset(Kform.ParallelAssemble());		
 		}
 
 		// store time step 
