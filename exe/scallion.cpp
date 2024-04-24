@@ -229,6 +229,13 @@ int main(int argc, char *argv[]) {
 		bdr_attr_map[bdr_attr_list[i]] = i+1; 
 	}
 
+	// --- print physical constants --- 
+	out << YAML::Key << "physical constants" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "speed of light" << YAML::Value << constants::SpeedOfLight; 
+		out << YAML::Key << "radiation constant" << YAML::Value << constants::StefanBoltzmann / constants::SpeedOfLight; 
+		out << YAML::Key << "planck" << YAML::Value << constants::Planck; 
+	out << YAML::EndMap; 
+
 	// --- make mesh and solution spaces --- 
 	sol::table mesh_node = lua["mesh"]; 
 	sol::optional<std::string> fname = mesh_node["file"]; 
