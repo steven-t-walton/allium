@@ -728,6 +728,8 @@ int main(int argc, char *argv[]) {
 		cgsolver.iterative_mode = false; 
 
 		Linv.UseFixup(false); 
+		int inner_t_iter = 0;
+		double inner_t_norm; 
 		while (true) {
 			// --- form RHS --- 
 			meb_form.Mult(T, temp_resid); 
@@ -788,37 +790,38 @@ int main(int argc, char *argv[]) {
 
 				// re-evaulate temperature given positive phi 
 				Mtot.Mult(phi, phi_source); 
-				temp_resid += phi_source;
-				dplanck_dt_inv.Mult(temp_resid, dT); 
-				for (int i=0; i<T.Size(); i++) {
-					double Tnew = T(i) + dT(i); 
-					if (Tnew < 0) {
-						EventLog["under relax (final)"] += 1; 
-						// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
-						T(i) = T(i) + dT(i)*under_relax; 
-					} else {
-						T(i) = Tnew; 
-					}
-				}
-
-				// phi_source += T0; 
-				// for (int inner=0; inner<50; inner++) {
-				// 	meb_form.Mult(T, temp_resid); 
-				// 	temp_resid -= phi_source; 
-				// 	NonlinearFormBlockInverse local_block_inv(meb_form, T); 
-				// 	local_block_inv.Mult(temp_resid, dT); 
-				// 	for (int i=0; i<T.Size(); i++) {
-				// 		double Tnew = T(i) - dT(i); 
-				// 		if (Tnew < 0) {
-				// 			T(i) = T(i) - dT(i)*under_relax; 
-				// 		} else {
-				// 			T(i) = Tnew; 
-				// 		}
+				// temp_resid += phi_source;
+				// dplanck_dt_inv.Mult(temp_resid, dT); 
+				// T += dT; 
+				// for (int i=0; i<T.Size(); i++) {
+				// 	double Tnew = T(i) + dT(i); 
+				// 	if (Tnew < 0) {
+				// 		EventLog["under relax (final)"] += 1; 
+				// 		// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
+				// 		T(i) = T(i) + dT(i)*under_relax; 
+				// 	} else {
+				// 		T(i) = Tnew; 
 				// 	}
-				// 	double inner_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
-				// 	mfem::out << "inner norm = " << inner_norm << std::endl; 
-				// 	if (inner_norm < abs_tol) break; 
 				// }
+
+				phi_source += T0; 
+				while (true) {
+					meb_form.Mult(T, temp_resid); 
+					temp_resid -= phi_source; 
+					NonlinearFormBlockInverse local_block_inv(meb_form, T); 
+					local_block_inv.Mult(temp_resid, dT); 
+					for (int i=0; i<T.Size(); i++) {
+						double Tnew = T(i) - dT(i); 
+						if (Tnew < 0) {
+							T(i) = T(i) - dT(i)*under_relax; 
+						} else {
+							T(i) = Tnew; 
+						}
+					}
+					inner_t_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
+					inner_t_iter++; 
+					if (inner_t_norm < abs_tol or inner_t_iter == 20) break; 
+				}
 
 				break;
 			} else {
@@ -894,6 +897,10 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "total" << YAML::Value << inners.Sum(); 
 				out << YAML::Key << "max norm" << YAML::Value << max_inner_norm; 
 			out << YAML::EndMap;
+			out << YAML::Key << "meb iteration" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "it" << YAML::Value << inner_t_iter; 
+				out << YAML::Key << "norm" << YAML::Value << inner_t_norm; 
+			out << YAML::EndMap; 
 			if (EventLog.size()) {
 				out << YAML::Key << "event log" << YAML::Value << YAML::BeginMap; 
 				for (const auto &it : EventLog) {
