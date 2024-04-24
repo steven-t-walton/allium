@@ -70,6 +70,17 @@ void NonlinearFormBlockInverse::Mult(const mfem::Vector &x, mfem::Vector &y) con
 		}
 		x.GetSubVector(vdofs, el_x);
 		if (lump) {
+		#ifndef NDBEUG 
+			// ensure diagonal matrix 
+			bool diag = true; 
+			for (int i=0; i<A.Height(); i++) {
+				double Aii = A(i,i);
+				for (int j=0; j<A.Width(); j++) {
+					if (i != j and std::fabs(A(i,j)/Aii) > 1e-14) diag = false; 
+				}
+			}
+			if (!diag) MFEM_ABORT("matrix isn't diagonal");
+		#endif
 			for (int r=0; r<A.Height(); r++) {
 				el_x(r) /= A(r,r); 
 			}

@@ -2,7 +2,6 @@
 
 #include "mfem.hpp"
 #include "tvector.hpp"
-#include "constants.hpp"
 
 class SNTimeMassMatrix : public mfem::Operator
 {

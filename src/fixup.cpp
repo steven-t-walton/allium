@@ -3,7 +3,7 @@
 
 void ZeroAndScaleFixupOperator::Mult(const mfem::Vector &solution, mfem::Vector &fixed) const 
 {
-	if (DoFixup(solution)) {
+	if (!DoFixup(solution)) {
 		fixed = solution; 
 		return; 
 	}
@@ -29,7 +29,7 @@ void ZeroAndScaleFixupOperator::Mult(const mfem::Vector &solution, mfem::Vector 
 
 void LocalOptimizationFixupOperator::Mult(const mfem::Vector &solution, mfem::Vector &fixed) const 
 {
-	if (DoFixup(solution)) {
+	if (!DoFixup(solution)) {
 		fixed = solution; 
 		return; 
 	}

@@ -11,6 +11,7 @@
 #include "trt_op.hpp"
 #include "trt_integrators.hpp"
 #include "mip.hpp"
+#include "lumped_intrule.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
 
@@ -591,23 +592,27 @@ int main(int argc, char *argv[]) {
 	D.MultTranspose(phi, psi0);
 	psi = psi0; 
 
+	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); // <--- limits lumping to meshes with only one type of element 
+	LumpedIntegrationRule lumped_intrule_face(
+		*fes.GetTraceElement(0, mesh.GetFaceElementTransformations(0)->GetGeometryType())); 
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	mfem::NonlinearForm meb_form(&fes);
 	if (lump) {
-		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, basis_type)); 
-		meb_form.AddDomainIntegrator(
-			new LinearCoefficientNFIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt)))); 
+		auto *bbenfi = new BlackBodyEmissionNFI(total, 2, 2); 
+		bbenfi->SetIntegrationRule(lumped_intrule); 
+		meb_form.AddDomainIntegrator(bbenfi); // meb_form owns ptr 
+		meb_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
 	}
 	else {
-		meb_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order, 2, 2)); 
-		meb_form.AddDomainIntegrator(new LinearCoefficientNFIntegrator(new mfem::MassIntegrator(Cvdt))); 
+		meb_form.AddDomainIntegrator(new BlackBodyEmissionNFI(total, 2, 2 + sigma_fe_order)); 
+		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}
 
 	mfem::NonlinearForm emission_form(&fes); 
+	auto *bbenfi = new BlackBodyEmissionNFI(total, 2, 2 + sigma_fe_order); 
 	if (lump) 
-		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, basis_type)); 
-	else
-		emission_form.AddDomainIntegrator(new EnergyBalanceNonlinearFormIntegrator(total, sigma_fe_order, 2, 2)); 
+		bbenfi->SetIntegrationRule(lumped_intrule); 
+	emission_form.AddDomainIntegrator(bbenfi); // emission_form owns ptr 
 
 	mfem::ParGridFunction cvgf(&fes0); cvgf.ProjectCoefficient(heat_capacity); 
 	mfem::ParGridFunction density_gf(&fes0); density_gf.ProjectCoefficient(density); 
@@ -699,27 +704,39 @@ int main(int argc, char *argv[]) {
 		// 	phi0 = phi; 
 		// }
 
-		// mfem::ParBilinearForm Kform(&fes); 
-		// mfem::RatioCoefficient diffco(1.0/3, total); 
-		// mfem::ConstantCoefficient alpha_c(alpha/2);
-		// double kappa = pow(fe_order+1,2)*4; 
-		// Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
-		// Kform.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(total))); 
-		// Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2, lump)); 
-		// Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
-		// Kform.Assemble(); 
-		// Kform.Finalize(); 
-		// auto dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform.ParallelAssemble());
+		mfem::ParBilinearForm Kform(&fes); 
+		mfem::RatioCoefficient diffco(1.0/3, total_dt_coef); 
+		mfem::ConstantCoefficient alpha_c(alpha/2);
+		double kappa = pow(fe_order+1,2)*4; 
+		Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
+		Kform.AddDomainIntegrator(new mfem::MassIntegrator(total_dt_coef)); 
+		for (auto &ptr : *Kform.GetDBFI()) {
+			ptr->SetIntegrationRule(lumped_intrule); 
+		}
+		Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2)); 
+		Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
+		for (auto &ptr : *Kform.GetBBFI()) {
+			ptr->SetIntegrationRule(lumped_intrule_face); 
+		}
+		for (auto &ptr : *Kform.GetFBFI()) {
+			ptr->SetIntegrationRule(lumped_intrule_face); 
+		}
+		Kform.Assemble(); 
+		Kform.Finalize(); 
+		auto dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform.ParallelAssemble());
 
-		// mfem::CGSolver cgsolver(MPI_COMM_WORLD); 
-		// cgsolver.SetRelTol(1e-10); 
-		// mfem::HypreBoomerAMG amg(*dsa_mat);
-		// amg.SetPrintLevel(0); 
-		// cgsolver.SetOperator(*dsa_mat); 
-		// cgsolver.SetPreconditioner(amg); 
-		// cgsolver.SetMaxIter(100); 
+		mfem::CGSolver cgsolver(MPI_COMM_WORLD); 
+		cgsolver.SetRelTol(1e-14); 
+		mfem::HypreBoomerAMG amg(*dsa_mat);
+		amg.SetPrintLevel(0); 
+		cgsolver.SetOperator(*dsa_mat); 
+		cgsolver.SetPreconditioner(amg); 
+		cgsolver.SetMaxIter(100); 
+		cgsolver.iterative_mode = false; 
 
 		Linv.UseFixup(false); 
+		int inner_t_iter = 0;
+		double inner_t_norm; 
 		while (true) {
 			// --- form RHS --- 
 			meb_form.Mult(T, temp_resid); 
@@ -744,10 +761,11 @@ int main(int argc, char *argv[]) {
 			// apply I - D Linv dB (dBt)^{-1} Msigma 
 			mfem::TripleProductOperator Ms_form(&dplanck, &dplanck_dt_inv, &Mtot, false, false, false); 
 			TransportOperator transport_op(D, Linv, Ms_form, psi); 
-			// MockSolver mock_solver; 
-			// outer_solver->SetPreconditioner(mock_solver); 
+			DiffusionSyntheticAccelerationOperator dsa_op(cgsolver, Ms_form); 
+			MockSolver mock_solver; 
+			outer_solver->SetPreconditioner(mock_solver); 
 			outer_solver->SetOperator(transport_op); 
-			// outer_solver->SetPreconditioner(cgsolver); 
+			outer_solver->SetPreconditioner(dsa_op); 
 			outer_solver->Mult(phi_source, phi); 
 			inners.Append(outer_solver->GetNumIterations()); 
 			max_inner_norm = std::max(max_inner_norm, outer_solver->GetFinalNorm()); 
@@ -759,6 +777,7 @@ int main(int argc, char *argv[]) {
 			dplanck_dt_inv.Mult(phi_source, dT); 
 
 			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
+			outer++; 
 			bool done = norm < abs_tol or outer == max_iter; 
 			if (done) {
 				Linv.UseFixup(use_fixup); 
@@ -778,32 +797,52 @@ int main(int argc, char *argv[]) {
 
 				// re-evaulate temperature given positive phi 
 				Mtot.Mult(phi, phi_source); 
-				temp_resid += phi_source;
-				dplanck_dt_inv.Mult(temp_resid, dT); 
-				for (int i=0; i<T.Size(); i++) {
-					double Tnew = T(i) + dT(i); 
-					if (Tnew < 0) {
-						EventLog["under relax"] += 1; 
-						T(i) = (1.0 - under_relax) * T(i) + under_relax*dT(i); 
-						// T(i) = T(i) + dT(i)*under_relax; 
-					} else {
-						T(i) = Tnew; 
+				// temp_resid += phi_source;
+				// dplanck_dt_inv.Mult(temp_resid, dT); 
+				// T += dT; 
+				// for (int i=0; i<T.Size(); i++) {
+				// 	double Tnew = T(i) + dT(i); 
+				// 	if (Tnew < 0) {
+				// 		EventLog["under relax (final)"] += 1; 
+				// 		// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
+				// 		T(i) = T(i) + dT(i)*under_relax; 
+				// 	} else {
+				// 		T(i) = Tnew; 
+				// 	}
+				// }
+
+				phi_source += T0; 
+				while (true) {
+					meb_form.Mult(T, temp_resid); 
+					temp_resid -= phi_source; 
+					NonlinearFormBlockInverse local_block_inv(meb_form, T); 
+					local_block_inv.Mult(temp_resid, dT); 
+					for (int i=0; i<T.Size(); i++) {
+						double Tnew = T(i) - dT(i); 
+						if (Tnew < 0) {
+							T(i) = T(i) - dT(i)*under_relax; 
+						} else {
+							T(i) = Tnew; 
+						}
 					}
+					inner_t_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
+					inner_t_iter++; 
+					if (inner_t_norm < abs_tol or inner_t_iter == 20) break; 
 				}
+
 				break;
 			} else {
 				for (int i=0; i<T.Size(); i++) {
 					double Tnew = T(i) + dT(i); 
 					if (Tnew < 0) {
 						EventLog["under relax"] += 1; 
-						T(i) = (1.0 - under_relax) * T(i) + under_relax*dT(i); 
-						// T(i) = T(i) + dT(i)*under_relax; 
+						// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
+						T(i) = T(i) + dT(i)*under_relax; 
 					} else {
 						T(i) = Tnew; 
 					}
 				}
 			}
-			outer++; 
 		}
 
 		if (outer==max_iter) 
@@ -865,6 +904,10 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "total" << YAML::Value << inners.Sum(); 
 				out << YAML::Key << "max norm" << YAML::Value << max_inner_norm; 
 			out << YAML::EndMap;
+			out << YAML::Key << "meb iteration" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "it" << YAML::Value << inner_t_iter; 
+				out << YAML::Key << "norm" << YAML::Value << inner_t_norm; 
+			out << YAML::EndMap; 
 			if (EventLog.size()) {
 				out << YAML::Key << "event log" << YAML::Value << YAML::BeginMap; 
 				for (const auto &it : EventLog) {
@@ -896,6 +939,8 @@ int main(int argc, char *argv[]) {
 	for (int i=0; i<nattr; i++) { delete total_list[i]; } 
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
+	delete nff_optimizer; 
+	delete nff_op; 
 
 	wall_timer.Stop(); 
 	double wall_time = wall_timer.RealTime(); 
