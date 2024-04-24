@@ -17,6 +17,7 @@ LIST(APPEND PAR_TESTS
 	test_diffusion_mms.cpp
 	test_smm.cpp
 	test_cons_smm.cpp
+	test_log.cpp
 )
 
 foreach(test ${TESTS})
