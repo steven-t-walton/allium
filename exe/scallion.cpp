@@ -406,7 +406,7 @@ int main(int argc, char *argv[]) {
 		if (sweep_opts_avail) out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value(); 
 	out << YAML::EndMap; 
 
-	SNTimeMassMatrix Mpsi(fes, psi_ext); 
+	SNTimeMassMatrix Mpsi(fes, psi_ext, lump); 
 	mfem::BilinearForm Mcv(&fes); 
 	if (lump)
 		Mcv.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(heat_capacity))); 
