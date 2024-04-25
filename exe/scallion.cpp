@@ -14,7 +14,6 @@
 #include "lumped_intrule.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
-using IterationLog = std::map<std::string,mfem::Array<int>>; 
 
 class MockSolver : public mfem::Solver {
 public:
@@ -103,6 +102,13 @@ int main(int argc, char *argv[]) {
 	out << YAML::EndMap; 
 	#endif
 	out << YAML::Key << "input file" << YAML::Value << io::ResolveRelativePath(input_file); 
+
+	// --- print physical constants --- 
+	out << YAML::Key << "physical constants" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "speed of light" << YAML::Value << constants::SpeedOfLight; 
+		out << YAML::Key << "radiation constant" << YAML::Value << constants::StefanBoltzmann / constants::SpeedOfLight; 
+		out << YAML::Key << "planck" << YAML::Value << constants::Planck; 
+	out << YAML::EndMap; 
 
 	// --- extract list of materials --- 
 	std::vector<std::string> attr_list; 
@@ -231,121 +237,33 @@ int main(int argc, char *argv[]) {
 		bdr_attr_map[bdr_attr_list[i]] = i+1; 
 	}
 
-	// --- print physical constants --- 
-	out << YAML::Key << "physical constants" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "speed of light" << YAML::Value << constants::SpeedOfLight; 
-		out << YAML::Key << "radiation constant" << YAML::Value << constants::StefanBoltzmann / constants::SpeedOfLight; 
-		out << YAML::Key << "planck" << YAML::Value << constants::Planck; 
-	out << YAML::EndMap; 
-
 	// --- make mesh and solution spaces --- 
 	sol::table mesh_node = lua["mesh"]; 
-	sol::optional<std::string> fname = mesh_node["file"]; 
-	// allow increasing lua refinement inputs with cmdline inputs -pr and -sr 
-	ser_ref += mesh_node["serial_refinements"].get_or(0); 
-	par_ref += mesh_node["parallel_refinements"].get_or(0); 
-	const int tot_ref = ser_ref + par_ref; 
-
-	mfem::Mesh smesh; 
-	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
-	// load from a mesh file 
-	if (fname) {
-		smesh = mfem::Mesh::LoadFromFile(fname.value(), 1, 1);
-		out << YAML::Key << "file name" << YAML::Value << io::ResolveRelativePath(fname.value()); 
-	} 
-
-	// create a cartesian mesh from extents and elements/axis 
-	else {
-		sol::table ne = mesh_node["num_elements"]; 
-		sol::table extents = mesh_node["extents"]; 
-		assert(ne.size() == extents.size()); 
-		int num_dim = ne.size(); 
-		io::ValidateOption("mesh::num_dim", num_dim, {1,2,3}, root); 
-		std::string eltype_str; 
-		mfem::Element::Type eltype; 
-		bool sfc_ordering = mesh_node["sfc_ordering"].get_or(false); 
-		if (num_dim==1) {
-			eltype_str = io::GetAndValidateOption(mesh_node, "element_type", {"segment"}, "segment", root); 
-			smesh = mfem::Mesh::MakeCartesian1D(ne[1], extents[1]);
-		} else if (num_dim==2) {
-			eltype_str = io::GetAndValidateOption(mesh_node, "element_type", 
-				{"quadrilateral", "triangle"}, "quadrilateral", root); 
-			if (eltype_str == "quadrilateral") {
-				eltype = mfem::Element::QUADRILATERAL; 
-			} 
-			else if (eltype_str == "triangle") {
-				eltype = mfem::Element::TRIANGLE; 
-			} 
-			smesh = mfem::Mesh::MakeCartesian2D(ne[1], ne[2], eltype, true, extents[1], extents[2], sfc_ordering); 
-		} else if (num_dim==3) {
-			eltype_str = io::GetAndValidateOption(mesh_node, "element_type", 
-				{"hexahedron", "tetrahedron"}, "hexahedron", root); 
-			if (eltype_str == "hexahedron") {
-				eltype = mfem::Element::HEXAHEDRON; 
-			} 
-			else if (eltype_str == "tetrahedron") {
-				eltype = mfem::Element::TETRAHEDRON; 
-			}
-			smesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], eltype, extents[1], extents[2], extents[3], sfc_ordering); 
-		}
-
-		out << YAML::Key << "extents" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
-		for (auto i=1; i<=extents.size(); i++) {
-			out << (double)extents[i]; 
-		} 
-		out << YAML::EndSeq; 
-
-		out << YAML::Key << "elements/axis" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
-		for (auto i=1; i<=ne.size(); i++) {
-			out << (int)ne[i] * pow(2,tot_ref); 
-		} 
-		out << YAML::EndSeq; 		
-		out << YAML::Key << "element type" << YAML::Value << eltype_str; 
-		out << YAML::Key << "space filling ordering" << YAML::Value << sfc_ordering; 
-	}
-	// apply serial refinements 
-	for (int sr=0; sr<ser_ref; sr++) {
-		smesh.UniformRefinement(); 
-	}
-	// need at minimum WorldSize() elements in serial mesh 
-	if (smesh.GetNE() < mfem::Mpi::WorldSize() and root) {
-		MFEM_ABORT("serial mesh with " << smesh.GetNE() << " elements too small to decompose on " 
-			<< mfem::Mpi::WorldSize() << " processors"); 
-	}
-	const auto dim = smesh.Dimension(); 
+	auto ser_mesh = io::CreateMesh(mesh_node, out, root); 
 
 	// --- assign materials to elements --- 
 	sol::function geom_func = lua["material_map"]; 
-	for (int e=0; e<smesh.GetNE(); e++) {
-		double c[3]; 
-		mfem::Vector cvec(c, dim); 
-		smesh.GetElementCenter(e, cvec);
-		std::string attr_name = geom_func(c[0], c[1], c[2]); 
-		if (!attr_map.contains(attr_name)) {
-			MFEM_ABORT("material named \"" << attr_name << "\" not defined"); 
-		}
-		int attr = attr_map[attr_name]; 
-		smesh.SetAttribute(e, attr); 
-	}			
-
+	io::SetMeshAttributes(ser_mesh, geom_func, attr_map, root); 
 	// --- assign boundary conditions to boundary elements --- 
 	sol::function bdr_func = lua["boundary_map"]; 
-	for (int e=0; e<smesh.GetNBE(); e++) {
-		const mfem::Element &el = *smesh.GetBdrElement(e); 
-		int geom = smesh.GetBdrElementGeometry(e);
-		mfem::ElementTransformation &trans = *smesh.GetBdrElementTransformation(e); 
-		double c[3]; 
-		mfem::Vector cvec(c, dim);  
-		trans.Transform(mfem::Geometries.GetCenter(geom), cvec); 
-		std::string attr_name = bdr_func(c[0], c[1], c[2]); 
-		if (!bdr_attr_map.contains(attr_name)) {
-			MFEM_ABORT("boundary condition named \"" << attr_name << "\" not defined"); 
-		}
-		smesh.SetBdrAttribute(e, bdr_attr_map[attr_name]); 
+	io::SetMeshBdrAttributes(ser_mesh, bdr_func, bdr_attr_map, root); 
+
+	// apply serial refinements 
+	// allow increasing lua refinement inputs with cmdline inputs -pr and -sr 
+	ser_ref += mesh_node["serial_refinements"].get_or(0); 
+	for (int sr=0; sr<ser_ref; sr++) {
+		ser_mesh.UniformRefinement(); 
 	}
+	// need at minimum WorldSize() elements in serial mesh 
+	if (ser_mesh.GetNE() < mfem::Mpi::WorldSize() and root) {
+		MFEM_ABORT("serial mesh with " << ser_mesh.GetNE() << " elements too small to decompose on " 
+			<< mfem::Mpi::WorldSize() << " processors"); 
+	}
+	const auto dim = ser_mesh.Dimension(); 
 
 	// --- create parallel mesh --- 
-	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
+	mfem::ParMesh mesh(MPI_COMM_WORLD, ser_mesh); 
+	par_ref += mesh_node["parallel_refinements"].get_or(0); 
 	for (int pr=0; pr<par_ref; pr++) {
 		mesh.UniformRefinement(); 
 	}
@@ -650,16 +568,18 @@ int main(int argc, char *argv[]) {
 	double kappa = pow(fe_order+1,2)*4; 
 	Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
 	Kform.AddDomainIntegrator(new mfem::MassIntegrator(total_dt)); 
-	for (auto &ptr : *Kform.GetDBFI()) {
-		ptr->SetIntegrationRule(lumped_intrule); 
-	}
 	Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2)); 
 	Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
-	for (auto &ptr : *Kform.GetBBFI()) {
-		ptr->SetIntegrationRule(lumped_intrule_face); 
-	}
-	for (auto &ptr : *Kform.GetFBFI()) {
-		ptr->SetIntegrationRule(lumped_intrule_face); 
+	if (lump) {
+		for (auto &ptr : *Kform.GetDBFI()) {
+			ptr->SetIntegrationRule(lumped_intrule); 
+		}
+		for (auto &ptr : *Kform.GetBBFI()) {
+			ptr->SetIntegrationRule(lumped_intrule_face); 
+		}
+		for (auto &ptr : *Kform.GetFBFI()) {
+			ptr->SetIntegrationRule(lumped_intrule_face); 
+		}		
 	}
 	Kform.Assemble(); 
 	Kform.Finalize(); 

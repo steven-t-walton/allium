@@ -20,6 +20,12 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table);
 // with the specified options 
 mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm); 
 
+mfem::Mesh CreateMesh(sol::table &table, YAML::Emitter &out, bool root=true); 
+void SetMeshAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f,
+	const std::unordered_map<std::string,int> &map, bool root=true);
+void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f, 
+	const std::unordered_map<std::string,int> &map, bool root=true);
+
 // set AMG options like max levels, num sweeps, etc via a lua table 
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root=true); 
 #ifdef MFEM_USE_SUPERLU

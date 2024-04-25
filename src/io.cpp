@@ -131,6 +131,106 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 	return s; 
 }
 
+mfem::Mesh CreateMesh(sol::table &table, YAML::Emitter &out, bool root) 
+{
+	mfem::Mesh mesh; 
+	sol::optional<std::string> fname = table["file"]; 
+	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
+	// load from a mesh file 
+	if (fname) {
+		mesh = mfem::Mesh::LoadFromFile(fname.value(), 1, 1);
+		out << YAML::Key << "file name" << YAML::Value << io::ResolveRelativePath(fname.value()); 
+	} 
+
+	// create a cartesian mesh from extents and elements/axis 
+	else {
+		sol::table ne = table["num_elements"]; 
+		sol::table extents = table["extents"]; 
+		assert(ne.size() == extents.size()); 
+		int num_dim = ne.size(); 
+		io::ValidateOption("mesh::num_dim", num_dim, {1,2,3}, root); 
+		std::string eltype_str; 
+		mfem::Element::Type eltype; 
+		bool sfc_ordering = table["sfc_ordering"].get_or(false); 
+		if (num_dim==1) {
+			eltype_str = io::GetAndValidateOption(table, "element_type", {"segment"}, "segment", root); 
+			mesh = mfem::Mesh::MakeCartesian1D(ne[1], extents[1]);
+		} else if (num_dim==2) {
+			eltype_str = io::GetAndValidateOption(table, "element_type", 
+				{"quadrilateral", "triangle"}, "quadrilateral", root); 
+			if (eltype_str == "quadrilateral") {
+				eltype = mfem::Element::QUADRILATERAL; 
+			} 
+			else if (eltype_str == "triangle") {
+				eltype = mfem::Element::TRIANGLE; 
+			} 
+			mesh = mfem::Mesh::MakeCartesian2D(ne[1], ne[2], eltype, true, extents[1], extents[2], sfc_ordering); 
+		} else if (num_dim==3) {
+			eltype_str = io::GetAndValidateOption(table, "element_type", 
+				{"hexahedron", "tetrahedron"}, "hexahedron", root); 
+			if (eltype_str == "hexahedron") {
+				eltype = mfem::Element::HEXAHEDRON; 
+			} 
+			else if (eltype_str == "tetrahedron") {
+				eltype = mfem::Element::TETRAHEDRON; 
+			}
+			mesh = mfem::Mesh::MakeCartesian3D(ne[1], ne[2], ne[3], eltype, extents[1], extents[2], extents[3], sfc_ordering); 
+		}
+
+		out << YAML::Key << "extents" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+		for (auto i=1; i<=extents.size(); i++) {
+			out << (double)extents[i]; 
+		} 
+		out << YAML::EndSeq; 
+
+		out << YAML::Key << "elements/axis" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+		for (auto i=1; i<=ne.size(); i++) {
+			// out << (int)ne[i] * pow(2,tot_ref); 
+			out << (int)ne[i]; 
+		} 
+		out << YAML::EndSeq; 		
+		out << YAML::Key << "element type" << YAML::Value << eltype_str; 
+		out << YAML::Key << "space filling ordering" << YAML::Value << sfc_ordering; 
+	}
+	return mesh; 
+}
+
+void SetMeshAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f,
+	const std::unordered_map<std::string,int> &map, bool root)
+{
+	const auto dim = mesh.Dimension(); 
+	for (int e=0; e<mesh.GetNE(); e++) {
+		double c[3]; 
+		mfem::Vector cvec(c, dim); 
+		mesh.GetElementCenter(e, cvec);
+		std::string attr_name = f(c[0], c[1], c[2]); 
+		if (!map.contains(attr_name) and root) {
+			MFEM_ABORT("material named \"" << attr_name << "\" not defined"); 
+		}
+		int attr = map.at(attr_name); 
+		mesh.SetAttribute(e, attr); 
+	}		
+}
+
+void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f,
+	const std::unordered_map<std::string,int> &map, bool root)
+{
+	const auto dim = mesh.Dimension(); 
+	for (int e=0; e<mesh.GetNBE(); e++) {
+		const mfem::Element &el = *mesh.GetBdrElement(e); 
+		int geom = mesh.GetBdrElementGeometry(e);
+		mfem::ElementTransformation &trans = *mesh.GetBdrElementTransformation(e); 
+		double c[3]; 
+		mfem::Vector cvec(c, dim);  
+		trans.Transform(mfem::Geometries.GetCenter(geom), cvec); 
+		std::string attr_name = f(c[0], c[1], c[2]); 
+		if (!map.contains(attr_name) and root) {
+			MFEM_ABORT("boundary condition named \"" << attr_name << "\" not defined"); 
+		}
+		mesh.SetBdrAttribute(e, map.at(attr_name)); 
+	}
+}
+
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root) 
 {
 	for (const auto &it : table) {
