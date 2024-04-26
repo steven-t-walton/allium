@@ -10,9 +10,9 @@ SNTimeMassMatrix::SNTimeMassMatrix(const mfem::FiniteElementSpace &fes,
 	for (int e=0; e<fes.GetNE(); e++) {
 		fes.GetElementDofs(e, dofs); 
 		mats[e] = new mfem::DenseMatrix(dofs.Size()); 
+		mi.AssembleElementMatrix(*fes.GetFE(e), *fes.GetElementTransformation(e), *mats[e]); 
 		if (lump)
 			mats[e]->Lump(); 
-		mi.AssembleElementMatrix(*fes.GetFE(e), *fes.GetElementTransformation(e), *mats[e]); 
 	}
 }
 
