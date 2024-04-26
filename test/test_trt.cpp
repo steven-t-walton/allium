@@ -9,6 +9,46 @@ TEST(LumpedTRT, Emission1D) {
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
 	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
+	mfem::ConstantCoefficient coef(1.0/constants::StefanBoltzmann); 
+	auto nfi = BlackBodyEmissionNFI(coef, 2, 2); 
+	nfi.SetIntegrationRule(lumped_intrule); 
+	const auto &fe = *fes.GetFE(0); 
+	mfem::Vector elfun(fe.GetDof()); 
+	elfun(0) = 1.0; 
+	elfun(1) = 2.0; 
+	mfem::Vector elvec; 
+	nfi.AssembleElementVector(fe, *fes.GetElementTransformation(0), elfun, elvec); 
+	mfem::Vector ex({0.5, pow(2.0,4)/2}); 
+	ex -= elvec; 
+	EXPECT_NEAR(ex.Norml2(), 0.0, 1e-14); 
+}
+
+TEST(LumpedTRT, Emission2D) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(1, 1, mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
+	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
+	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
+	mfem::ConstantCoefficient coef(1.0/constants::StefanBoltzmann); 
+	auto nfi = BlackBodyEmissionNFI(coef, 2, 2); 
+	nfi.SetIntegrationRule(lumped_intrule); 
+	const auto &fe = *fes.GetFE(0); 
+	mfem::Vector elfun(fe.GetDof()); 
+	elfun(0) = 0.0; 
+	elfun(1) = 1.0; 
+	elfun(2) = 2.0; 
+	elfun(3) = 3.0; 
+	mfem::Vector elvec; 
+	nfi.AssembleElementVector(fe, *fes.GetElementTransformation(0), elfun, elvec); 
+	mfem::Vector ex({0.0, 0.25, 4.0, pow(3.0, 4)/4}); 
+	ex -= elvec; 
+	EXPECT_NEAR(ex.Norml2(), 0.0, 1e-13); 
+}
+
+TEST(LumpedTRT, EmissionJacobian1D) {
+	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0); 
+	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
+	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
 	mfem::ConstantCoefficient coef(1.0); 
 	auto nfi = BlackBodyEmissionNFI(coef, 2, 2); 
 	nfi.SetIntegrationRule(lumped_intrule); 
@@ -24,7 +64,7 @@ TEST(LumpedTRT, Emission1D) {
 	EXPECT_NEAR(norm, 0.0, 1e-14); 
 }
 
-TEST(LumpedTRT, LumpedEmission2D) {
+TEST(LumpedTRT, EmissionJacobian2D) {
 	auto mesh = mfem::Mesh::MakeCartesian2D(1, 1, mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
