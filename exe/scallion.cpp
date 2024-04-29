@@ -12,6 +12,7 @@
 #include "trt_integrators.hpp"
 #include "mip.hpp"
 #include "lumped_intrule.hpp"
+#include "tracer.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
 
@@ -44,13 +45,13 @@ int main(int argc, char *argv[]) {
 	CommentStreamBuf comm_buf(mfem::out, '#'); 
 
 	if (root) {
-		mfem::out << "\033[1;31m                       ___    ___                           \033[0m\n";
-		mfem::out << "\033[1;31m                      /\\_ \\  /\\_ \\    __                    \033[0m\n";
-		mfem::out << "\033[1;31m  ____    ___     __  \\//\\ \\ \\//\\ \\  /\\_\\    ___     ___    \033[0m\n";
-		mfem::out << "\033[1;31m /',__\\  /'___\\ /'__`\\  \\ \\ \\  \\ \\ \\ \\/\\ \\  / __`\\ /' _ `\\  \033[0m\n";
-		mfem::out << "\033[1;31m/\\__, `\\/\\ \\__//\\ \\L\\.\\_ \\_\\ \\_ \\_\\ \\_\\ \\ \\/\\ \\L\\ \\ /\\ \\/\\ \033[0m\n";
-		mfem::out << "\033[1;31m\\/\\____/\\ \\____\\ \\__/\\._\\/\\____\\/\\____\\\\ \\_\\ \\____/\\ \\_\\ \\_\\\033[0m\n";
-		mfem::out << "\033[1;31m \\/___/  \\/____/\\/__/\\/_/\\/____/\\/____/ \\/_/\\/___/  \\/_/\\/_/\033[0m\n";
+		mfem::out << "                       ___    ___                           \n";
+		mfem::out << "                      /\\_ \\  /\\_ \\    __                    \n";
+		mfem::out << "  ____    ___     __  \\//\\ \\ \\//\\ \\  /\\_\\    ___     ___    \n";
+		mfem::out << " /',__\\  /'___\\ /'__`\\  \\ \\ \\  \\ \\ \\ \\/\\ \\  / __`\\ /' _ `\\  \n";
+		mfem::out << "/\\__, `\\/\\ \\__//\\ \\L\\.\\_ \\_\\ \\_ \\_\\ \\_\\ \\ \\/\\ \\L\\ \\ /\\ \\/\\ \n";
+		mfem::out << "\\/\\____/\\ \\____\\ \\__/\\._\\/\\____\\/\\____\\\\ \\_\\ \\____/\\ \\_\\ \\_\\\n";
+		mfem::out << " \\/___/  \\/____/\\/__/\\/_/\\/____/\\/____/ \\/_/\\/___/  \\/_/\\/_/\n";
 		mfem::out << "\n                         a thermal radiative transfer solver\n"; 
 		mfem::out << std::endl; 
 	}
@@ -539,7 +540,8 @@ int main(int argc, char *argv[]) {
 	mfem::ParGridFunction density_gf(&fes0); density_gf.ProjectCoefficient(density); 
 	sol::table output = lua["output"]; 
 	const int output_freq = output["frequency"].get_or(std::numeric_limits<int>::max()); 
-	mfem::ParaViewDataCollection dc(output["paraview"], &mesh); 
+	const std::string output_root = output["paraview"]; 
+	mfem::ParaViewDataCollection dc(output_root, &mesh); 
 	dc.RegisterField("phi", &phi); 
 	dc.RegisterField("T", &T); 
 	dc.RegisterField("Tpw", &Tpw); 
@@ -549,6 +551,29 @@ int main(int argc, char *argv[]) {
 	dc.RegisterField("fixup diff", &phi0); 
 	dc.SetCycle(0); dc.SetTime(0.0); dc.SetTimeStep(time_step); 
 	dc.Save(); 
+
+	sol::optional<sol::table> tracer_avail = output["tracer"]; 
+	std::unique_ptr<TracerDataCollection> tracer_dc; 
+	if (tracer_avail) {
+		sol::table tracer = tracer_avail.value(); 
+		auto ntracers = tracer.size(); 
+		mfem::Vector pos(dim*ntracers); 
+		mfem::DenseMatrix pts(dim, ntracers); 
+		for (int i=0; i<ntracers; i++) {
+			sol::table tracer_pts = tracer[i+1]; 
+			for (int d=0; d<tracer_pts.size(); d++) {
+				pts(d,i) = tracer_pts[d+1]; 
+			}
+		}
+		tracer_dc = std::make_unique<TracerDataCollection>("tracer", mesh, pts); 
+		tracer_dc->SetPrefixPath(output_root); 
+		tracer_dc->SetPrecision(10); 
+		tracer_dc->RegisterField("phi", &phi); 
+		tracer_dc->RegisterField("T", &T); 
+		tracer_dc->RegisterField("sigma", &total_gf); 
+		tracer_dc->SetCycle(0); tracer_dc->SetTime(0.0); tracer_dc->SetTimeStep(time_step); 
+		tracer_dc->Save(); 
+	}
 
 	mfem::BilinearForm Mtot(&fes); 
 	if (lump) 
@@ -743,6 +768,11 @@ int main(int argc, char *argv[]) {
 			dc.Save(); 			
 		}
 
+		if (tracer_dc) {
+			tracer_dc->SetCycle(cycle); tracer_dc->SetTime(time); tracer_dc->SetTimeStep(time_step); 
+			tracer_dc->Save(); 
+		}
+
 		// check for new time step size 
 		bool time_step_changed = false; 
 		if (time_step_func_avail) {
@@ -778,12 +808,14 @@ int main(int argc, char *argv[]) {
 		cycle_timer.Stop(); 
 		double cycle_time = cycle_timer.RealTime(); 
 		log["max schur solves"] = std::max(inners.Max(), log["max schur solves"]); 
+
+		const double radE_norm = mfem::InnerProduct(MPI_COMM_WORLD, phi, phi) / constants::SpeedOfLight; 
 		// output progress 
 		out << YAML::BeginMap; 
 			out << YAML::Key << "cycle" << YAML::Value << cycle; 
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
 			out << YAML::Key << "time step size" << YAML::Value << time_step; 
-			out << YAML::Key << "||phi||" << YAML::Value << phi.Norml2(); 
+			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
 			out << YAML::Key << "it" << YAML::Value << outer; 
 			out << YAML::Key << "norm" << YAML::Value << norm;  
 			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
@@ -831,6 +863,7 @@ int main(int argc, char *argv[]) {
 	delete nff_optimizer; 
 	delete nff_op; 
 
+	out << YAML::Key << "output" << YAML::Value << io::ResolveRelativePath(output_root);
 	wall_timer.Stop(); 
 	double wall_time = wall_timer.RealTime(); 
 	out << YAML::Key << "wall time" << YAML::Value << io::FormatTimeString(wall_time); 
