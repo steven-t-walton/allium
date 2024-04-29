@@ -809,7 +809,7 @@ int main(int argc, char *argv[]) {
 		double cycle_time = cycle_timer.RealTime(); 
 		log["max schur solves"] = std::max(inners.Max(), log["max schur solves"]); 
 
-		const double radE_norm = mfem::InnerProduct(MPI_COMM_WORLD, phi, phi) / constants::SpeedOfLight; 
+		const double radE_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi, phi)) / constants::SpeedOfLight; 
 		// output progress 
 		out << YAML::BeginMap; 
 			out << YAML::Key << "cycle" << YAML::Value << cycle; 

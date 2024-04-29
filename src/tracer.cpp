@@ -29,11 +29,11 @@ void TracerDataCollection::SetMesh(mfem::Mesh *mesh)
 struct FixedWidthFormatter {
 	int precision, width; 
 	void operator()(std::ostream &out, int value, bool start=false) {
-		if (!start) out << " "; 
+		if (!start) out << ","; 
 		out << std::setw(precision) << std::setfill('0') << value; 
 	}
 	void operator()(std::ostream &out, double value, bool start=false) {
-		if (!start) out << " "; 
+		if (!start) out << ","; 
 		out << std::scientific << std::setprecision(precision) << std::setw(width) << value; 
 	}
 };
@@ -49,15 +49,15 @@ void TracerDataCollection::Save()
 				std::stringstream fname_ss; 
 				fname_ss << prefix_path << name << "." << n << ".csv"; 
 				out.open(fname_ss.str()); 
-				out << "# cycle t dt x y z";
+				out << "cycle,time,time step,x,y,z";
 				for (auto &field : field_map) {
 					if (field.second->VectorDim()>1) {
-						out << " " << field.first << "_x "
-							<< field.first << "_y " 
-							<< field.first << "_z "; 
+						out << "," << field.first << "_x,"
+							<< field.first << "_y," 
+							<< field.first << "_z"; 
 					}
 					else {
-						out << " " << field.first; 						
+						out << "," << field.first; 						
 					}
 				} 
 				out << std::endl; 
