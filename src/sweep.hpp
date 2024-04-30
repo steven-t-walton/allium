@@ -9,6 +9,17 @@
 
 class InverseAdvectionOperator : public mfem::Operator 
 {
+public:
+	// enum for bitset operations to define lumping scheme 
+	// 0 = no lumping 
+	// 1 = lump mass 
+	// 5 = lump mass and faces 
+	// 7 = lump everything 
+	enum LumpType {
+		MASS = 1, 
+		GRADIENT = 2, 
+		FACE = 4 
+	};
 private:
 	mfem::ParMesh &mesh; 
 	mfem::ParFiniteElementSpace &fes; 
@@ -60,13 +71,13 @@ private:
 	// to receive data 
 	int send_buffer_size = 8; 
 	// use lumping 
-	bool lump = false; 
+	int lump = 0; 
 
 	bool apply_fixup = false; 
 	NegativeFluxFixupOperator *fixup_op = nullptr; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-		mfem::GridFunction &_total_data, int reflection_bdr_attr=-1, bool lump=false); 
+		mfem::GridFunction &_total_data, int reflection_bdr_attr=-1, int lump=0); 
 	~InverseAdvectionOperator(); 
 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 

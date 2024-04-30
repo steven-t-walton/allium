@@ -5,7 +5,7 @@
 #include "lumped_intrule.hpp"
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-	mfem::GridFunction &_total_data, int reflection_bdr_attr, bool use_lumping)
+	mfem::GridFunction &_total_data, int reflection_bdr_attr, int use_lumping)
 	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total_data(_total_data), lump(use_lumping)
 {
 	if (lump) {
@@ -561,7 +561,7 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			mfem::GridFunctionCoefficient total(&total_data, g+1); // component is 1-based :( 
 			mfem::MassIntegrator mi(total); 
 			mass_mat_view(g,e) = new mfem::DenseMatrix; 
-			if (lump) mi.SetIntegrationRule(lumped_ir); 
+			if (lump & LumpType::MASS) mi.SetIntegrationRule(lumped_ir); 
 			mi.AssembleElementMatrix(fe, trans, *mass_mat_view(g,e)); 
 		}
 
@@ -572,7 +572,7 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			Omega(d) = 1.0; 
 			mfem::VectorConstantCoefficient Q(Omega); 
 			mfem::ConservativeConvectionIntegrator conv_int(Q, 1.0); 
-			if (lump) conv_int.SetIntegrationRule(lumped_ir); 
+			if (lump & LumpType::GRADIENT) conv_int.SetIntegrationRule(lumped_ir); 
 			conv_int.AssembleElementMatrix(fe, trans, *grad_mat_view(d,e)); 
 		}
 	}	
@@ -601,7 +601,7 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 		// setup lumped integration rule 
 		const auto &trace_fe = *fes.GetTraceElement(face_trans->Elem1No, face_trans->GetGeometryType()); 
 		LumpedIntegrationRule lumped_ir(trace_fe); 
-		if (lump) fmi.SetIntegrationRule(lumped_ir); 
+		if (lump & LumpType::FACE) fmi.SetIntegrationRule(lumped_ir); 
 
 		fmi.AssembleFaceMatrix(el1, *el2, *face_trans, elmat);
 		const auto dof1 = el1.GetDof(); 

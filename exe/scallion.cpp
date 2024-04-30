@@ -13,6 +13,7 @@
 #include "mip.hpp"
 #include "lumped_intrule.hpp"
 #include "tracer.hpp"
+#include "p1diffusion.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
 
@@ -20,6 +21,21 @@ class MockSolver : public mfem::Solver {
 public:
 	void SetOperator(const mfem::Operator &op) { }
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const { y = x; }
+};
+
+class InnerIterativeSolverMonitor : public mfem::IterativeSolverMonitor
+{
+private:
+	const mfem::IterativeSolver &solver; 
+public:
+	int max_it = 0; 
+	double max_norm = 0.0; 
+
+	InnerIterativeSolverMonitor(const mfem::IterativeSolver &s) : solver(s) { }
+	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
+		max_norm = std::max(solver.GetFinalRelNorm(), max_norm); 
+		max_it = std::max(solver.GetNumIterations(), max_it); 
+	}
 };
 
 int main(int argc, char *argv[]) {
@@ -383,7 +399,7 @@ int main(int argc, char *argv[]) {
 	auto *outer_solver = io::CreateIterativeSolver(solver, MPI_COMM_WORLD);
 	const int max_iter = newton_solver["max_iter"]; 
 	const double abs_tol = newton_solver["abstol"]; 
-	const bool lump = driver["lump"].get_or(false); 
+	const int lump = driver["lump"].get_or(0); 
 	sol::optional<sol::table> sweep_opts_avail = driver["sweep_opts"]; 
 
 	// --- output algorithmic options used --- 
@@ -454,6 +470,7 @@ int main(int argc, char *argv[]) {
 	total_coef.SetTemperature(Tcoef); 
 	total_coef.SetDensity(density); 
 	total_gf.ProjectCoefficient(total_coef); 
+	total_gf.ExchangeFaceNbrData(); 
 	mfem::GridFunctionCoefficient total(&total_gf); 
 
 	for (int i=0; i<fes.GetVSize(); i++) {
@@ -637,17 +654,25 @@ int main(int argc, char *argv[]) {
 	const double alpha = ComputeAlpha(*quad, nor); 
 
 	mfem::ParBilinearForm Kform(&fes); 
-	mfem::RatioCoefficient diffco(1.0/3, total_dt); 
+	mfem::RatioCoefficient diffco(1.0/3, total); 
 	mfem::ConstantCoefficient alpha_c(alpha/2);
 	double kappa = pow(fe_order+1,2)*4; 
-	Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
-	Kform.AddDomainIntegrator(new mfem::MassIntegrator(total_dt)); 
+	mfem::Array<int> marshak_bdr_attrs(mesh.bdr_attributes.Max()); 
+	marshak_bdr_attrs = 1;
+	if (reflection_bdr_attr > 0) {
+		marshak_bdr_attrs[reflection_bdr_attr-1] = 0; 
+	}
+	auto *diff_int = new mfem::DiffusionIntegrator(diffco); 
+	if (lump & InverseAdvectionOperator::LumpType::GRADIENT)
+		diff_int->SetIntegrationRule(lumped_intrule); 
+	Kform.AddDomainIntegrator(diff_int); 
+	auto *mass_int = new mfem::MassIntegrator(total_dt); 
+	if (lump & InverseAdvectionOperator::LumpType::MASS)
+		mass_int->SetIntegrationRule(lumped_intrule); 
+	Kform.AddDomainIntegrator(mass_int); 
 	Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2)); 
-	Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c)); 
-	if (lump) {
-		for (auto &ptr : *Kform.GetDBFI()) {
-			ptr->SetIntegrationRule(lumped_intrule); 
-		}
+	Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
+	if (lump & InverseAdvectionOperator::LumpType::FACE) {
 		for (auto &ptr : *Kform.GetBBFI()) {
 			ptr->SetIntegrationRule(lumped_intrule_face); 
 		}
@@ -686,6 +711,8 @@ int main(int argc, char *argv[]) {
 		cgsolver.SetPreconditioner(amg); 
 		cgsolver.SetMaxIter(100); 
 		cgsolver.iterative_mode = false; 
+		InnerIterativeSolverMonitor dsa_solve_monitor(cgsolver); 
+		outer_solver->SetMonitor(dsa_solve_monitor); 
 
 		Linv.UseFixup(false); 
 		int inner_t_iter = 0;
@@ -721,7 +748,7 @@ int main(int argc, char *argv[]) {
 			outer_solver->SetPreconditioner(dsa_op); 
 			outer_solver->Mult(phi_source, phi); 
 			inners.Append(outer_solver->GetNumIterations()); 
-			max_inner_norm = std::max(max_inner_norm, outer_solver->GetFinalNorm()); 
+			max_inner_norm = std::max(max_inner_norm, outer_solver->GetFinalRelNorm()); 
 			if (!outer_solver->GetConverged()) log["schur solve failed"] += 1; 
 
 			// solve for temperature update 
@@ -841,6 +868,7 @@ int main(int argc, char *argv[]) {
 			// recompute opacities 
 			total_gf.ProjectCoefficient(total_coef); 
 			total_gf_dt.ProjectCoefficient(total_dt_coef); 
+			total_gf.ExchangeFaceNbrData(); 
 			total_gf_dt.ExchangeFaceNbrData(); 
 
 			// recompute sweep data 
@@ -884,6 +912,10 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "avg" << YAML::Value << (double)inners.Sum()/inners.Size(); 
 				out << YAML::Key << "total" << YAML::Value << inners.Sum(); 
 				out << YAML::Key << "max norm" << YAML::Value << max_inner_norm; 
+				out << YAML::Key << "dsa solver" << YAML::Value << YAML::BeginMap; 
+					out << YAML::Key << "max it" << YAML::Value << dsa_solve_monitor.max_it; 
+					out << YAML::Key << "max norm" << YAML::Value << dsa_solve_monitor.max_norm; 
+				out << YAML::EndMap; 
 			out << YAML::EndMap;
 			out << YAML::Key << "meb iteration" << YAML::Value << YAML::BeginMap; 
 				out << YAML::Key << "it" << YAML::Value << inner_t_iter; 
