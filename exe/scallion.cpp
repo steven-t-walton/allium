@@ -536,44 +536,93 @@ int main(int argc, char *argv[]) {
 		bbenfi->SetIntegrationRule(lumped_intrule); 
 	emission_form.AddDomainIntegrator(bbenfi); // emission_form owns ptr 
 
+	out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
 	mfem::ParGridFunction cvgf(&fes0); cvgf.ProjectCoefficient(heat_capacity); 
 	mfem::ParGridFunction density_gf(&fes0); density_gf.ProjectCoefficient(density); 
-	sol::table output = lua["output"]; 
-	const int output_freq = output["frequency"].get_or(std::numeric_limits<int>::max()); 
-	const std::string output_root = output["paraview"]; 
-	mfem::ParaViewDataCollection dc(output_root, &mesh); 
-	dc.RegisterField("phi", &phi); 
-	dc.RegisterField("T", &T); 
-	dc.RegisterField("Tpw", &Tpw); 
-	dc.RegisterField("sigma", &total_gf); 
-	dc.RegisterField("cv", &cvgf); 
-	dc.RegisterField("density", &density_gf); 
-	dc.RegisterField("fixup diff", &phi0); 
-	dc.SetCycle(0); dc.SetTime(0.0); dc.SetTimeStep(time_step); 
-	dc.Save(); 
-
-	sol::optional<sol::table> tracer_avail = output["tracer"]; 
+	mfem::ParGridFunction partition(&fes0); partition = rank; 
+	sol::optional<sol::table> output_avail = lua["output"]; 
+	std::unique_ptr<mfem::DataCollection> dc; 
 	std::unique_ptr<TracerDataCollection> tracer_dc; 
-	if (tracer_avail) {
-		sol::table tracer = tracer_avail.value(); 
-		auto ntracers = tracer.size(); 
-		mfem::Vector pos(dim*ntracers); 
-		mfem::DenseMatrix pts(dim, ntracers); 
-		for (int i=0; i<ntracers; i++) {
-			sol::table tracer_pts = tracer[i+1]; 
-			for (int d=0; d<tracer_pts.size(); d++) {
-				pts(d,i) = tracer_pts[d+1]; 
+	int output_freq; 
+	if (output_avail) {
+		sol::table output = output_avail.value(); 
+		const std::string output_root = output["root"]; 
+		out << YAML::Key << "root" << YAML::Value << io::ResolveRelativePath(output_root); 
+		sol::optional<sol::table> viz_avail = output["visualization"];
+		if (viz_avail) {
+			sol::table viz = viz_avail.value(); 
+			const std::string type = io::GetAndValidateOption<std::string>(viz, "type", {"paraview", "visit", "glvis"}, "paraview", root); 
+			if (type == "paraview") {
+				dc = std::make_unique<mfem::ParaViewDataCollection>(output_root, &mesh); 
+			} else if (type == "visit") {
+				const std::string collection_name = output_root + "/" + output_root; 
+				dc = std::make_unique<mfem::VisItDataCollection>(collection_name, &mesh); 
+			} else if (type == "glvis") {
+				const std::string collection_name = output_root + "/" + output_root; 
+				dc = std::make_unique<mfem::DataCollection>(collection_name, &mesh); 
 			}
+			output_freq = viz["frequency"].get_or(std::numeric_limits<int>::max()); 
+			const int precision = viz["precision"].get_or(6); 
+			dc->SetPrecision(precision); 
+			dc->RegisterField("phi", &phi); 
+			dc->RegisterField("T", &T); 
+			dc->RegisterField("Tpw", &Tpw); 
+			dc->RegisterField("sigma", &total_gf); 
+			dc->RegisterField("cv", &cvgf); 
+			dc->RegisterField("density", &density_gf); 
+			dc->RegisterField("fixup diff", &phi0); 
+			dc->RegisterField("partition", &partition); 
+			dc->SetCycle(0); dc->SetTime(0.0); dc->SetTimeStep(time_step); 
+			dc->Save(); 
+
+			out << YAML::Key << "visualization" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "type" << YAML::Value << type; 
+				out << YAML::Key << "frequency" << YAML::Value << output_freq; 
+				out << YAML::Key << "precision" << YAML::Value << precision; 
+			out << YAML::EndMap; 
+		} 
+
+		sol::optional<sol::table> tracer_avail = output["tracer"]; 
+		if (tracer_avail) {
+			sol::table tracer = tracer_avail.value(); 
+			sol::table locations = tracer["locations"]; 
+			auto ntracers = locations.size(); 
+			mfem::DenseMatrix pts(dim, ntracers); 
+			for (int i=0; i<ntracers; i++) {
+				sol::table tracer_pts = locations[i+1]; 
+				for (int d=0; d<tracer_pts.size(); d++) {
+					pts(d,i) = tracer_pts[d+1]; 
+				}
+			}
+			const auto prefix = tracer["prefix"].get_or(std::string("tracer")); 
+			const int precision = tracer["precision"].get_or(10); 
+			tracer_dc = std::make_unique<TracerDataCollection>(prefix, mesh, pts); 
+			tracer_dc->SetPrefixPath(output_root); 
+			tracer_dc->SetPrecision(precision); 
+			tracer_dc->RegisterField("phi", &phi); 
+			tracer_dc->RegisterField("T", &T); 
+			tracer_dc->RegisterField("Tpwc", &Tpw); 
+			tracer_dc->RegisterField("sigma", &total_gf); 
+			tracer_dc->SetCycle(0); tracer_dc->SetTime(0.0); tracer_dc->SetTimeStep(time_step); 
+			tracer_dc->Save(); 
+
+			out << YAML::Key << "tracer" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "prefix" << YAML::Value << prefix; 
+				out << YAML::Key << "precision" << YAML::Value << precision; 
+				out << YAML::Key << "locations" << YAML::Value << YAML::BeginSeq; 
+				for (int i=0; i<ntracers; i++) {
+					sol::table tracer_pts = locations[i+1]; 
+					out << YAML::Flow << YAML::BeginSeq;  
+					for (int d=0; d<tracer_pts.size(); d++) {
+						out << (double)tracer_pts[d+1]; 
+					}
+					out << YAML::EndSeq; 
+				}
+				out << YAML::EndSeq; 
+			out << YAML::EndMap; 
 		}
-		tracer_dc = std::make_unique<TracerDataCollection>("tracer", mesh, pts); 
-		tracer_dc->SetPrefixPath(output_root); 
-		tracer_dc->SetPrecision(10); 
-		tracer_dc->RegisterField("phi", &phi); 
-		tracer_dc->RegisterField("T", &T); 
-		tracer_dc->RegisterField("sigma", &total_gf); 
-		tracer_dc->SetCycle(0); tracer_dc->SetTime(0.0); tracer_dc->SetTimeStep(time_step); 
-		tracer_dc->Save(); 
 	}
+	out << YAML::EndMap; 
 
 	mfem::BilinearForm Mtot(&fes); 
 	if (lump) 
@@ -753,6 +802,10 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
+		// get peicewise constant version of temperature 
+		// used for comparison to other codes 
+		Tpw.ProjectGridFunction(T); 
+
 		if (outer==max_iter) 
 			log["newton non-convergence"] += 1; 
 
@@ -760,12 +813,11 @@ int main(int argc, char *argv[]) {
 		time += time_step; 
 		cycle++; 
 		bool done = time >= final_time - 1e-14 or cycle == max_cycles; 
-		if (cycle % output_freq == 0 or done) {
-			Tpw.ProjectGridFunction(T); 
-			dc.SetCycle(cycle); 
-			dc.SetTime(time); 
-			dc.SetTimeStep(time_step); 
-			dc.Save(); 			
+		if (dc and (cycle % output_freq == 0 or done)) {
+			dc->SetCycle(cycle); 
+			dc->SetTime(time); 
+			dc->SetTimeStep(time_step); 
+			dc->Save(); 			
 		}
 
 		if (tracer_dc) {
@@ -786,23 +838,31 @@ int main(int argc, char *argv[]) {
 		if (T.Min() < 0) MFEM_ABORT("negative temperature"); 
 		// update opacity and opacity-dependent terms 
 		if (temp_dependent_opacity or time_step_changed) {
+			// recompute opacities 
 			total_gf.ProjectCoefficient(total_coef); 
 			total_gf_dt.ProjectCoefficient(total_dt_coef); 
 			total_gf_dt.ExchangeFaceNbrData(); 
+
+			// recompute sweep data 
 			Linv.AssembleLocalMatrices(); 
+
+			// total interaction mass matrix
+			// depends on sigma and dt 
 			delete Mtot.LoseMat();
 			Mtot.Assemble(); 
 			Mtot.Finalize(); 	
 
-			delete Kform.LoseMat(); 
+			// DSA matrix depends on sigma and dt 
+			delete Kform.LoseMat(); // delete serial sparsematrix 
 			Kform.Assemble(); 
 			Kform.Finalize(); 
-			dsa_mat.reset(Kform.ParallelAssemble());		
+			dsa_mat.reset(Kform.ParallelAssemble()); // delete current, replace with new 
 		}
 
 		// store time step 
 		x0 = x; 
 
+		// get statistics from library code in parallel 
 		EventLog.Synchronize(); 
 
 		cycle_timer.Stop(); 
@@ -840,8 +900,11 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap << YAML::Newline; 
 		EventLog.clear(); 
 
+		// warn if max cycles reached 
 		if (cycle == max_cycles and root) 
 			MFEM_WARNING("max cycles reached. simulation end time not equal to final time"); 
+
+		// end time integration 
 		if (done) break; 
 	}
 	out << YAML::EndSeq; 
@@ -863,7 +926,6 @@ int main(int argc, char *argv[]) {
 	delete nff_optimizer; 
 	delete nff_op; 
 
-	out << YAML::Key << "output" << YAML::Value << io::ResolveRelativePath(output_root);
 	wall_timer.Stop(); 
 	double wall_time = wall_timer.RealTime(); 
 	out << YAML::Key << "wall time" << YAML::Value << io::FormatTimeString(wall_time); 
