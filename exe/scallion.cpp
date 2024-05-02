@@ -74,12 +74,13 @@ int main(int argc, char *argv[]) {
 
 	// parse cmdline arguments 
 	std::string input_file, lua_cmds; 
-	int par_ref = 0, ser_ref = 0; 
+	int par_ref = 0, ser_ref = 0, max_cycles_override = 0; 
 	mfem::OptionsParser args(argc, argv); 
 	args.AddOption(&input_file, "-i", "--input", "input file name", true); 
 	args.AddOption(&lua_cmds, "-l", "--lua", "lua commands to run", false); 
 	args.AddOption(&ser_ref, "-sr", "--serial_refinements", "additional uniform refinements in serial"); 
 	args.AddOption(&par_ref, "-pr", "--parallel_refinements", "additional uniform refinements in parallel"); 
+	args.AddOption(&max_cycles_override, "-mc", "--max_cycles", "limit cycles"); 
 	args.Parse(); 
 	if (!args.Good()) {
 		args.PrintUsage(par_out); 
@@ -391,7 +392,8 @@ int main(int argc, char *argv[]) {
 		MFEM_ABORT("must supply time step"); 
 	}
 
-	const int max_cycles = driver["max_cycles"].get_or(std::numeric_limits<int>::max()); 
+	int max_cycles = driver["max_cycles"].get_or(std::numeric_limits<int>::max()); 
+	if (max_cycles_override>0) max_cycles = max_cycles_override; 
 
 	// implicit solver 
 	sol::table solver = driver["solver"]; 
@@ -458,6 +460,7 @@ int main(int argc, char *argv[]) {
 
 	// project initial condition 
 	sol::function ic_lua = lua["initial_condition"]; 
+	if (!ic_lua.valid()) { MFEM_ABORT("must supply initial condition function"); }
 	auto ic_func = [&ic_lua](const mfem::Vector &x) {
 		return ic_lua(x(0), x(1), x(2)); 
 	};
@@ -620,6 +623,7 @@ int main(int argc, char *argv[]) {
 			tracer_dc->RegisterField("T", &T); 
 			tracer_dc->RegisterField("Tpwc", &Tpw); 
 			tracer_dc->RegisterField("sigma", &total_gf); 
+			tracer_dc->RegisterField("fixup", &phi0); 
 			tracer_dc->SetCycle(0); tracer_dc->SetTime(0.0); tracer_dc->SetTimeStep(time_step); 
 			tracer_dc->Save(); 
 
