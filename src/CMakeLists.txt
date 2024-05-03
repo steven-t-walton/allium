@@ -21,6 +21,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/fixup.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/lumped_intrule.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/tracer.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/block_diag_op.hpp	
 )
 
 LIST(APPEND srcs 
@@ -44,6 +45,7 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/fixup.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/lumped_intrule.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/tracer.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/block_diag_op.cpp	
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)

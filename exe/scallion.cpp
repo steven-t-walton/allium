@@ -14,6 +14,7 @@
 #include "lumped_intrule.hpp"
 #include "tracer.hpp"
 #include "p1diffusion.hpp"
+#include "block_diag_op.hpp"
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
 
@@ -33,6 +34,9 @@ public:
 
 	InnerIterativeSolverMonitor(const mfem::IterativeSolver &s) : solver(s) { }
 	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
+		if (it==0) {
+			max_it = 0; max_norm = 0.0; 
+		}
 		max_norm = std::max(solver.GetFinalRelNorm(), max_norm); 
 		max_it = std::max(solver.GetNumIterations(), max_it); 
 	}
@@ -423,7 +427,6 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap; 
 		out << YAML::Key << "solver" << YAML::Value << solver; 
 		if (sweep_opts_avail) out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value(); 
-	out << YAML::EndMap; 
 
 	SNTimeMassMatrix Mpsi(fes, psi_ext, lump); 
 	mfem::BilinearForm Mcv(&fes); 
@@ -462,7 +465,9 @@ int main(int argc, char *argv[]) {
 	sol::function ic_lua = lua["initial_condition"]; 
 	if (!ic_lua.valid()) { MFEM_ABORT("must supply initial condition function"); }
 	auto ic_func = [&ic_lua](const mfem::Vector &x) {
-		return ic_lua(x(0), x(1), x(2)); 
+		double pos[3]; 
+		for (int d=0; d<x.Size(); d++) { pos[d] = x(d); }
+		return ic_lua(pos[0], pos[1], pos[2]); 
 	};
 	mfem::FunctionCoefficient ic_coef(ic_func);
 	T.ProjectCoefficient(ic_coef);  
@@ -538,7 +543,7 @@ int main(int argc, char *argv[]) {
 	LumpedIntegrationRule lumped_intrule_face(
 		*fes.GetTraceElement(0, mesh.GetFaceElementTransformations(0)->GetGeometryType())); 
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
-	mfem::NonlinearForm meb_form(&fes);
+	BlockDiagonalByElementNonlinearForm meb_form(&fes);
 	if (lump) {
 		auto *bbenfi = new BlackBodyEmissionNFI(total, 2, 2); 
 		bbenfi->SetIntegrationRule(lumped_intrule); 
@@ -549,13 +554,95 @@ int main(int argc, char *argv[]) {
 		meb_form.AddDomainIntegrator(new BlackBodyEmissionNFI(total, 2, 2 + sigma_fe_order)); 
 		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}
+	BlockDiagonalByElementSolver meb_grad_inv(lump); 
 
-	mfem::NonlinearForm emission_form(&fes); 
+	BlockDiagonalByElementNonlinearForm emission_form(&fes); 
 	auto *bbenfi = new BlackBodyEmissionNFI(total, 2, 2 + sigma_fe_order); 
 	if (lump) 
 		bbenfi->SetIntegrationRule(lumped_intrule); 
 	emission_form.AddDomainIntegrator(bbenfi); // emission_form owns ptr 
 
+	mfem::BilinearForm Mtot(&fes); 
+	if (lump) 
+		Mtot.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(total))); 
+	else
+		Mtot.AddDomainIntegrator(new mfem::MassIntegrator(total)); 
+	Mtot.Assemble(); 
+	Mtot.Finalize(); 
+
+	mfem::Vector nor(dim); 
+	nor = 0.0; nor(0) = 1.0; 
+	const double alpha = ComputeAlpha(*quad, nor); 
+	mfem::ConstantCoefficient alpha_c(alpha/2);
+	mfem::RatioCoefficient diffco(1.0/3, total); 
+	mfem::Array<int> marshak_bdr_attrs(mesh.bdr_attributes.Max()); 
+	marshak_bdr_attrs = 1;
+	if (reflection_bdr_attr > 0) {
+		marshak_bdr_attrs[reflection_bdr_attr-1] = 0; 
+	}
+
+	sol::optional<sol::table> prec_table_avail = driver["preconditioner"]; 
+	std::unique_ptr<mfem::HypreParMatrix> dsa_mat; 
+	std::unique_ptr<mfem::ParBilinearForm> Kform; 
+	std::unique_ptr<mfem::IterativeSolver> dsa_solver; 
+	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
+	std::unique_ptr<InnerIterativeSolverMonitor> dsa_monitor; 
+	if (prec_table_avail) {
+		sol::table prec_table = prec_table_avail.value(); 
+		const auto type = io::GetAndValidateOption<std::string>(prec_table, "type", {"mip"}, "mip", root); 		
+
+		Kform = std::make_unique<mfem::ParBilinearForm>(&fes); 
+		double kappa = pow(fe_order+1,2)*4; 
+		auto *diff_int = new mfem::DiffusionIntegrator(diffco); 
+		if (lump & InverseAdvectionOperator::LumpType::GRADIENT)
+			diff_int->SetIntegrationRule(lumped_intrule); 
+		Kform->AddDomainIntegrator(diff_int); 
+		auto *mass_int = new mfem::MassIntegrator(total_dt); 
+		if (lump & InverseAdvectionOperator::LumpType::MASS)
+			mass_int->SetIntegrationRule(lumped_intrule); 
+		Kform->AddDomainIntegrator(mass_int); 
+		Kform->AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2)); 
+		Kform->AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
+		if (lump & InverseAdvectionOperator::LumpType::FACE) {
+			for (auto &ptr : *Kform->GetBBFI()) {
+				ptr->SetIntegrationRule(lumped_intrule_face); 
+			}
+			for (auto &ptr : *Kform->GetFBFI()) {
+				ptr->SetIntegrationRule(lumped_intrule_face); 
+			}		
+		}
+		Kform->Assemble(); 
+		Kform->Finalize(); 
+		dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform->ParallelAssemble()); 
+
+		sol::table solver_table = prec_table["solver"]; 
+		dsa_solver = std::unique_ptr<mfem::IterativeSolver>(io::CreateIterativeSolver(solver_table, MPI_COMM_WORLD)); 
+		amg = std::make_unique<mfem::HypreBoomerAMG>(*dsa_mat); 
+		amg->SetPrintLevel(0); 
+		dsa_solver->SetOperator(*dsa_mat); 
+		dsa_solver->SetPreconditioner(*amg); 
+		dsa_monitor = std::make_unique<InnerIterativeSolverMonitor>(*dsa_solver); 
+		outer_solver->SetMonitor(*dsa_monitor); 
+
+		out << YAML::Key << "preconditioner" << YAML::Value << YAML::BeginMap; 
+			out << YAML::Key << "type" << YAML::Value << type; 
+			out << YAML::Key << "kappa" << YAML::Value << kappa; 
+			out << YAML::Key << "solver" << YAML::Value << solver_table; 
+		out << YAML::EndMap; 
+	}
+
+	std::unique_ptr<mfem::IterativeSolver> rebalance_solver; 
+	sol::optional<sol::table> rebalance_table_avail = driver["rebalance_solver"]; 
+	if (rebalance_table_avail) {
+		sol::table rebalance_table = rebalance_table_avail.value(); 
+		rebalance_solver.reset(io::CreateIterativeSolver(rebalance_table, MPI_COMM_WORLD)); 
+		rebalance_solver->SetOperator(meb_form); 
+		rebalance_solver->SetPreconditioner(meb_grad_inv); 
+		out << YAML::Key << "rebalance solver" << YAML::Value << rebalance_table; 
+	}
+	out << YAML::EndMap; // end driver output 
+
+	// --- configure outputs --- 
 	out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
 	mfem::ParGridFunction cvgf(&fes0); cvgf.ProjectCoefficient(heat_capacity); 
 	mfem::ParGridFunction density_gf(&fes0); density_gf.ProjectCoefficient(density); 
@@ -645,49 +732,6 @@ int main(int argc, char *argv[]) {
 	}
 	out << YAML::EndMap; 
 
-	mfem::BilinearForm Mtot(&fes); 
-	if (lump) 
-		Mtot.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(total))); 
-	else
-		Mtot.AddDomainIntegrator(new mfem::MassIntegrator(total)); 
-	Mtot.Assemble(); 
-	Mtot.Finalize(); 
-
-	mfem::Vector nor(dim); 
-	nor = 0.0; nor(0) = 1.0; 
-	const double alpha = ComputeAlpha(*quad, nor); 
-
-	mfem::ParBilinearForm Kform(&fes); 
-	mfem::RatioCoefficient diffco(1.0/3, total); 
-	mfem::ConstantCoefficient alpha_c(alpha/2);
-	double kappa = pow(fe_order+1,2)*4; 
-	mfem::Array<int> marshak_bdr_attrs(mesh.bdr_attributes.Max()); 
-	marshak_bdr_attrs = 1;
-	if (reflection_bdr_attr > 0) {
-		marshak_bdr_attrs[reflection_bdr_attr-1] = 0; 
-	}
-	auto *diff_int = new mfem::DiffusionIntegrator(diffco); 
-	if (lump & InverseAdvectionOperator::LumpType::GRADIENT)
-		diff_int->SetIntegrationRule(lumped_intrule); 
-	Kform.AddDomainIntegrator(diff_int); 
-	auto *mass_int = new mfem::MassIntegrator(total_dt); 
-	if (lump & InverseAdvectionOperator::LumpType::MASS)
-		mass_int->SetIntegrationRule(lumped_intrule); 
-	Kform.AddDomainIntegrator(mass_int); 
-	Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2)); 
-	Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
-	if (lump & InverseAdvectionOperator::LumpType::FACE) {
-		for (auto &ptr : *Kform.GetBBFI()) {
-			ptr->SetIntegrationRule(lumped_intrule_face); 
-		}
-		for (auto &ptr : *Kform.GetFBFI()) {
-			ptr->SetIntegrationRule(lumped_intrule_face); 
-		}		
-	}
-	Kform.Assemble(); 
-	Kform.Finalize(); 
-	auto dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform.ParallelAssemble()); 
-
 	mfem::StopWatch cycle_timer; 
 	double time = 0.0; 
 	const double under_relax = 0.05; 
@@ -706,31 +750,18 @@ int main(int argc, char *argv[]) {
 		double max_inner_norm = 0; 
 		mfem::Array<int> inners; 
 		inners.Reserve(max_iter); 
-
-		mfem::CGSolver cgsolver(MPI_COMM_WORLD); 
-		cgsolver.SetRelTol(1e-14); 
-		mfem::HypreBoomerAMG amg(*dsa_mat);
-		amg.SetPrintLevel(0); 
-		cgsolver.SetOperator(*dsa_mat); 
-		cgsolver.SetPreconditioner(amg); 
-		cgsolver.SetMaxIter(100); 
-		cgsolver.iterative_mode = false; 
-		InnerIterativeSolverMonitor dsa_solve_monitor(cgsolver); 
-		outer_solver->SetMonitor(dsa_solve_monitor); 
-
 		Linv.UseFixup(false); 
-		int inner_t_iter = 0;
-		double inner_t_norm; 
 		while (true) {
 			// --- form RHS --- 
 			meb_form.Mult(T, temp_resid); 
 			add(T0, -1.0, temp_resid, temp_resid); // T0 - temp_resid -> temp_resid 
 
 			// invert (cv/dt + 4a sigma T^3)
-			NonlinearFormBlockInverse dplanck_dt_inv(meb_form, T); 
+			const auto &meb_grad = meb_form.GetGradient(T); 
+			meb_grad_inv.SetOperator(meb_grad); 
 			// ( 4a sigma T^3 u, v)
 			const auto &dplanck = emission_form.GetGradient(T); 
-			mfem::ProductOperator linearized_elim(&dplanck, &dplanck_dt_inv, false, false); 
+			mfem::ProductOperator linearized_elim(&dplanck, &meb_grad_inv, false, false); 
 
 			// form transport residual 
 			emission_form.Mult(T, em_source); 
@@ -743,13 +774,13 @@ int main(int argc, char *argv[]) {
 			D.Mult(psi, phi_source); 
 
 			// apply I - D Linv dB (dBt)^{-1} Msigma 
-			mfem::TripleProductOperator Ms_form(&dplanck, &dplanck_dt_inv, &Mtot, false, false, false); 
+			mfem::TripleProductOperator Ms_form(&dplanck, &meb_grad_inv, &Mtot, false, false, false); 
 			TransportOperator transport_op(D, Linv, Ms_form, psi); 
-			DiffusionSyntheticAccelerationOperator dsa_op(cgsolver, Ms_form); 
-			MockSolver mock_solver; 
-			outer_solver->SetPreconditioner(mock_solver); 
+			std::unique_ptr<DiffusionSyntheticAccelerationOperator> dsa_op; 
+			if (dsa_solver) 
+				dsa_op = std::make_unique<DiffusionSyntheticAccelerationOperator>(*dsa_solver, Ms_form); 
+			if (dsa_op) outer_solver->SetPreconditioner(*dsa_op); 
 			outer_solver->SetOperator(transport_op); 
-			outer_solver->SetPreconditioner(dsa_op); 
 			outer_solver->Mult(phi_source, phi); 
 			inners.Append(outer_solver->GetNumIterations()); 
 			max_inner_norm = std::max(max_inner_norm, outer_solver->GetFinalRelNorm()); 
@@ -758,7 +789,7 @@ int main(int argc, char *argv[]) {
 			// solve for temperature update 
 			Mtot.Mult(phi, phi_source); 
 			phi_source += temp_resid; 
-			dplanck_dt_inv.Mult(phi_source, dT); 
+			meb_grad_inv.Mult(phi_source, dT); 
 
 			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
 			outer++; 
@@ -784,7 +815,7 @@ int main(int argc, char *argv[]) {
 
 				if (outer < max_iter) {
 					temp_resid += phi_source;
-					dplanck_dt_inv.Mult(temp_resid, dT); 
+					meb_grad_inv.Mult(temp_resid, dT); 
 					for (int i=0; i<T.Size(); i++) {
 						double Tnew = T(i) + dT(i); 
 						if (Tnew < 0) {
@@ -797,25 +828,9 @@ int main(int argc, char *argv[]) {
 					}					
 				}
 
-				else {					
+				else if (rebalance_solver) {					
 					phi_source += T0; 
-					while (true) {
-						meb_form.Mult(T, temp_resid); 
-						temp_resid -= phi_source; 
-						NonlinearFormBlockInverse local_block_inv(meb_form, T); 
-						local_block_inv.Mult(temp_resid, dT); 
-						for (int i=0; i<T.Size(); i++) {
-							double Tnew = T(i) - dT(i); 
-							if (Tnew < 0) {
-								T(i) = T(i) - dT(i)*under_relax; 
-							} else {
-								T(i) = Tnew; 
-							}
-						}
-						inner_t_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
-						inner_t_iter++; 
-						if (inner_t_norm < abs_tol or inner_t_iter == 20) break; 
-					}
+					rebalance_solver->Mult(phi_source, T); 
 				}
 
 				break;
@@ -885,10 +900,13 @@ int main(int argc, char *argv[]) {
 			Mtot.Finalize(); 	
 
 			// DSA matrix depends on sigma and dt 
-			delete Kform.LoseMat(); // delete serial sparsematrix 
-			Kform.Assemble(); 
-			Kform.Finalize(); 
-			dsa_mat.reset(Kform.ParallelAssemble()); // delete current, replace with new 
+			if (Kform) {
+				delete Kform->LoseMat(); // delete serial sparsematrix 
+				Kform->Assemble(); 
+				Kform->Finalize(); 
+				dsa_mat.reset(Kform->ParallelAssemble()); // delete current, replace with new 
+				dsa_solver->SetOperator(*dsa_mat); 			
+			}
 		}
 
 		// store time step 
@@ -916,15 +934,19 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "avg" << YAML::Value << (double)inners.Sum()/inners.Size(); 
 				out << YAML::Key << "total" << YAML::Value << inners.Sum(); 
 				out << YAML::Key << "max norm" << YAML::Value << max_inner_norm; 
-				out << YAML::Key << "dsa solver" << YAML::Value << YAML::BeginMap; 
-					out << YAML::Key << "max it" << YAML::Value << dsa_solve_monitor.max_it; 
-					out << YAML::Key << "max norm" << YAML::Value << dsa_solve_monitor.max_norm; 
-				out << YAML::EndMap; 
+				if (dsa_solver) {
+					out << YAML::Key << "dsa solver" << YAML::Value << YAML::BeginMap; 
+						out << YAML::Key << "max it" << YAML::Value << dsa_monitor->max_it; 
+						out << YAML::Key << "max norm" << YAML::Value << dsa_monitor->max_norm; 
+					out << YAML::EndMap; 					
+				}
 			out << YAML::EndMap;
-			out << YAML::Key << "meb iteration" << YAML::Value << YAML::BeginMap; 
-				out << YAML::Key << "it" << YAML::Value << inner_t_iter; 
-				out << YAML::Key << "norm" << YAML::Value << inner_t_norm; 
-			out << YAML::EndMap; 
+			if (rebalance_solver) {
+				out << YAML::Key << "rebalance" << YAML::Value << YAML::BeginMap; 
+					out << YAML::Key << "it" << YAML::Value << rebalance_solver->GetNumIterations(); 
+					out << YAML::Key << "norm" << YAML::Value << rebalance_solver->GetFinalRelNorm(); 
+				out << YAML::EndMap; 
+			}
 			if (EventLog.size()) {
 				out << YAML::Key << "event log" << YAML::Value << YAML::BeginMap; 
 				for (const auto &it : EventLog) {

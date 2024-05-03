@@ -3,6 +3,7 @@
 #include "trt_integrators.hpp"
 #include "lumped_intrule.hpp"
 #include "constants.hpp"
+#include "block_diag_op.hpp"
 
 TEST(LumpedTRT, Emission1D) {
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0); 
@@ -91,13 +92,15 @@ TEST(TRT, BlockInverse) {
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
 	mfem::ConstantCoefficient coef(1.0); 
-	mfem::NonlinearForm form(&fes); 
+	BlockDiagonalByElementNonlinearForm form(&fes); 
 	form.AddDomainIntegrator(new BlackBodyEmissionNFI(coef, 2, 2)); 
 	form.AddDomainIntegrator(new mfem::MassIntegrator(coef)); 
 	mfem::GridFunction temperature(&fes); 
 	temperature = 1.0; 
 	const auto &grad = form.GetGradient(temperature); 
-	NonlinearFormBlockInverse inv_grad(form, temperature); 
+	BlockDiagonalByElementSolver inv_grad(false);
+	inv_grad.SetOperator(grad);  
+
 	mfem::Vector x(fes.GetVSize()), z(fes.GetVSize()); 
 	x.Randomize(); 
 	mfem::Vector y(x); 
@@ -113,7 +116,7 @@ TEST(LumpedTRT, BlockInverse) {
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
 	mfem::ConstantCoefficient coef(1.0); 
 	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
-	mfem::NonlinearForm form(&fes); 
+	BlockDiagonalByElementNonlinearForm form(&fes); 
 	form.AddDomainIntegrator(new BlackBodyEmissionNFI(coef, 2, 2)); 
 	form.AddDomainIntegrator(new mfem::MassIntegrator(coef)); 
 	auto &dnfi = *form.GetDNFI(); 
@@ -123,7 +126,8 @@ TEST(LumpedTRT, BlockInverse) {
 	mfem::GridFunction temperature(&fes); 
 	temperature = 1.0; 
 	const auto &grad = form.GetGradient(temperature); 
-	NonlinearFormBlockInverse inv_grad(form, temperature, true); 
+	BlockDiagonalByElementSolver inv_grad(true); 
+	inv_grad.SetOperator(grad); 
 	mfem::Vector x(fes.GetVSize()), z(fes.GetVSize()); 
 	x.Randomize(); 
 	mfem::Vector y(x); 
@@ -141,7 +145,7 @@ TEST(LumpedTRT, NewtonSolve) {
 	mfem::ConstantCoefficient sbi(1.0/constants::StefanBoltzmann); 
 	mfem::ConstantCoefficient none(-1.0); 
 	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
-	mfem::NonlinearForm form(&fes); 
+	BlockDiagonalByElementNonlinearForm form(&fes); 
 	form.AddDomainIntegrator(new BlackBodyEmissionNFI(sbi, 2, 2)); 
 	form.AddDomainIntegrator(new mfem::MassIntegrator(none)); 
 	auto &dnfi = *form.GetDNFI(); 
@@ -149,20 +153,18 @@ TEST(LumpedTRT, NewtonSolve) {
 		ptr->SetIntegrationRule(lumped_intrule); 
 	}
 
-	mfem::GridFunction T(&fes), T0(&fes); 
-	mfem::Vector resid(fes.GetVSize()), dT(fes.GetVSize()); 
-	T0(0) = 12.0; T0(1) = 7.3; T0(2) = 9.6; T0(3) = 10.0; 
-	int it; 
-	double norm; 
-	for (it=0; it<20; it++) {
-		form.Mult(T0, resid);
-		NonlinearFormBlockInverse grad_inv(form, T0, true); 
-		grad_inv.Mult(resid, dT); 
-		add(T0, -1.0, dT, T); 
-		norm = dT.Norml2(); 
-		if (norm < 1e-6) break; 
-		T0 = T; 
-	}
+	mfem::GridFunction T(&fes); 
+	T(0) = 12.0; T(1) = 7.3; T(2) = 9.6; T(3) = 10.0; 
+
+	mfem::NewtonSolver solver; 
+	solver.SetOperator(form); 
+	BlockDiagonalByElementSolver grad_inv(true); 
+	solver.SetSolver(grad_inv); 
+	solver.SetAbsTol(1e-12); 
+	solver.SetMaxIter(20); 
+	mfem::Vector blank; 
+	solver.Mult(blank, T); 
+
 	mfem::Vector ones(fes.GetVSize()); 
 	ones = 1.0; 
 	T -= ones; 
@@ -175,24 +177,22 @@ TEST(TRT, NewtonSolve) {
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
 	mfem::ConstantCoefficient sbi(1.0/constants::StefanBoltzmann); 
 	mfem::ConstantCoefficient none(-1.0); 
-	mfem::NonlinearForm form(&fes); 
+	BlockDiagonalByElementNonlinearForm form(&fes); 
 	form.AddDomainIntegrator(new BlackBodyEmissionNFI(sbi, 2, 2)); 
 	form.AddDomainIntegrator(new mfem::MassIntegrator(none)); 
 
-	mfem::GridFunction T(&fes), T0(&fes); 
-	mfem::Vector resid(fes.GetVSize()), dT(fes.GetVSize()); 
-	T0(0) = 12.0; T0(1) = 7.3; T0(2) = 9.6; T0(3) = 10.0; 
-	int it; 
-	double norm; 
-	for (it=0; it<20; it++) {
-		form.Mult(T0, resid);
-		NonlinearFormBlockInverse grad_inv(form, T0, false); 
-		grad_inv.Mult(resid, dT); 
-		add(T0, -1.0, dT, T); 
-		norm = dT.Norml2(); 
-		if (norm < 1e-6) break; 
-		T0 = T; 
-	}
+	mfem::GridFunction T(&fes); 
+	T(0) = 12.0; T(1) = 7.3; T(2) = 9.6; T(3) = 10.0; 
+
+	mfem::NewtonSolver solver; 
+	solver.SetOperator(form); 
+	BlockDiagonalByElementSolver grad_inv(false); 
+	solver.SetSolver(grad_inv); 
+	solver.SetAbsTol(1e-12); 
+	solver.SetMaxIter(20); 
+	mfem::Vector blank; 
+	solver.Mult(blank, T); 
+
 	mfem::Vector ones(fes.GetVSize()); 
 	ones = 1.0; 
 	T -= ones; 

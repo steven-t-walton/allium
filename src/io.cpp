@@ -106,6 +106,10 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 	#endif
 	}
 
+	else if (type == "newton") {
+		s = new mfem::NewtonSolver(comm); 
+	}
+
 	else {
 		MFEM_ABORT("solver type " << type << " not supported"); 
 	}
