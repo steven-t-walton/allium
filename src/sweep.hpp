@@ -90,6 +90,12 @@ public:
 		apply_fixup = true; 
 	}
 	void WriteGraphToDot(std::string prefix) const; 
+
+	// lumping type accessors 
+	int GetLumpingType() const { return lump; }
+	bool IsMassLumped() const { return lump & LumpType::MASS; }
+	bool IsGradientLumped() const { return lump & LumpType::GRADIENT; }
+	bool IsFaceLumped() const { return lump & LumpType::FACE; }
 };
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 

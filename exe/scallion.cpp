@@ -594,16 +594,16 @@ int main(int argc, char *argv[]) {
 		Kform = std::make_unique<mfem::ParBilinearForm>(&fes); 
 		double kappa = pow(fe_order+1,2)*4; 
 		auto *diff_int = new mfem::DiffusionIntegrator(diffco); 
-		if (lump & InverseAdvectionOperator::LumpType::GRADIENT)
+		if (Linv.IsGradientLumped()) 
 			diff_int->SetIntegrationRule(lumped_intrule); 
 		Kform->AddDomainIntegrator(diff_int); 
 		auto *mass_int = new mfem::MassIntegrator(total_dt); 
-		if (lump & InverseAdvectionOperator::LumpType::MASS)
+		if (Linv.IsMassLumped())
 			mass_int->SetIntegrationRule(lumped_intrule); 
 		Kform->AddDomainIntegrator(mass_int); 
 		Kform->AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2)); 
 		Kform->AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
-		if (lump & InverseAdvectionOperator::LumpType::FACE) {
+		if (Linv.IsFaceLumped()) {
 			for (auto &ptr : *Kform->GetBBFI()) {
 				ptr->SetIntegrationRule(lumped_intrule_face); 
 			}
