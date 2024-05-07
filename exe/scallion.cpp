@@ -642,6 +642,9 @@ int main(int argc, char *argv[]) {
 	}
 	out << YAML::EndMap; // end driver output 
 
+	LocalEliminationTRTOperator op(Linv, D, emission_form, Mtot, *rebalance_solver, psi); 
+	outer_solver->SetOperator(op); 
+
 	// --- configure outputs --- 
 	out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
 	mfem::ParGridFunction cvgf(&fes0); cvgf.ProjectCoefficient(heat_capacity); 
@@ -745,115 +748,128 @@ int main(int argc, char *argv[]) {
 		Mcv.Mult(T, T0); // assume T = T0 to get Mcv T0 -> T0 
 		T0 *= 1.0/time_step; 
 
-		int outer = 0; 
-		double norm; 
-		double max_inner_norm = 0; 
-		mfem::Array<int> inners; 
-		inners.Reserve(max_iter); 
-		Linv.UseFixup(false); 
-		while (true) {
-			// --- form RHS --- 
-			meb_form.Mult(T, temp_resid); 
-			add(T0, -1.0, temp_resid, temp_resid); // T0 - temp_resid -> temp_resid 
+		Linv.Mult(psi0, psi); 
+		D.Mult(psi, phi); 
+		Mtot.Mult(phi, phi_source); 
+		add(T0, 1.0, phi_source, em_source); 
+		op.SetSource(em_source); 
+		mfem::Vector blank; 
+		outer_solver->Mult(blank, T); 
+		emission_form.Mult(T, em_source); 
+		D.MultTranspose(em_source, psi); 
+		psi += psi0; 	
+		Linv.Mult(psi, psi); 
+		D.Mult(psi, phi); 
 
-			// invert (cv/dt + 4a sigma T^3)
-			const auto &meb_grad = meb_form.GetGradient(T); 
-			meb_grad_inv.SetOperator(meb_grad); 
-			// ( 4a sigma T^3 u, v)
-			const auto &dplanck = emission_form.GetGradient(T); 
-			mfem::ProductOperator linearized_elim(&dplanck, &meb_grad_inv, false, false); 
+		// int outer = 0; 
+		// double norm; 
+		// double max_inner_norm = 0; 
+		// mfem::Array<int> inners; 
+		// inners.Reserve(max_iter); 
+		// Linv.UseFixup(false); 
+		// while (true) {
+		// 	// --- form RHS --- 
+		// 	meb_form.Mult(T, temp_resid); 
+		// 	add(T0, -1.0, temp_resid, temp_resid); // T0 - temp_resid -> temp_resid 
 
-			// form transport residual 
-			emission_form.Mult(T, em_source); 
-			// eliminate down to phi
-			linearized_elim.Mult(temp_resid, phi_source);
-			em_source += phi_source; 
-			D.MultTranspose(em_source, psi); 
-			psi += psi0; 
-			Linv.Mult(psi, psi);
-			D.Mult(psi, phi_source); 
+		// 	// invert (cv/dt + 4a sigma T^3)
+		// 	const auto &meb_grad = meb_form.GetGradient(T); 
+		// 	meb_grad_inv.SetOperator(meb_grad); 
+		// 	// ( 4a sigma T^3 u, v)
+		// 	const auto &dplanck = emission_form.GetGradient(T); 
+		// 	mfem::ProductOperator linearized_elim(&dplanck, &meb_grad_inv, false, false); 
 
-			// apply I - D Linv dB (dBt)^{-1} Msigma 
-			mfem::TripleProductOperator Ms_form(&dplanck, &meb_grad_inv, &Mtot, false, false, false); 
-			TransportOperator transport_op(D, Linv, Ms_form, psi); 
-			std::unique_ptr<DiffusionSyntheticAccelerationOperator> dsa_op; 
-			if (dsa_solver) 
-				dsa_op = std::make_unique<DiffusionSyntheticAccelerationOperator>(*dsa_solver, Ms_form); 
-			if (dsa_op) outer_solver->SetPreconditioner(*dsa_op); 
-			outer_solver->SetOperator(transport_op); 
-			outer_solver->Mult(phi_source, phi); 
-			inners.Append(outer_solver->GetNumIterations()); 
-			max_inner_norm = std::max(max_inner_norm, outer_solver->GetFinalRelNorm()); 
-			if (!outer_solver->GetConverged()) log["schur solve failed"] += 1; 
+		// 	// form transport residual 
+		// 	emission_form.Mult(T, em_source); 
+		// 	// eliminate down to phi
+		// 	linearized_elim.Mult(temp_resid, phi_source);
+		// 	em_source += phi_source; 
+		// 	D.MultTranspose(em_source, psi); 
+		// 	psi += psi0; 
+		// 	Linv.Mult(psi, psi);
+		// 	D.Mult(psi, phi_source); 
 
-			// solve for temperature update 
-			Mtot.Mult(phi, phi_source); 
-			phi_source += temp_resid; 
-			meb_grad_inv.Mult(phi_source, dT); 
+		// 	// apply I - D Linv dB (dBt)^{-1} Msigma 
+		// 	mfem::TripleProductOperator Ms_form(&dplanck, &meb_grad_inv, &Mtot, false, false, false); 
+		// 	TransportOperator transport_op(D, Linv, Ms_form, psi); 
+		// 	std::unique_ptr<DiffusionSyntheticAccelerationOperator> dsa_op; 
+		// 	if (dsa_solver) 
+		// 		dsa_op = std::make_unique<DiffusionSyntheticAccelerationOperator>(*dsa_solver, Ms_form); 
+		// 	if (dsa_op) outer_solver->SetPreconditioner(*dsa_op); 
+		// 	outer_solver->SetOperator(transport_op); 
+		// 	outer_solver->Mult(phi_source, phi); 
+		// 	inners.Append(outer_solver->GetNumIterations()); 
+		// 	max_inner_norm = std::max(max_inner_norm, outer_solver->GetFinalRelNorm()); 
+		// 	if (!outer_solver->GetConverged()) log["schur solve failed"] += 1; 
 
-			norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
-			outer++; 
-			bool done = norm < abs_tol or outer == max_iter; 
-			if (done) {
-				Linv.UseFixup(use_fixup); 
-				// sweep to recover psi 
-				Ms_form.Mult(phi, phi_source); 
-				em_source += phi_source;
-				D.MultTranspose(em_source, psi); 
-				psi += psi0; 
-				Linv.Mult(psi, psi); 
-				D.Mult(psi, phi0); 
-				phi0 -= phi; 
-				double mag = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi, phi)); 
-				phi0 *= (1.0/mag); 
-				for (int i=0; i<phi0.Size(); i++) { phi0(i) = std::fabs(phi0(i)); }
-				D.Mult(psi, phi); 
-				// if (phi.Min() < 0) MFEM_ABORT("negative energy density"); 
+		// 	// solve for temperature update 
+		// 	Mtot.Mult(phi, phi_source); 
+		// 	phi_source += temp_resid; 
+		// 	meb_grad_inv.Mult(phi_source, dT); 
 
-				// re-evaulate temperature given positive phi 
-				Mtot.Mult(phi, phi_source); 
+		// 	norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, dT, dT)); 
+		// 	outer++; 
+		// 	bool done = norm < abs_tol or outer == max_iter; 
+		// 	if (done) {
+		// 		Linv.UseFixup(use_fixup); 
+		// 		// sweep to recover psi 
+		// 		Ms_form.Mult(phi, phi_source); 
+		// 		em_source += phi_source;
+		// 		D.MultTranspose(em_source, psi); 
+		// 		psi += psi0; 
+		// 		Linv.Mult(psi, psi); 
+		// 		D.Mult(psi, phi0); 
+		// 		phi0 -= phi; 
+		// 		double mag = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi, phi)); 
+		// 		phi0 *= (1.0/mag); 
+		// 		for (int i=0; i<phi0.Size(); i++) { phi0(i) = std::fabs(phi0(i)); }
+		// 		D.Mult(psi, phi); 
+		// 		// if (phi.Min() < 0) MFEM_ABORT("negative energy density"); 
 
-				if (outer < max_iter) {
-					temp_resid += phi_source;
-					meb_grad_inv.Mult(temp_resid, dT); 
-					for (int i=0; i<T.Size(); i++) {
-						double Tnew = T(i) + dT(i); 
-						if (Tnew < 0) {
-							EventLog["under relax (final)"] += 1; 
-							// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
-							T(i) = T(i) + dT(i)*under_relax; 
-						} else {
-							T(i) = Tnew; 
-						}
-					}					
-				}
+		// 		// re-evaulate temperature given positive phi 
+		// 		Mtot.Mult(phi, phi_source); 
 
-				else if (rebalance_solver) {					
-					phi_source += T0; 
-					rebalance_solver->Mult(phi_source, T); 
-				}
+		// 		if (outer < max_iter) {
+		// 			temp_resid += phi_source;
+		// 			meb_grad_inv.Mult(temp_resid, dT); 
+		// 			for (int i=0; i<T.Size(); i++) {
+		// 				double Tnew = T(i) + dT(i); 
+		// 				if (Tnew < 0) {
+		// 					EventLog["under relax (final)"] += 1; 
+		// 					// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
+		// 					T(i) = T(i) + dT(i)*under_relax; 
+		// 				} else {
+		// 					T(i) = Tnew; 
+		// 				}
+		// 			}					
+		// 		}
 
-				break;
-			} else {
-				for (int i=0; i<T.Size(); i++) {
-					double Tnew = T(i) + dT(i); 
-					if (Tnew < 0) {
-						EventLog["under relax"] += 1; 
-						// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
-						T(i) = T(i) + dT(i)*under_relax; 
-					} else {
-						T(i) = Tnew; 
-					}
-				}
-			}
-		}
+		// 		else if (rebalance_solver) {					
+		// 			phi_source += T0; 
+		// 			rebalance_solver->Mult(phi_source, T); 
+		// 		}
+
+		// 		break;
+		// 	} else {
+		// 		for (int i=0; i<T.Size(); i++) {
+		// 			double Tnew = T(i) + dT(i); 
+		// 			if (Tnew < 0) {
+		// 				EventLog["under relax"] += 1; 
+		// 				// T(i) = (1.0 - under_relax) * T(i) + under_relax*Tnew; 
+		// 				T(i) = T(i) + dT(i)*under_relax; 
+		// 			} else {
+		// 				T(i) = Tnew; 
+		// 			}
+		// 		}
+		// 	}
+		// }
 
 		// get peicewise constant version of temperature 
 		// used for comparison to other codes 
 		Tpw.ProjectGridFunction(T); 
 
-		if (outer==max_iter) 
-			log["newton non-convergence"] += 1; 
+		// if (outer==max_iter) 
+		// 	log["newton non-convergence"] += 1; 
 
 		// prepare for next time step 
 		time += time_step; 
@@ -917,7 +933,7 @@ int main(int argc, char *argv[]) {
 
 		cycle_timer.Stop(); 
 		double cycle_time = cycle_timer.RealTime(); 
-		log["max schur solves"] = std::max(inners.Max(), log["max schur solves"]); 
+		// log["max schur solves"] = std::max(inners.Max(), log["max schur solves"]); 
 
 		const double radE_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, phi, phi)) / constants::SpeedOfLight; 
 		// output progress 
@@ -926,27 +942,29 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
 			out << YAML::Key << "time step size" << YAML::Value << time_step; 
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
-			out << YAML::Key << "it" << YAML::Value << outer; 
-			out << YAML::Key << "norm" << YAML::Value << norm;  
-			out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
-				out << YAML::Key << "max" << YAML::Value << inners.Max(); 
-				out << YAML::Key << "min" << YAML::Value << inners.Min(); 
-				out << YAML::Key << "avg" << YAML::Value << (double)inners.Sum()/inners.Size(); 
-				out << YAML::Key << "total" << YAML::Value << inners.Sum(); 
-				out << YAML::Key << "max norm" << YAML::Value << max_inner_norm; 
-				if (dsa_solver) {
-					out << YAML::Key << "dsa solver" << YAML::Value << YAML::BeginMap; 
-						out << YAML::Key << "max it" << YAML::Value << dsa_monitor->max_it; 
-						out << YAML::Key << "max norm" << YAML::Value << dsa_monitor->max_norm; 
-					out << YAML::EndMap; 					
-				}
-			out << YAML::EndMap;
-			if (rebalance_solver) {
-				out << YAML::Key << "rebalance" << YAML::Value << YAML::BeginMap; 
-					out << YAML::Key << "it" << YAML::Value << rebalance_solver->GetNumIterations(); 
-					out << YAML::Key << "norm" << YAML::Value << rebalance_solver->GetFinalRelNorm(); 
-				out << YAML::EndMap; 
-			}
+			out << YAML::Key << "it" << YAML::Value << outer_solver->GetNumIterations(); 
+			out << YAML::Key << "norm" << YAML::Value << outer_solver->GetFinalRelNorm();  
+			// out << YAML::Key << "it" << YAML::Value << outer; 
+			// out << YAML::Key << "norm" << YAML::Value << norm;
+			// out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
+			// 	out << YAML::Key << "max" << YAML::Value << inners.Max(); 
+			// 	out << YAML::Key << "min" << YAML::Value << inners.Min(); 
+			// 	out << YAML::Key << "avg" << YAML::Value << (double)inners.Sum()/inners.Size(); 
+			// 	out << YAML::Key << "total" << YAML::Value << inners.Sum(); 
+			// 	out << YAML::Key << "max norm" << YAML::Value << max_inner_norm; 
+			// 	if (dsa_solver) {
+			// 		out << YAML::Key << "dsa solver" << YAML::Value << YAML::BeginMap; 
+			// 			out << YAML::Key << "max it" << YAML::Value << dsa_monitor->max_it; 
+			// 			out << YAML::Key << "max norm" << YAML::Value << dsa_monitor->max_norm; 
+			// 		out << YAML::EndMap; 					
+			// 	}
+			// out << YAML::EndMap;
+			// if (rebalance_solver) {
+			// 	out << YAML::Key << "rebalance" << YAML::Value << YAML::BeginMap; 
+			// 		out << YAML::Key << "it" << YAML::Value << rebalance_solver->GetNumIterations(); 
+			// 		out << YAML::Key << "norm" << YAML::Value << rebalance_solver->GetFinalRelNorm(); 
+			// 	out << YAML::EndMap; 
+			// }
 			if (EventLog.size()) {
 				out << YAML::Key << "event log" << YAML::Value << YAML::BeginMap; 
 				for (const auto &it : EventLog) {
