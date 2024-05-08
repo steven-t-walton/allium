@@ -96,6 +96,8 @@ public:
 	bool IsMassLumped() const { return lump & LumpType::MASS; }
 	bool IsGradientLumped() const { return lump & LumpType::GRADIENT; }
 	bool IsFaceLumped() const { return lump & LumpType::FACE; }
+
+	friend class AdvectionOperator; 
 };
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
@@ -112,4 +114,14 @@ public:
 	}
 	void AssembleFaceMatrix(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat);
+};
+
+class AdvectionOperator : public mfem::Operator
+{
+private:
+	const InverseAdvectionOperator &Linv; 
+public:
+	AdvectionOperator(const InverseAdvectionOperator &Linv) : Linv(Linv) 
+	{ }
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
 };

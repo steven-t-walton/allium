@@ -29,7 +29,7 @@ bool SweepConstantSolution(mfem::Mesh &smesh, int fe_order, bool lump=false) {
 	mfem::Vector source(psi_size), psi(psi_size); 
 	TransportVectorView source_view(source.GetData(), psi_ext); 
 	FormTransportSource(fes, quad, energy_grid, szero, inflow, source_view); 
-	InverseAdvectionOperator Linv(fes, quad, sigma, -1, lump); 
+	InverseAdvectionOperator Linv(fes, quad, sigma, -1, (lump) ? 7 : 0); 
 	Linv.Mult(source, psi); 
 	bool all_ones = true; 
 	for (const auto &i : psi) {
@@ -135,7 +135,7 @@ double ExponentialSolution(mfem::Mesh &smesh, int fe_order,
 	FormTransportSource(fes, quad, energy_grid, zero, inflow, source_view); 
 	psi = 0.0; 
 
-	InverseAdvectionOperator Linv(fes, quad, total, -1, lump); 
+	InverseAdvectionOperator Linv(fes, quad, total, -1, (lump) ? 7 : 0); 
 	Linv.Mult(source, psi); 
 
 	double err = 0.0; 
@@ -272,4 +272,75 @@ TEST(Sweep, ExponentialSolution2Dp2) {
 	double E2 = ExponentialSolution(mesh2, fe_order, exp_sol_2d); 
 	double ooa = log2(E1/E2); 
 	EXPECT_NEAR(ooa, 1.0, 0.3); 
+}
+
+void L_Linv(mfem::Mesh &smesh, bool lump) {
+	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::ParFiniteElementSpace fes(&mesh, &fec); 
+	LevelSymmetricQuadrature quad(4, dim); 
+
+	mfem::ParFiniteElementSpace sigma_fes(&mesh, &fec, 2); 
+	mfem::Array<double> energy_grid(3); 
+	energy_grid[0] = 0; energy_grid[1] = 0.5; energy_grid[2] = 1.0; 
+	mfem::ParGridFunction total(&sigma_fes); 
+	mfem::Vector coef_data(2); 
+	coef_data[0] = 1.0; 
+	coef_data[1] = 0.5; 
+	mfem::VectorConstantCoefficient coef(coef_data); 
+	total.ProjectCoefficient(coef); 
+
+	TransportVectorExtents psi_ext(2, quad.Size(), fes.GetVSize()); 
+	const auto psi_size = TotalExtent(psi_ext); 
+	mfem::Vector source(psi_size), psi(psi_size); 
+	source.Randomize(12345); 
+	mfem::Vector copy(source); 
+
+	InverseAdvectionOperator Linv(fes, quad, total, -1, (lump) ? 7 : 0); 
+	AdvectionOperator L(Linv); 
+	L.Mult(source, psi); 
+	Linv.Mult(psi, psi); 
+	copy -= psi; 
+	EXPECT_NEAR(copy.Norml2(), 0.0, 1e-12); 	
+}
+
+TEST(AdvectionOperator, Operator1D) {
+	auto mesh = mfem::Mesh::MakeCartesian1D(10, 1.0); 
+	L_Linv(mesh, false); 
+}
+
+TEST(AdvectionOperator, Operator2D) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(3,3,mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
+	L_Linv(mesh, false); 
+}
+
+TEST(AdvectionOperator, Operator2DTri) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(3,3,mfem::Element::TRIANGLE, false, 1.0, 1.0); 
+	L_Linv(mesh, false); 
+}
+
+TEST(AdvectionOperator, Operator3D) {
+	auto mesh = mfem::Mesh::MakeCartesian3D(3,3,3, mfem::Element::HEXAHEDRON, 1.0, 1.0, 1.0, false); 
+	L_Linv(mesh, false); 
+}
+
+TEST(LumpedAdvectionOperator, Operator1D) {
+	auto mesh = mfem::Mesh::MakeCartesian1D(10, 1.0); 
+	L_Linv(mesh, true); 
+}
+
+TEST(LumpedAdvectionOperator, Operator2D) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(3,3,mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
+	L_Linv(mesh, true); 
+}
+
+TEST(LumpedAdvectionOperator, Operator2DTri) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(3,3,mfem::Element::TRIANGLE, false, 1.0, 1.0); 
+	L_Linv(mesh, true); 
+}
+
+TEST(LumpedAdvectionOperator, Operator3D) {
+	auto mesh = mfem::Mesh::MakeCartesian3D(3,3,3, mfem::Element::HEXAHEDRON, 1.0, 1.0, 1.0, false); 
+	L_Linv(mesh, true); 
 }

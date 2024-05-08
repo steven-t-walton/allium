@@ -719,3 +719,144 @@ void FaceMassMatricesIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &e
 		}
 	}
 }
+
+void AdvectionOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const 
+{
+	auto &mesh = Linv.mesh;
+	const auto dim = mesh.Dimension(); 
+	auto &fes = Linv.fes; 
+	const auto &psi_ext = Linv.psi_ext; 
+	const auto &psi_fnbr_ext = Linv.psi_fnbr_ext; 
+	const auto G = psi_ext.extent(0); 
+	const auto &quad = Linv.quad; 
+	const auto Nomega = quad.Size(); 
+	const auto &normals = Linv.normals; 
+	auto mass_mat_view = Kokkos::mdspan(Linv.mass_matrices.GetData(), G, fes.GetNE()); 
+	auto grad_mat_view = Kokkos::mdspan(Linv.grad_matrices.GetData(), dim, fes.GetNE()); 
+	auto face_mat_view = Kokkos::mdspan(Linv.face_matrices.GetData(), mesh.GetNumFaces(), 2, 2); 
+
+	TransportVectorView xview(x.GetData(), psi_ext); 
+	TransportVectorView yview(y.GetData(), psi_ext); 
+	y = 0.0; 
+
+	auto &psi_fnbr = Linv.psi_fnbr; 
+	psi_fnbr = 0.0; 
+	if (fes.GetFaceNbrVSize() > 0) {
+		int *send_offset = fes.send_face_nbr_ldof.GetI(); 
+		const int *d_send_offset = fes.send_face_nbr_ldof.GetJ(); 
+		int *recv_offset = fes.face_nbr_ldof.GetI(); 
+		MPI_Comm comm = fes.GetComm(); 
+		const int num_face_nbrs = mesh.GetNFaceNeighbors(); 
+
+		// load data into send buffer 
+		const auto num_send_dofs = fes.send_face_nbr_ldof.Size_of_connections(); 
+		mfem::Vector send_buffer(num_send_dofs * G * Nomega); 
+		for (int i=0; i<fes.send_face_nbr_ldof.Size_of_connections(); i++) {
+			for (int g=0; g<G; g++) {
+				for (int a=0; a<Nomega; a++) {
+					send_buffer(a + g*Nomega + Nomega*G*i) = xview(g,a,d_send_offset[i]); 
+				}
+			}
+		}
+
+		auto *requests = new MPI_Request[2*num_face_nbrs]; 
+		auto *send_requests = requests; 
+		auto *recv_requests = requests + num_face_nbrs; 
+		auto *statuses = new MPI_Status[num_face_nbrs]; 
+		for (int fn=0; fn<num_face_nbrs; fn++) {
+			const int nbr_rank = mesh.GetFaceNbrRank(fn); 
+			int tag = 0; 
+			MPI_Isend(&send_buffer.GetData()[send_offset[fn]*G*Nomega], 
+				(send_offset[fn+1] - send_offset[fn])*G*Nomega, MPI_DOUBLE, 
+				nbr_rank, tag, comm, &send_requests[fn]); 
+			MPI_Irecv(&psi_fnbr.GetData()[recv_offset[fn]*G*Nomega], 
+				(recv_offset[fn+1] - recv_offset[fn])*G*Nomega,
+				MPI_DOUBLE, nbr_rank, tag, comm, &recv_requests[fn]); 
+		}
+		MPI_Waitall(num_face_nbrs, send_requests, statuses); 
+		MPI_Waitall(num_face_nbrs, recv_requests, statuses); 
+		delete[] requests; delete[] statuses; 
+	}
+
+	mfem::Array<int> vdofs, vdofs2; 
+	mfem::Vector xlocal, xlocal2, ylocal, ylocal2, nor(dim); 
+	mfem::DenseMatrix grad; 
+	for (int g=0; g<G; g++) {
+		for (int a=0; a<quad.Size(); a++) {
+			const auto &Omega = quad.GetOmega(a); 
+			for (int e=0; e<mesh.GetNE(); e++) {
+				fes.GetElementDofs(e, vdofs); 
+				xlocal.SetSize(vdofs.Size()); 
+				ylocal.SetSize(vdofs.Size()); 
+				for (int i=0; i<vdofs.Size(); i++) { xlocal(i) = xview(g,a,vdofs[i]); }
+				mass_mat_view(g,e)->Mult(xlocal, ylocal); 
+				grad.SetSize(vdofs.Size()); 
+				grad = 0.0; 
+				for (int d=0; d<dim; d++) {
+					grad.Add(Omega(d), *grad_mat_view(d,e)); 
+				}
+				grad.AddMult(xlocal, ylocal); 
+				for (int i=0; i<vdofs.Size(); i++) { yview(g,a,vdofs[i]) += ylocal(i); }
+			}
+
+			for (int f=0; f<mesh.GetNumFaces(); f++) {
+				for (auto d=0; d<dim; d++) { nor(d) = normals(f*dim + d); }
+				const auto &info = mesh.GetFaceInformation(f); 
+				mfem::FaceElementTransformations *trans; 
+				if (info.IsShared()) {
+					trans = mesh.GetSharedFaceTransformationsByLocalIndex(f, true); 
+				} else {
+					trans = mesh.GetFaceElementTransformations(f); 
+				}
+				const double dot = Omega * nor; 
+				const auto e1 = trans->Elem1No; 
+				fes.GetElementDofs(e1, vdofs); 
+				xlocal.SetSize(vdofs.Size()); 
+				ylocal.SetSize(vdofs.Size()); 
+				for (int i=0; i<vdofs.Size(); i++) { xlocal(i) = xview(g,a,vdofs[i]); }
+
+				ylocal = 0.0; 
+				if (info.IsShared()) {
+					const auto e2 = trans->Elem2No; 
+					const auto idx = e2 - mesh.GetNE(); 
+					fes.GetFaceNbrElementVDofs(idx, vdofs2); 
+					xlocal2.SetSize(vdofs2.Size());  
+					for (int i=0; i<vdofs2.Size(); i++) { xlocal2(i) = psi_fnbr[a + g*Nomega + Nomega*G*vdofs2[i]]; }
+					if (dot >= 0) {
+						face_mat_view(f,0,0)->AddMult(xlocal, ylocal, dot); 
+					} else {
+						face_mat_view(f,0,1)->AddMult(xlocal2, ylocal, dot); 
+					}
+				}
+
+				else if (info.IsInterior()) {
+					const auto e2 = trans->Elem2No; 
+					fes.GetElementDofs(e2, vdofs2);
+					xlocal2.SetSize(vdofs2.Size());  
+					ylocal2.SetSize(vdofs2.Size()); 
+					for (int i=0; i<vdofs2.Size(); i++) { xlocal2(i) = xview(g,a,vdofs2[i]); }
+					ylocal2 = 0.0; 
+					if (dot >= 0) { // Omega points 1 -> 2 
+						// 1 gets outflow 
+						face_mat_view(f,0,0)->AddMult(xlocal, ylocal, dot); 
+						// 2 gets inflow 
+						face_mat_view(f,1,0)->AddMult(xlocal, ylocal2, -dot); 
+					} 
+
+					else { // Omega points 2 -> 1 
+						face_mat_view(f,0,1)->AddMult(xlocal2, ylocal, dot); 
+						face_mat_view(f,1,1)->AddMult(xlocal2, ylocal2, -dot); 
+					}
+					for (int i=0; i<vdofs2.Size(); i++) { yview(g,a,vdofs2[i]) += ylocal2(i); }
+				}
+
+				else {
+					if (dot >= 0) {
+						face_mat_view(f,0,0)->AddMult(xlocal, ylocal, dot); 
+					} 
+				}
+				for (int i=0; i<vdofs.Size(); i++) { yview(g,a,vdofs[i]) += ylocal(i); }
+			}
+		}
+	}
+}
