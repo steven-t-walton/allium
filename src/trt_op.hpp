@@ -43,9 +43,18 @@ public:
 class LinearEliminationTDOperator : public mfem::TimeDependentOperator 
 {
 private:
+	const mfem::Array<int> &offsets; 
 	const mfem::Operator &Linv, &D, &emission_form, &Mtot; 
+	const mfem::IterativeSolver &schur_solver; 
 public:
-	LinearEliminationTDOperator()
+	LinearEliminationTDOperator(
+		const mfem::Array<int> &offsets,
+		const mfem::Operator &Linv, 
+		const mfem::Operator &D, 
+		const mfem::Operator &emission_form, 
+		const mfem::Operator &Mtot, 
+		const mfem::IterativeSolver &schur_solver); 
+	void ImplicitSolve(const double dt, const mfem::Vector &x, mfem::Vector &y) override; 
 };
 
 // class LinearizedTRTOperator : public mfem::Operator

@@ -63,6 +63,40 @@ void LocalEliminationTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) c
 	meb_solver.Mult(tmp, y); 
 }
 
+LinearEliminationTDOperator::LinearEliminationTDOperator(
+	const mfem::Array<int> &offsets,
+	const mfem::Operator &Linv, 
+	const mfem::Operator &D, 
+	const mfem::Operator &emission_form, 
+	const mfem::Operator &Mtot, 
+	const mfem::IterativeSolver &schur_solver)
+	: offsets(offsets), Linv(Linv), D(D), emission_form(emission_form), Mtot(Mtot), schur_solver(schur_solver)
+{
+	height = width = offsets.Last(); 
+	type = IMPLICIT; 
+}
+
+void LinearEliminationTDOperator::ImplicitSolve(const double dt, const mfem::Vector &x, mfem::Vector &y)
+{
+	// Mpsi.Mult(psi0, psi0); // operator designed to work in-place 
+	// add(source_vec, 1.0/time_step/constants::SpeedOfLight, psi0, psi0); // source_vec + 1/c/dt psi0 -> psi0
+	// Mcv.Mult(T, T0); // assume T = T0 to get Mcv T0 -> T0 
+	// T0 *= 1.0/time_step; 
+
+	// Linv.Mult(psi0, psi); 
+	// D.Mult(psi, phi); 
+	// Mtot.Mult(phi, phi_source); 
+	// add(T0, 1.0, phi_source, em_source); 
+	// op.SetSource(em_source); 
+	// mfem::Vector blank; 
+	// outer_solver->Mult(blank, T); 
+	// emission_form.Mult(T, em_source); 
+	// D.MultTranspose(em_source, psi); 
+	// psi += psi0; 	
+	// Linv.Mult(psi, psi); 
+	// D.Mult(psi, phi); 
+}
+
 // LinearizedTRTOperator::LinearizedTRTOperator(
 // 	const mfem::Array<int> &offsets, 
 // 	const InverseAdvectionOperator &Linv, 
