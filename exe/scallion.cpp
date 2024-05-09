@@ -438,15 +438,15 @@ int main(int argc, char *argv[]) {
 	Mcv.Finalize(); 
 
 	enum SolutionIndex {
-		PHI = 0, 
-		PSI = 1, 
-		TEMP = 2
+		PHI = 2, 
+		PSI = 0, 
+		TEMP = 1
 	};
 	mfem::Array<int> offsets(4); 
 	offsets[0] = 0; 
-	offsets[1] = phi_size; 
-	offsets[2] = psi_size; 
-	offsets[3] = fes.GetVSize(); 
+	offsets[SolutionIndex::PHI+1] = phi_size; 
+	offsets[SolutionIndex::PSI+1] = psi_size; 
+	offsets[SolutionIndex::TEMP+1] = fes.GetVSize(); 
 	offsets.PartialSum(); 
 	mfem::BlockVector x(offsets), x0(offsets); 
 	mfem::Vector psi(x.GetBlock(SolutionIndex::PSI), 0, psi_size); 
@@ -642,8 +642,12 @@ int main(int argc, char *argv[]) {
 	}
 	out << YAML::EndMap; // end driver output 
 
-	LocalEliminationTRTOperator op(Linv, D, emission_form, Mtot, *rebalance_solver, psi); 
-	outer_solver->SetOperator(op); 
+	mfem::TransposeOperator DT(D); 
+	mfem::ProductOperator A12(&DT, &emission_form, false, false); 
+	mfem::ProductOperator A21(&Mtot, &D, false, false); 
+	PicardTRTOperator op(offsets, Linv, A12, A21, *rebalance_solver, *outer_solver); 
+	InnerIterativeSolverMonitor itmon(*rebalance_solver); 
+	outer_solver->SetMonitor(itmon); 
 
 	// --- configure outputs --- 
 	out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
@@ -748,17 +752,7 @@ int main(int argc, char *argv[]) {
 		Mcv.Mult(T, T0); // assume T = T0 to get Mcv T0 -> T0 
 		T0 *= 1.0/time_step; 
 
-		Linv.Mult(psi0, psi); 
-		D.Mult(psi, phi); 
-		Mtot.Mult(phi, phi_source); 
-		add(T0, 1.0, phi_source, em_source); 
-		op.SetSource(em_source); 
-		mfem::Vector blank; 
-		outer_solver->Mult(blank, T); 
-		emission_form.Mult(T, em_source); 
-		D.MultTranspose(em_source, psi); 
-		psi += psi0; 	
-		Linv.Mult(psi, psi); 
+		op.Mult(x0, x); 
 		D.Mult(psi, phi); 
 
 		// int outer = 0; 
@@ -944,6 +938,10 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
 			out << YAML::Key << "it" << YAML::Value << outer_solver->GetNumIterations(); 
 			out << YAML::Key << "norm" << YAML::Value << outer_solver->GetFinalRelNorm();  
+			out << YAML::Key << "inner solver" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "it" << YAML::Value << itmon.max_it;
+				out << YAML::Key << "norm" << YAML::Value << itmon.max_norm; 
+			out << YAML::EndMap; 
 			// out << YAML::Key << "it" << YAML::Value << outer; 
 			// out << YAML::Key << "norm" << YAML::Value << norm;
 			// out << YAML::Key << "inner iteration" << YAML::Value << YAML::BeginMap; 
