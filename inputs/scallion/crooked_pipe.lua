@@ -71,40 +71,89 @@ mesh = {
 	parallel_refinements = 0,
 }
 
+picard = {
+	type = "picard", 
+	nonlinear_solver = {
+		type = "fp", 
+		reltol = 1e-4, 
+		max_iter = 100, 
+		iterative_mode = true, 
+		print_level = 0
+	}, 
+	energy_balance_solver = {
+		type = "newton", 
+		reltol = 1e-6, 
+		abstol = 1e-6, 
+		max_iter = 40, 
+		iterative_mode = true, 
+		print_level = 0
+	}
+}
+
+linearized = {
+	type = "linearized", 
+	nonlinear_solver = {
+		type = "newton", 
+		reltol = 1e-4, 
+		abstol = 1e-4, 
+		max_iter = 1, 
+		iterative_mode = true, 
+		print_level = -1
+	}, 
+	transport_solver = {
+		type = "gmres", 
+		reltol = 1e-8, 
+		max_iter = 100, 
+		iterative_mode = false, 
+		kdim = 50,
+		print_level = 0,
+		preconditioner = {
+			type = "mip", 
+			solver = {
+				type = "cg", 
+				reltol = 1e-10, 
+				max_iter = 50, 
+				iterative_mode = false, 
+				print_level = 0
+			}
+		},
+	},
+	-- rebalance_solver = {
+	-- 	type = "newton", 
+	-- 	reltol = 1e-10, 
+	-- 	abstol = 1e-10, 
+	-- 	max_iter = 40,
+	-- 	iterative_mode = true,
+	-- 	print_level = 0
+	-- },
+}
+
 driver = {
 	fe_order = 1, 
 	sigma_fe_order = 0, 
 	sn_order = 6, 
 	basis_type = "lobatto", 
-	solver = {
-		type = "gmres", 
-		reltol = 1e-7, 
-		max_iter = 100,
-		kdim = 50,
-		iterative_mode = false, 
-		print_level = 0
-	}, 
-	newton_solver = {
-		abstol = 1e-4, 
-		max_iter = 1, 
+	solver = linearized, 
+	lump = 7, 
+	fixup = {
+		type = "zero and scale"
 	},
-	lump = true, 
-	sweep_opts = {
-		fixup = {
-			type = "zero and scale", 
-			psi_min = 1e-8,
-		}
-		-- fixup = {
-			-- type = "local optimization", 
-			-- psi_min = 1e-8, 
-		-- }
-	}, 
 	time_step = 1e-10,
 	final_time = 5e-7, 
-	-- max_cycles = 10
 }
 
 output = {
-	paraview = "solution", 
-	frequency = 100
+	root = "solution", 
+	visualization = {
+		type = "paraview", 
+		frequency = 100
+	},
+	tracer = {
+		locations = {
+			{3.475, 1.475}, -- midpoint, last cell in thin 
+			{3.475, 1.525}, -- midpoint, first cell in thick 
+			{3.475, 1.275}, -- midpoint, center of pipe 
+			{6.975, 0.025}, -- last cell in pipe 
+		}
+	}
 }

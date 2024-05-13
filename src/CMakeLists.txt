@@ -16,12 +16,13 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/log.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/opacity.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/constants.hpp
-	${CMAKE_CURRENT_SOURCE_DIR}/trt_op.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/trt_integrators.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/fixup.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/lumped_intrule.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/tracer.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/block_diag_op.hpp	
+	${CMAKE_CURRENT_SOURCE_DIR}/trt_picard.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/trt_linearized.hpp
 )
 
 LIST(APPEND srcs 
@@ -40,12 +41,13 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/io.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/log.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/opacity.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/trt_op.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/trt_integrators.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/fixup.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/lumped_intrule.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/tracer.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/block_diag_op.cpp	
+	${CMAKE_CURRENT_SOURCE_DIR}/trt_picard.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/trt_linearized.cpp
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)

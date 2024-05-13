@@ -20,5 +20,7 @@ constexpr double Boltzmann = 1.380649e-16; // erg/K
 // black body thermal emission is StefanBoltzmann * T^4 (includes factor of speed of light)
 // erg/cm^2/s/eV^4 
 constexpr double StefanBoltzmann = 8.0*pow(pi, 5)/(15.0*pow(SpeedOfLight, 2)*pow(Planck, 3))/pow(internal::erg_to_eV,4); 
+// the "a" in black body emission ac T^4 
+constexpr double RadiationConstant = StefanBoltzmann / SpeedOfLight; 
 
 } // end namespace constants 

@@ -85,6 +85,7 @@ public:
 	void SetSendBufferSize(int s);
 	// allow disabling or re-enabling fixup 
 	void UseFixup(bool use=true) { apply_fixup = use; }
+	bool IsFixupOn() const { return apply_fixup and fixup_op; }
 	void SetFixupOperator(NegativeFluxFixupOperator &op) {
 		fixup_op = &op; 
 		apply_fixup = true; 

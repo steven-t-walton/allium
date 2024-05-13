@@ -1,9 +1,13 @@
 #include "gtest/gtest.h"
-#include "trt_op.hpp"
-#include "trt_integrators.hpp"
 #include "lumped_intrule.hpp"
 #include "constants.hpp"
 #include "block_diag_op.hpp"
+#include "transport_op.hpp"
+#include "sweep.hpp"
+
+#include "trt_integrators.hpp"
+#include "trt_picard.hpp"
+#include "trt_linearized.hpp"
 
 TEST(LumpedTRT, Emission1D) {
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0); 
@@ -197,4 +201,76 @@ TEST(TRT, NewtonSolve) {
 	ones = 1.0; 
 	T -= ones; 
 	EXPECT_NEAR(T.Norml2(), 0.0, 1e-12); 
+}
+
+TEST(LinearizedTRT, JacobianSolver) {
+	const int fe_order = 1; 
+	auto smesh = mfem::Mesh::MakeCartesian1D(3, 1.0); 
+	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
+	const auto dim = mesh.Dimension();
+	LevelSymmetricQuadrature quad(6, dim); 
+
+	mfem::L2_FECollection fec(fe_order, dim, mfem::BasisType::GaussLobatto); 
+	mfem::ParFiniteElementSpace fes(&mesh, &fec); 
+
+	double total_val = 1.0; 
+	double scattering_val = .25; 
+	mfem::ConstantCoefficient total(total_val);
+	mfem::ConstantCoefficient scattering(scattering_val);  
+	mfem::ConstantCoefficient inflow(2.0/4/M_PI); 
+
+	TransportVectorExtents psi_ext(1, quad.Size(), fes.GetVSize()); 
+	MomentVectorExtents phi_ext(1, 1, fes.GetVSize()); 
+	const auto psi_size = TotalExtent(psi_ext); 
+	mfem::Vector psi(psi_size); 
+	psi = 1.0/4/M_PI; 
+
+	DiscreteToMoment D(quad, psi_ext, phi_ext); 
+
+	mfem::ConstantCoefficient Cvdt(1.0); 
+	BlockDiagonalByElementNonlinearForm meb_form(&fes);
+	meb_form.AddDomainIntegrator(new BlackBodyEmissionNFI(total, 2, 2)); 
+	meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
+
+	BlockDiagonalByElementNonlinearForm emission_form(&fes); 
+	emission_form.AddDomainIntegrator(new BlackBodyEmissionNFI(total, 2, 2));
+
+	mfem::BilinearForm Mtot(&fes); 
+	Mtot.AddDomainIntegrator(new mfem::MassIntegrator(total)); 
+	Mtot.Assemble(); 
+	Mtot.Finalize(); 
+
+	mfem::GridFunction total_data(&fes); 
+	total_data.ProjectCoefficient(total); 
+	InverseAdvectionOperator Linv(fes, quad, total_data); 
+
+	mfem::Array<int> offsets(3); 
+	offsets[0] = 0; 
+	offsets[1] = fes.GetVSize(); 
+	offsets[2] = fes.GetVSize(); 
+	offsets.PartialSum(); 
+
+	BlockDiagonalByElementSolver meb_grad_inv; 
+
+	mfem::GMRESSolver gmres(MPI_COMM_WORLD); 
+	gmres.SetAbsTol(1e-6); 
+	gmres.SetMaxIter(100); 
+	gmres.SetPrintLevel(0); 
+
+	LinearizedTRTOperator::NonlinearOperator op(
+		offsets, Linv, D, emission_form, meb_form, Mtot, psi); 
+	LinearizedTRTOperator::JacobianSolver grad_inv(offsets, gmres, meb_grad_inv); 
+
+	mfem::BlockVector x(offsets), y(offsets), z(offsets), source(offsets); 
+	mfem::ParGridFunction phi(&fes, x.GetBlock(0), 0); 
+	mfem::ParGridFunction T(&fes, x.GetBlock(1), 0); 
+	T = 0.025; 
+	phi = constants::StefanBoltzmann * pow(0.025, 4); 
+	source.Randomize(12345); 
+	auto &grad = op.GetGradient(x); 
+	grad_inv.SetOperator(grad); 
+	grad.Mult(source, y); 
+	grad_inv.Mult(y, z); 
+	z -= source; 
+	EXPECT_NEAR(z.Norml2(), 0.0, 1e-5); 
 }
