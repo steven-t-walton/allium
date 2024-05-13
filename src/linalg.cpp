@@ -126,7 +126,7 @@ void FixedPointIterationSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 		if (i >= max_iter or converged) {
 			done = true; 
 		}
-		Monitor(i, norm, x, r, done); 
+		Monitor(i-1, norm, x, r, done); 
 
 		if (done) { break; }
 		i++; 
