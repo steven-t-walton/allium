@@ -1,47 +1,7 @@
 mesh = {
-	num_elements = {250}, 
-	extents = {1}, 
+	num_elements = {41,41},
+	extents = {0.5,0.5},
 }
-
-function initial_condition(x,y,z)
-	return 1
-end 
-
-materials = {
-	mat = {
-		total = {
-			type = "analytic gray", 
-			coef = 1e6, 
-			nrho = -1, 
-			nT = -3		
-		}, 
-		heat_capacity = 1.3874e11, 
-		source = 0, 
-		density = 1.0
-	}
-}
-
-function material_map(x,y,z)
-	return "mat"
-end
-
-boundary_conditions = {
-	inflow = {
-		type = "inflow", 
-		value = 150
-	}, 
-	vacuum = {
-		type = "vacuum"
-	}
-}
-
-function boundary_map(x,y,z)
-	if (x==0) then 
-		return "inflow"
-	else
-		return "vacuum"
-	end
-end
 
 picard = {
 	type = "picard", 
@@ -68,13 +28,13 @@ linearized = {
 		type = "newton", 
 		reltol = 1e-4, 
 		abstol = 1e-4, 
-		max_iter = 10, 
+		max_iter = 1, 
 		iterative_mode = true, 
 		print_level = -1
 	}, 
 	transport_solver = {
 		type = "gmres", 
-		reltol = 1e-6, 
+		reltol = 1e-8, 
 		max_iter = 100, 
 		iterative_mode = false, 
 		kdim = 50,
@@ -90,14 +50,14 @@ linearized = {
 			}
 		},
 	},
-	-- rebalance_solver = {
-	-- 	type = "newton", 
-	-- 	reltol = 1e-6, 
-	-- 	abstol = 1e-6, 
-	-- 	max_iter = 40,
-	-- 	iterative_mode = true,
-	-- 	print_level = 0
-	-- },
+	rebalance_solver = {
+		type = "newton", 
+		reltol = 1e-10, 
+		abstol = 1e-10, 
+		max_iter = 40,
+		iterative_mode = true,
+		print_level = 0
+	},
 }
 
 driver = {
@@ -105,12 +65,14 @@ driver = {
 	sigma_fe_order = 0, 
 	sn_order = 6, 
 	basis_type = "lobatto", 
-	solver = linearized,
+	solver = linearized, 
 	lump = 7, 
-	fixup = {
-		type = "zero and scale", 
-		psi_min = 0.0
-	},
+	sweep_opts = {
+		fixup = {
+			type = "zero and scale", 
+			psi_min = 0, 
+		}
+	}, 
 	time_step = 1e-10,
 	final_time = 5e-8, 
 }
@@ -119,11 +81,51 @@ output = {
 	root = "solution", 
 	visualization = {
 		type = "paraview", 
-		frequency = 10, 
-	},
+		frequency = 25, 
+	}, 
 	tracer = {
 		locations = {
-			{0.25}
-		},
+			{0.25,0.25}
+		}
 	}
 }
+
+materials = {
+	mat = {
+		total = {
+			type = "analytic gray", 
+			coef = 1e6, 
+			nrho = -1, 
+			nT = -3
+		},
+		heat_capacity = 1.3874e11, 
+		source = 0, 
+		density = 1.0
+	}
+}
+
+function material_map(x,y,z)
+	return "mat"
+end
+
+boundary_conditions = {
+	inflow = {
+		type = "inflow", 
+		value = 150
+	}, 
+	vacuum = {
+		type = "vacuum"
+	}
+}
+
+function boundary_map(x,y,z)
+	if (y==0) then 
+		return "inflow"
+	else
+		return "vacuum"
+	end
+end
+
+function initial_condition(x,y,z)
+	return 0.025
+end 
