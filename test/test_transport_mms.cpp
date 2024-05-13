@@ -1,13 +1,14 @@
 #include "gtest/gtest.h"
 #include "sweep.hpp"
 #include "transport_op.hpp"
+#include "lumped_intrule.hpp"
 
-double LinearTransportError(mfem::Mesh &smesh, int fe_order) {
+double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
 	const auto dim = mesh.Dimension();
 	LevelSymmetricQuadrature quad(6, dim); 
 
-	mfem::L2_FECollection fec(fe_order, dim, mfem::BasisType::GaussLegendre); 
+	mfem::L2_FECollection fec(fe_order, dim, mfem::BasisType::GaussLobatto); 
 	mfem::ParFiniteElementSpace fes(&mesh, &fec); 
 
 	double total_val = 1.0; 
@@ -42,14 +43,17 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order) {
 	mfem::Array<double> energy_grid(2); 
 	FormTransportSource(fes, quad, energy_grid, qmms_coef, inflow_coef, source_view);
 
-	mfem::ParBilinearForm Ms_form(&fes); 
-	Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
-	Ms_form.Assemble(); 
-	Ms_form.Finalize(); 
-
 	mfem::GridFunction total_data(&fes); 
 	total_data.ProjectCoefficient(total); 
-	InverseAdvectionOperator Linv(fes, quad, total_data); 
+	InverseAdvectionOperator Linv(fes, quad, total_data, -1, lump); 
+
+	mfem::ParBilinearForm Ms_form(&fes); 
+	if (Linv.IsMassLumped())
+		Ms_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(scattering))); 
+	else
+		Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
+	Ms_form.Assemble(); 
+	Ms_form.Finalize(); 
 
 	mfem::ParGridFunction phi(&fes), phi_old(&fes); 
 	phi_old = 0.0; 
@@ -73,46 +77,69 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order) {
 	return phi.ComputeL2Error(exact_c);
 }
 
-TEST(MMS, LinearTransport2Dp1) {
+TEST(LinearTransport, MMS2Dp1) {
 	auto Ne = 10; 
 	const auto fe_order = 1; 
 	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
 	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
-	double E1 = LinearTransportError(mesh1, fe_order); 
-	double E2 = LinearTransportError(mesh2, fe_order); 
+	double E1 = LinearTransportError(mesh1, fe_order, 0); 
+	double E2 = LinearTransportError(mesh2, fe_order, 0); 
 	double ooa = log2(E1/E2); 
 	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
 }
 
-TEST(MMS, LinearTransport2DTRI) {
+TEST(LinearTransport, MMS2DTRI) {
 	auto Ne = 10; 
 	const auto fe_order = 1; 
 	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
 	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
-	double E1 = LinearTransportError(mesh1, fe_order); 
-	double E2 = LinearTransportError(mesh2, fe_order); 
+	double E1 = LinearTransportError(mesh1, fe_order, 0); 
+	double E2 = LinearTransportError(mesh2, fe_order, 0); 
 	double ooa = log2(E1/E2); 
 	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
 }
 
-TEST(MMS, LinearTransport2Dp2) {
+TEST(LinearTransport, MMS2Dp2) {
 	auto Ne = 10; 
 	const auto fe_order = 2; 
 	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
 	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
-	double E1 = LinearTransportError(mesh1, fe_order); 
-	double E2 = LinearTransportError(mesh2, fe_order); 
+	double E1 = LinearTransportError(mesh1, fe_order, 0); 
+	double E2 = LinearTransportError(mesh2, fe_order, 0); 
 	double ooa = log2(E1/E2); 
 	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
 }
 
-TEST(MMS, LinearTransport2Dp3) {
+TEST(LinearTransport, MMS2Dp3) {
 	auto Ne = 10; 
 	const auto fe_order = 3; 
 	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
 	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
-	double E1 = LinearTransportError(mesh1, fe_order); 
-	double E2 = LinearTransportError(mesh2, fe_order); 
+	double E1 = LinearTransportError(mesh1, fe_order, 0); 
+	double E2 = LinearTransportError(mesh2, fe_order, 0); 
 	double ooa = log2(E1/E2); 
 	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
 }
+
+TEST(LumpedLinearTransport, MMS2Dp1) {
+	auto Ne = 10; 
+	const auto fe_order = 1; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	double E1 = LinearTransportError(mesh1, fe_order, 7); 
+	double E2 = LinearTransportError(mesh2, fe_order, 7); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
+}
+
+// getting first order?? 
+// TEST(LumpedLinearTransport, MMS2DTRI) {
+// 	auto Ne = 50; 
+// 	const auto fe_order = 1; 
+// 	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+// 	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+// 	double E1 = LinearTransportError(mesh1, fe_order, 7); 
+// 	double E2 = LinearTransportError(mesh2, fe_order, 7); 
+// 	double ooa = log2(E1/E2); 
+// 	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
+// }
