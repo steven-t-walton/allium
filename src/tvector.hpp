@@ -38,3 +38,17 @@ void ProjectPsi(const mfem::FiniteElementSpace &fes, const AngularQuadrature &qu
 	PhaseSpaceCoefficient &f, TransportVectorView psi); 
 void ProjectPsi(const mfem::FiniteElementSpace &fes, const AngularQuadrature &quad, 
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &f, mfem::Vector &psi); 
+
+class SNTimeMassMatrix : public mfem::Operator
+{
+private:
+	const mfem::FiniteElementSpace &fes; 
+	const TransportVectorExtents &psi_ext; 
+	mfem::Array<mfem::DenseMatrix*> mats; 
+public:
+	SNTimeMassMatrix(const mfem::FiniteElementSpace &fes, const TransportVectorExtents &ext, bool lump=false);
+	~SNTimeMassMatrix() {
+		for (auto *ptr : mats) { delete ptr; }
+	}
+	void Mult(const mfem::Vector &psi, mfem::Vector &Mpsi) const; 
+};
