@@ -53,6 +53,10 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table)
 
 mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm) 
 {
+	int rank; 
+	MPI_Comm_rank(comm, &rank);
+	const bool root = rank == 0; 
+
 	mfem::IterativeSolver *s = nullptr; 
 	std::string type = table["type"]; 
 	std::transform(type.begin(), type.end(), type.begin(), ::tolower); 
@@ -95,11 +99,27 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 
 	else if (type == "kinsol") {
 	#ifdef MFEM_USE_SUNDIALS 
-		auto *kn = new mfem::KINSolver(comm, KIN_FP, false); 
-		int kdim = table["kdim"].get_or(1); 
+		const std::string mode = table["strategy"].get_or(std::string("fp")); 
+		io::ValidateOption<std::string>("kinsol strategy", mode, 
+			{"fp", "picard", "none", "linesearch"}, root); 
+		int strategy; 
+		if (mode == "fp") {
+			strategy = KIN_FP; 
+		} else if (mode == "picard") {
+			strategy = KIN_PICARD; 
+		} else if (mode == "none") {
+			strategy = KIN_NONE; 
+		} else if (mode == "linesearch") {
+			strategy = KIN_LINESEARCH; 
+		}
+		table["strategy"] = mode; 
+		auto *kn = new mfem::KINSolver(comm, strategy, true); 
+		int kdim = table["kdim"].get_or(0); 
 		kn->SetMAA(kdim); 
 		table["kdim"] = kdim; 
 		s = kn; 
+		int max_setup = table["max_setup_calls"].get_or(1); 
+		kn->SetMaxSetupCalls(max_setup); 
 		kn->SetPrintLevel(1); // default to 1 to call callback function 
 	#else 
 		MFEM_ABORT("MFEM not built with sundials"); 
@@ -349,6 +369,25 @@ void SetSuperLUOptions(sol::table &table, mfem::SuperLUSolver &slu, bool root)
 	slu.SetPrintStatistics(print); 
 }
 #endif
+
+bool ParseKINSOLMessage(char *msg, int &it, double &norm)
+{
+	std::regex nni_reg("nni =\\s+([0-9]+)\\s"); 
+	std::cmatch nni_match; 
+	if (std::regex_search(msg, nni_match, nni_reg)) {
+		it = std::stoi(nni_match[1]); 
+		// fnorm =      0.0005730787351824196
+		std::regex norm_reg("fnorm =\\s+(\\S+)"); 
+		std::cmatch norm_match; 
+		if (std::regex_search(msg, norm_match, norm_reg)) {
+			norm = std::stod(norm_match[1].str());
+		}
+		return true; 
+	}
+	else {
+		return false; 
+	}
+}
 
 void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data) 
 {

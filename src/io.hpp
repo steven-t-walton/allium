@@ -46,6 +46,7 @@ struct SundialsUserCallbackData {
 	}
 };
 
+bool ParseKINSOLMessage(char *msg, int &it, double &norm);
 void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data); 
 void SundialsErrorFunction(int error_code, const char *module, const char *function, char *msg, void *user_data); 
 
