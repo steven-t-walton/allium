@@ -63,7 +63,9 @@ public:
 			out << YAML::Key << "it" << YAML::Value << YAML::Flow << YAML::BeginMap; 
 				out << YAML::Key << "max" << YAML::Value << iters.Max(); 
 				out << YAML::Key << "min" << YAML::Value << iters.Min(); 
-				out << YAML::Key << "avg" << YAML::Value << avg; 
+				std::stringstream ss; 
+				ss << std::fixed << std::setw(3) << std::setprecision(2) << avg; 
+				out << YAML::Key << "avg" << YAML::Value << ss.str();  
 				out << YAML::Key << "total" << YAML::Value << sum; 
 			out << YAML::EndMap; 
 			out << YAML::Key << "max norm" << YAML::Key << monitor.max_norm; 
