@@ -1,7 +1,8 @@
 #include "trt_linearized.hpp"
 #include "transport_op.hpp"
+#include "log.hpp"
 
-LinearizedTRTOperator::LinearizedTRTOperator(
+NewtonTRTOperator::NewtonTRTOperator(
 	const mfem::Array<int> &offsets, 
 	const InverseAdvectionOperator &Linv, 
 	const mfem::Operator &D, 
@@ -29,36 +30,38 @@ LinearizedTRTOperator::LinearizedTRTOperator(
 	reduced_b = std::make_unique<mfem::BlockVector>(reduced_offsets); 
 }
 
-void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const 
+void NewtonTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const 
 {
 	const mfem::Vector source_psi(*const_cast<mfem::Vector*>(&x), offsets[0], offsets[1] - offsets[0]); 
 	const mfem::Vector source_T(*const_cast<mfem::Vector*>(&x), offsets[1], offsets[2] - offsets[1]); 
 	mfem::Vector psi(y, offsets[0], offsets[1] - offsets[0]); 
 	mfem::Vector T(y, offsets[1], offsets[2] - offsets[1]); 
 
-	bool use_fixup = Linv.IsFixupOn(); 
-	// will return to original state at end of Mult => not violate const-ness of Linv 
-	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(false); 
-
 	// eliminate psi 
 	Linv.Mult(source_psi, psi); 
 	D.Mult(psi, reduced_b->GetBlock(0)); 
 	reduced_b->GetBlock(1) = source_T;
 
+	// will return to original state at end of Mult => not violate const-ness of Linv 
+	const bool use_fixup = Linv.IsFixupOn(); 
+	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(false); 
+
 	NonlinearOperator op(reduced_offsets, Linv, D, B, Bt, sigma, psi); 
 	JacobianSolver grad_inv(reduced_offsets, schur_solver, meb_grad_inv, dsa_solver); 
-	nonlinear_solver.SetPreconditioner(grad_inv);
 	nonlinear_solver.SetOperator(op); 
-	nonlinear_solver.Mult(*reduced_b, *reduced_x); 
+	nonlinear_solver.SetPreconditioner(grad_inv);
+	nonlinear_solver.Mult(*reduced_b, *reduced_x); 		
 
-	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(use_fixup); 
 	T = reduced_x->GetBlock(1); 
 	B.Mult(T, reduced_b->GetBlock(0)); 
 	D.MultTranspose(reduced_b->GetBlock(0), psi); 
 	add(psi, 1.0, source_psi, psi); 
+	// re-enable fixup if enabled on entry 
+	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(use_fixup); 
 	Linv.Mult(psi, psi); 
 
-	if (rebalance_solver and (use_fixup or !nonlinear_solver.GetConverged())) {
+	// if (rebalance_solver and (use_fixup or !nonlinear_solver.GetConverged())) {
+	if (rebalance_solver) {
 		D.Mult(psi, reduced_x->GetBlock(0)); 
 		sigma.Mult(reduced_x->GetBlock(0), reduced_b->GetBlock(0)); 
 		add(source_T, 1.0, reduced_b->GetBlock(0), reduced_b->GetBlock(0)); 
@@ -66,7 +69,7 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	}
 }
 
-LinearizedTRTOperator::
+NewtonTRTOperator::
 NonlinearOperator::NonlinearOperator(
 	const mfem::Array<int> &offsets, 
 	const mfem::Operator &Linv, 
@@ -83,7 +86,7 @@ NonlinearOperator::NonlinearOperator(
 	F11 = std::make_unique<mfem::IdentityOperator>(offsets[1] - offsets[0]); 
 }
 
-void LinearizedTRTOperator::
+void NewtonTRTOperator::
 NonlinearOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const 
 {
 	const mfem::Vector phi(*const_cast<mfem::Vector*>(&x), offsets[0], offsets[1] - offsets[0]); 
@@ -102,7 +105,7 @@ NonlinearOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	add(tmp, -1.0, f_T, f_T); // tmp - f_T -> f_T 
 }
 
-mfem::Operator &LinearizedTRTOperator::
+mfem::Operator &NewtonTRTOperator::
 NonlinearOperator::GetGradient(const mfem::Vector &x) const 
 {
 	const mfem::Vector phi(*const_cast<mfem::Vector*>(&x), offsets[0], offsets[1] - offsets[0]); 
@@ -119,7 +122,7 @@ NonlinearOperator::GetGradient(const mfem::Vector &x) const
 	return *grad; 
 }
 
-LinearizedTRTOperator::
+NewtonTRTOperator::
 JacobianSolver::JacobianSolver(
 	const mfem::Array<int> &offsets, mfem::IterativeSolver &schur_solver, 
 	mfem::Solver &meb_grad_inv, const mfem::Solver *dsa_solver)
@@ -130,7 +133,7 @@ JacobianSolver::JacobianSolver(
 	tmp_T.SetSize(offsets[2] - offsets[1]); 
 }
 
-void LinearizedTRTOperator::
+void NewtonTRTOperator::
 JacobianSolver::SetOperator(const mfem::Operator &op)
 {
 	block_op = dynamic_cast<const mfem::BlockOperator*>(&op); 
@@ -151,7 +154,7 @@ JacobianSolver::SetOperator(const mfem::Operator &op)
 	schur_solver.SetOperator(*schur_op); 
 }
 
-void LinearizedTRTOperator::
+void NewtonTRTOperator::
 JacobianSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const 
 {
 	const mfem::Vector source_phi(*const_cast<mfem::Vector*>(&b), offsets[0], offsets[1] - offsets[0]); 
@@ -168,4 +171,101 @@ JacobianSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
 	block_op->GetBlock(1,0).Mult(phi, tmp_T); 
 	add(source_T, 1.0, tmp_T, tmp_T); 
 	meb_grad_inv.Mult(tmp_T, T); 
+}
+
+LinearizedTRTOperator::LinearizedTRTOperator(
+	const mfem::Array<int> &offsets, 
+	const InverseAdvectionOperator &Linv, 
+	const mfem::Operator &D, 
+	const mfem::Operator &B, 
+	const mfem::Operator &Bt, 
+	const mfem::Operator &sigma, 
+	mfem::IterativeSolver &schur_solver, 
+	mfem::Solver &meb_grad_inv, 
+	const mfem::Solver *dsa_solver)
+	: offsets(offsets), Linv(Linv), D(D), B(B), Bt(Bt), sigma(sigma), 
+	  schur_solver(schur_solver), meb_grad_inv(meb_grad_inv), 
+	  dsa_solver(dsa_solver)
+{
+	height = width = offsets.Last(); 
+	temp_resid.SetSize(Bt.Height()); 
+	dT.SetSize(Bt.Height()); 
+	em_source.SetSize(D.Height()); 
+	phi_source.SetSize(D.Height()); 
+	phi.SetSize(D.Height()); 
+}
+
+void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
+{
+	const mfem::Vector source_psi(*const_cast<mfem::Vector*>(&x), offsets[0], offsets[1] - offsets[0]); 
+	const mfem::Vector source_T(*const_cast<mfem::Vector*>(&x), offsets[1], offsets[2] - offsets[1]); 
+	mfem::Vector psi(y, offsets[0], offsets[1] - offsets[0]); 
+	mfem::Vector T(y, offsets[1], offsets[2] - offsets[1]); 
+
+	const bool use_fixup = Linv.IsFixupOn(); 
+	// disable fixup for newton operations 
+	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(false); 
+
+	// --- form RHS --- 
+	Bt.Mult(T, temp_resid); 
+	add(source_T, -1.0, temp_resid, temp_resid); // T0 - temp_resid -> temp_resid 
+
+	// invert (cv/dt + 4a sigma T^3)
+	const auto &Bt_grad = Bt.GetGradient(T); 
+	meb_grad_inv.SetOperator(Bt_grad); 
+	// ( 4a sigma T^3 u, v)
+	const auto &dplanck = B.GetGradient(T); 
+	mfem::ProductOperator linearized_elim(&dplanck, &meb_grad_inv, false, false); 
+
+	// form transport residual 
+	B.Mult(T, em_source); 
+	// eliminate down to phi
+	linearized_elim.Mult(temp_resid, phi_source);
+	em_source += phi_source; 
+	D.MultTranspose(em_source, psi); 
+	psi += source_psi; 
+	Linv.Mult(psi, psi);
+	D.Mult(psi, phi_source); 
+
+	// apply I - D Linv dB (dBt)^{-1} Msigma 
+	mfem::TripleProductOperator Ms_form(&dplanck, &meb_grad_inv, &sigma, false, false, false); 
+	TransportOperator transport_op(D, Linv, Ms_form, psi); 
+	std::unique_ptr<DiffusionSyntheticAccelerationOperator> dsa_op; 
+	if (dsa_solver) 
+		dsa_op = std::make_unique<DiffusionSyntheticAccelerationOperator>(*dsa_solver, Ms_form); 
+	if (dsa_op) schur_solver.SetPreconditioner(*dsa_op); 
+	schur_solver.SetOperator(transport_op); 
+	D.Mult(psi, phi); 
+	schur_solver.Mult(phi_source, phi); 
+
+	sigma.Mult(phi, phi_source); 
+	phi_source += temp_resid; 
+	meb_grad_inv.Mult(phi_source, dT); 
+	for (int i=0; i<T.Size(); i++) {
+		double Tnew = T(i) + dT(i); 
+		if (Tnew < 0.0) {
+			EventLog["under relax"] += 1; 
+			T(i) = T(i) + 0.05*dT(i); 
+		} else {
+			T(i) = Tnew; 
+		}
+	}
+
+	// sweep to recover psi 
+	Ms_form.Mult(phi, phi_source); 
+	em_source += phi_source;
+	D.MultTranspose(em_source, psi); 
+	psi += source_psi; 
+	// re-enable fixup if on at entry 
+	// returns Linv to original state => doesn't violate const contract 
+	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(use_fixup); 
+	Linv.Mult(psi, psi);
+
+	// solve for temperature update 
+	if (rebalance_solver) {
+		D.Mult(psi, phi); 
+		sigma.Mult(phi, phi_source); 
+		phi_source += source_T; 
+		rebalance_solver->Mult(phi_source, T); 
+	}
 }

@@ -19,7 +19,7 @@
 // the schur complement looks like a steady-state transport problem with 
 // pseudo scattering dB dBt^{-1} sigma => solve with linear solver (eg gmres) and
 // an optional DSA preconditioner 
-class LinearizedTRTOperator : public mfem::Operator
+class NewtonTRTOperator : public mfem::Operator
 {
 private:
 	const mfem::Array<int> &offsets; 
@@ -31,9 +31,9 @@ private:
 
 	mfem::Array<int> reduced_offsets; // size of [ phi, T ] for Newton operator 
 	mutable std::unique_ptr<mfem::BlockVector> reduced_x, reduced_b; 
-	const mfem::Operator *rebalance_solver = nullptr; 
+	mfem::IterativeSolver *rebalance_solver = nullptr; 
 public:
-	LinearizedTRTOperator(
+	NewtonTRTOperator(
 		const mfem::Array<int> &offsets, // [psi, T]
 		const InverseAdvectionOperator &Linv, // sweep
 		const mfem::Operator &D, // discrete to moment 
@@ -49,7 +49,7 @@ public:
 
 	// if set, solves local temperature equation in case Newton did not converge 
 	// or a fix up is used 
-	void SetRebalanceSolver(const mfem::Operator &op) { rebalance_solver = &op; }
+	void SetRebalanceSolver(mfem::IterativeSolver &op) { rebalance_solver = &op; }
 
 	// block operator that applies 
 	// [    I    -D Linv B ]
@@ -152,4 +152,35 @@ private:
 			add(x, -1.0, y, y); // x - y -> y 
 		}
 	};
+};
+
+class LinearizedTRTOperator : public mfem::Operator
+{
+private:
+	const mfem::Array<int> &offsets; 
+	const InverseAdvectionOperator &Linv; 
+	const mfem::Operator &D, &B, &Bt, &sigma;
+	mfem::IterativeSolver &schur_solver; 
+	mfem::Solver &meb_grad_inv; 
+	const mfem::Solver *dsa_solver = nullptr; 
+
+	mutable mfem::Vector temp_resid, dT, em_source, phi_source, phi; 
+	mfem::IterativeSolver *rebalance_solver = nullptr; 
+public:
+	LinearizedTRTOperator(
+		const mfem::Array<int> &offsets, // [psi, T]
+		const InverseAdvectionOperator &Linv, // sweep
+		const mfem::Operator &D, // discrete to moment 
+		const mfem::Operator &B, // emission
+		const mfem::Operator &Bt, // emission with Cv/dt term
+		const mfem::Operator &sigma, // M_sigma 
+		mfem::IterativeSolver &schur_solver, // solves linear transport problem 
+		mfem::Solver &meb_grad_inv, // inverts Bt 
+		const mfem::Solver *dsa_solver=nullptr // inverts diffusion system for DSA 
+		); 
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
+
+	// if set, solves local temperature equation in case Newton did not converge 
+	// or a fix up is used 
+	void SetRebalanceSolver(mfem::IterativeSolver &op) { rebalance_solver = &op; }
 };

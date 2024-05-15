@@ -57,17 +57,43 @@ public:
 	{
 		// for some reason mfem::Array::Sum isn't const... 
 		auto &iters = *const_cast<mfem::Array<int>*>(&monitor.iters); 
+		const int sum = iters.Sum(); 
+		const double avg = (double)sum/iters.Size(); 
 		out << YAML::BeginMap; 
 			out << YAML::Key << "it" << YAML::Value << YAML::Flow << YAML::BeginMap; 
 				out << YAML::Key << "max" << YAML::Value << iters.Max(); 
 				out << YAML::Key << "min" << YAML::Value << iters.Min(); 
-				out << YAML::Key << "total" << YAML::Value << iters.Sum(); 
+				out << YAML::Key << "avg" << YAML::Value << avg; 
+				out << YAML::Key << "total" << YAML::Value << sum; 
 			out << YAML::EndMap; 
 			out << YAML::Key << "max norm" << YAML::Key << monitor.max_norm; 
 		out << YAML::EndMap; 
 		return out; 
 	}
 };
+
+struct KinsolCallbackData {
+	InnerIterativeSolverMonitor *monitor = nullptr; 
+	mfem::IterativeSolver *solver = nullptr;
+	int it = -1; 
+	double norm = -1.0; 
+};
+
+void KinsolCallbackFunction(const char *module, const char *function, char *msg, void *user_data)
+{
+	KinsolCallbackData *data = static_cast<KinsolCallbackData*>(user_data); 
+	if (!data) MFEM_ABORT("did not get callback data struct"); 
+	int it; 
+	double norm;
+	if (io::ParseKINSOLMessage(msg, it, norm)) {
+		data->it = it; 
+		data->norm = norm; 
+	}
+	if (data->solver and data->monitor) {
+		data->monitor->iters.Append(data->solver->GetNumIterations()); 
+		data->monitor->max_norm = std::max(data->solver->GetFinalRelNorm(), data->monitor->max_norm); 
+	}
+}
 
 int main(int argc, char *argv[]) {
 	mfem::StopWatch wall_timer; 
@@ -608,13 +634,14 @@ int main(int argc, char *argv[]) {
 	sol::table solver = driver["solver"]; 
 	if (!solver.valid()) MFEM_ABORT("must supply solver options"); 
 	const std::string solver_type = solver["type"]; 
-	io::ValidateOption<std::string>("solver type", solver_type, {"picard", "linearized"}, root); 
+	io::ValidateOption<std::string>("solver type", solver_type, {"picard", "linearized", "newton"}, root); 
 	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver,
 		meb_solver, linear_solver, dsa_solver, rebalance_solver; 
 	std::unique_ptr<mfem::HypreParMatrix> dsa_mat; 
 	std::unique_ptr<mfem::ParBilinearForm> Kform; 
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
 	std::unique_ptr<InnerIterativeSolverMonitor> inner_monitor, dsa_monitor; 
+	std::unique_ptr<KinsolCallbackData> kinsol_data;
 	std::unique_ptr<mfem::Operator> stepper; 
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
 	out << YAML::Key << "type" << YAML::Value << solver_type; 
@@ -636,17 +663,33 @@ int main(int argc, char *argv[]) {
 		inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*meb_solver); 
 		nonlinear_solver->SetMonitor(*inner_monitor); 
 
+		auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get()); 
+		if (sundials) {
+			mfem::IdentityOperator identity(fes.GetVSize()); 
+			sundials->SetOperator(identity); 
+			kinsol_data = std::make_unique<KinsolCallbackData>(inner_monitor.get(), meb_solver.get()); 
+			KINSetInfoHandlerFn(sundials->GetMem(), KinsolCallbackFunction, kinsol_data.get()); 
+			KINSetErrHandlerFn(sundials->GetMem(), io::SundialsErrorFunction, nullptr); 
+		}
+
 		out << YAML::Key << "nonlinear solver" << YAML::Value << nonlin_solve_table; 
 		out << YAML::Key << "energy balance solver" << YAML::Value << meb_solver_table; 
 	} 
 
-	else if (solver_type == "linearized") {
+	else if (solver_type == "newton" or solver_type == "linearized") {
 		// create nonlinear solver 
-		sol::table nonlin_solve_table = solver["nonlinear_solver"]; 
-		if (!nonlin_solve_table.valid()) MFEM_ABORT("must supply nonlinear solver"); 
-		io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], {"newton"}, root); 
-		nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
-		out << YAML::Key << "nonlinear solver" << YAML::Key << nonlin_solve_table; 
+		sol::optional<sol::table> nonlin_solve_table_avail = solver["nonlinear_solver"]; 
+		if (nonlin_solve_table_avail) {
+			sol::table nonlin_solve_table = nonlin_solve_table_avail.value(); 
+			io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
+				{"newton", "kinsol"}, root); 
+			nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
+			if (dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get())) {
+				const std::string strategy = nonlin_solve_table["strategy"]; 
+				io::ValidateOption<std::string>("kinsol strategy", strategy, {"none", "linesearch"}, root); 				
+			}
+			out << YAML::Key << "nonlinear solver" << YAML::Key << nonlin_solve_table; 
+		}
 
 		// create solver for transport operator 
 		sol::table transport_solve_table = solver["transport_solver"]; 
@@ -658,9 +701,9 @@ int main(int argc, char *argv[]) {
 		if (prec_table_avail) {
 			sol::table prec_table = prec_table_avail.value(); 
 			const std::string type = prec_table["type"]; 
+			const double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
 			io::ValidateOption<std::string>("preconditioner type", type, {"mip"}, root); 
 			Kform = std::make_unique<mfem::ParBilinearForm>(&fes); 
-			double kappa = pow(fe_order+1,2); 
 			auto *diff_int = new mfem::DiffusionIntegrator(diffco); 
 			if (Linv.IsGradientLumped()) 
 				diff_int->SetIntegrationRule(lumped_intrule); 
@@ -694,13 +737,6 @@ int main(int argc, char *argv[]) {
 		}
 		out << YAML::Key << "transport solver" << YAML::Value << transport_solve_table; 
 
-		inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
-		nonlinear_solver->SetMonitor(*inner_monitor); 
-
-		auto *ptr = new LinearizedTRTOperator(
-			offsets, Linv, D, emission_form, meb_form, 
-			Mtot, *nonlinear_solver, *linear_solver, meb_grad_inv, dsa_solver.get());
-
 		// create "rebalance" solver 
 		// iterates temperature if newton doesn't converge 
 		sol::optional<sol::table> rebalance_solve_table_avail = solver["rebalance_solver"]; 
@@ -709,18 +745,33 @@ int main(int argc, char *argv[]) {
 			io::ValidateOption<std::string>("rebalance solver type", rebalance_solve_table["type"], 
 				{"newton"}, root); 
 			rebalance_solver.reset(io::CreateIterativeSolver(rebalance_solve_table, MPI_COMM_WORLD)); 
-			rebalance_solver->SetOperator(meb_form); 
 			rebalance_solver->SetPreconditioner(meb_grad_inv); 
-			ptr->SetRebalanceSolver(*rebalance_solver); 
+			rebalance_solver->SetOperator(meb_form); 
 			out << YAML::Key << "rebalance solver" << YAML::Value << rebalance_solve_table; 
 		}
-		stepper.reset(ptr); 
+
+		if (nonlinear_solver) {
+			auto *ptr = new NewtonTRTOperator(
+				offsets, Linv, D, emission_form, meb_form, 
+				Mtot, *nonlinear_solver, *linear_solver, meb_grad_inv, dsa_solver.get());
+			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
+			nonlinear_solver->SetMonitor(*inner_monitor); 
+			if (rebalance_solver) ptr->SetRebalanceSolver(*rebalance_solver); 
+			stepper.reset(ptr); 
+		} 
+
+		else {
+			auto *ptr = new LinearizedTRTOperator(
+				offsets, Linv, D, emission_form, meb_form, 
+				Mtot, *linear_solver, meb_grad_inv, dsa_solver.get());
+			if (rebalance_solver) ptr->SetRebalanceSolver(*rebalance_solver); 
+			stepper.reset(ptr); 
+		}
 	}
 	out << YAML::EndMap; // end solver output
 	out << YAML::EndMap; // end driver output 
 
 	// --- configure outputs --- 
-	out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
 	mfem::ParGridFunction cvgf(&fes0); cvgf.ProjectCoefficient(heat_capacity); 
 	mfem::ParGridFunction density_gf(&fes0); density_gf.ProjectCoefficient(density); 
 	mfem::ParGridFunction partition(&fes0); partition = rank; 
@@ -729,6 +780,7 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<TracerDataCollection> tracer_dc; 
 	int output_freq; 
 	if (output_avail) {
+		out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
 		sol::table output = output_avail.value(); 
 		const std::string output_root = output["root"];
 		if (output_root == "" and root) MFEM_ABORT("must supply output root");  
@@ -805,8 +857,8 @@ int main(int argc, char *argv[]) {
 				out << YAML::EndSeq; 
 			out << YAML::EndMap; 
 		}
+		out << YAML::EndMap; // end output map
 	}
-	out << YAML::EndMap; 
 
 	mfem::StopWatch cycle_timer; 
 	double time = 0.0; 
@@ -827,6 +879,7 @@ int main(int argc, char *argv[]) {
 		stepper->Mult(x0, x); 
 		D.Mult(psi, E); // update energy density 
 		E *= 1.0/constants::SpeedOfLight; 
+		if (E.CheckFinite() > 0) MFEM_ABORT("infinite energy density"); 
 
 		// --- post process --- 
 		// get peicewise constant version of temperature 
@@ -903,9 +956,22 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
 			out << YAML::Key << "time step size" << YAML::Value << time_step; 
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
-			out << YAML::Key << "it" << YAML::Value << nonlinear_solver->GetNumIterations(); 
-			out << YAML::Key << "norm" << YAML::Value << nonlinear_solver->GetFinalRelNorm();  
-			out << YAML::Key << "inner solver" << YAML::Value << *inner_monitor; 
+			if (nonlinear_solver) {
+				out << YAML::Key << "it" << YAML::Value << nonlinear_solver->GetNumIterations(); 
+				out << YAML::Key << "norm" << YAML::Value; 
+				if (kinsol_data) 
+					out << kinsol_data->norm; 
+				else 
+					out << nonlinear_solver->GetFinalRelNorm(); 
+			}
+			if (inner_monitor) {
+				out << YAML::Key << "inner solver" << YAML::Value << *inner_monitor; 				
+			} else if (linear_solver) {
+				out << YAML::Key << "linear solver" << YAML::Value << YAML::BeginMap; 
+					out << YAML::Key << "it" << YAML::Value << linear_solver->GetNumIterations(); 
+					out << YAML::Key << "norm" << YAML::Value << linear_solver->GetFinalRelNorm(); 
+				out << YAML::EndMap; 
+			}
 			if (dsa_monitor) {
 				out << YAML::Key << "dsa solver" << YAML::Value << *dsa_monitor;
 			}

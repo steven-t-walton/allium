@@ -203,7 +203,41 @@ TEST(TRT, NewtonSolve) {
 	EXPECT_NEAR(T.Norml2(), 0.0, 1e-12); 
 }
 
-TEST(LinearizedTRT, JacobianSolver) {
+#ifdef MFEM_USE_SUNDIALS 
+TEST(TRT, SundialsSolve) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(1, 1, mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
+	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
+	mfem::ConstantCoefficient sbi(1.0/constants::StefanBoltzmann); 
+	mfem::ConstantCoefficient none(-1.0); 
+	BlockDiagonalByElementNonlinearForm form(&fes); 
+	form.AddDomainIntegrator(new BlackBodyEmissionNFI(sbi, 2, 2)); 
+	form.AddDomainIntegrator(new mfem::MassIntegrator(none)); 
+
+	mfem::GridFunction T(&fes); 
+	T(0) = 12.0; T(1) = 7.3; T(2) = 9.6; T(3) = 10.0; 
+
+	mfem::KINSolver solver(KIN_NONE); 
+	solver.SetOperator(form); 
+	BlockDiagonalByElementSolver grad_inv(false); 
+	solver.SetSolver(grad_inv); 
+	solver.SetAbsTol(1e-12); 
+	solver.SetRelTol(1e-12); 
+	solver.SetMaxIter(40); 
+	solver.SetPrintLevel(1); 
+	solver.SetMaxSetupCalls(1); 
+	solver.iterative_mode = true;
+	mfem::Vector blank; 
+	solver.Mult(blank, T); 
+
+	mfem::Vector ones(fes.GetVSize()); 
+	ones = 1.0; 
+	T -= ones; 
+	EXPECT_NEAR(T.Norml2(), 0.0, 1e-12); 	
+}
+#endif
+
+TEST(NewtonTRT, JacobianSolver) {
 	const int fe_order = 1; 
 	auto smesh = mfem::Mesh::MakeCartesian1D(3, 1.0); 
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
@@ -257,9 +291,8 @@ TEST(LinearizedTRT, JacobianSolver) {
 	gmres.SetMaxIter(100); 
 	gmres.SetPrintLevel(0); 
 
-	LinearizedTRTOperator::NonlinearOperator op(
-		offsets, Linv, D, emission_form, meb_form, Mtot, psi); 
-	LinearizedTRTOperator::JacobianSolver grad_inv(offsets, gmres, meb_grad_inv); 
+	NewtonTRTOperator::NonlinearOperator op(offsets, Linv, D, emission_form, meb_form, Mtot, psi); 
+	NewtonTRTOperator::JacobianSolver grad_inv(offsets, gmres, meb_grad_inv); 
 
 	mfem::BlockVector x(offsets), y(offsets), z(offsets), source(offsets); 
 	mfem::ParGridFunction phi(&fes, x.GetBlock(0), 0); 
