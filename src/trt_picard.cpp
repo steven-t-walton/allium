@@ -19,23 +19,23 @@ PicardTRTOperator::PicardTRTOperator(
 void PicardTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const 
 {
 	const mfem::Vector source_psi(*const_cast<mfem::Vector*>(&x), offsets[0], offsets[1] - offsets[0]); 
-	const mfem::Vector source_phi(*const_cast<mfem::Vector*>(&x), offsets[1], offsets[2] - offsets[1]); 
+	const mfem::Vector source_T(*const_cast<mfem::Vector*>(&x), offsets[1], offsets[2] - offsets[1]); 
 	mfem::Vector psi(y, offsets[0], offsets[1] - offsets[0]); 
-	mfem::Vector phi(y, offsets[1], offsets[2] - offsets[1]); 
+	mfem::Vector T(y, offsets[1], offsets[2] - offsets[1]); 
 
 	// forward solve down to temperature problem 
 	Linv.Mult(source_psi, psi); 
 	C.Mult(psi, t1); 
-	add(source_phi, 1.0, t1, t1); // source_phi - t1 -> t1 
+	add(source_T, 1.0, t1, t1); // source_T - t1 -> t1 
 
 	// solve schur complement in temperature 
 	FixedPointOperator schur(Linv, B, C, meb_solver, t1, t2, psi); 
 	schur_solver.SetOperator(schur); 
 	mfem::Vector blank;
-	schur_solver.Mult(blank, phi); 
+	schur_solver.Mult(blank, T); 
 
 	// back solve to get psi 
-	B.Mult(phi, psi); 
+	B.Mult(T, psi); 
 	add(source_psi, 1.0, psi, psi); // source_psi - psi -> psi 
 	Linv.Mult(psi, psi); 
 }
