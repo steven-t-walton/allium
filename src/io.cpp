@@ -51,21 +51,27 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table)
 	out << YAML::EndMap; 
 }
 
-mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm) 
+mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MPI_Comm> comm) 
 {
 	int rank; 
-	MPI_Comm_rank(comm, &rank);
-	const bool root = rank == 0; 
+	if (comm) MPI_Comm_rank(*comm, &rank);
+	else rank = 0; 
+	const bool root = rank == 0; 		
 
 	mfem::IterativeSolver *s = nullptr; 
 	std::string type = table["type"]; 
 	std::transform(type.begin(), type.end(), type.begin(), ::tolower); 
 	if (type == "cg" or type == "conjugate gradient") {
-		s = new mfem::CGSolver(comm); 
+		if (comm)
+			s = new mfem::CGSolver(*comm); 
+		else
+			s = new mfem::CGSolver; 
 	} 
 
 	else if (type == "gmres") {
-		auto *gmres = new mfem::GMRESSolver(comm); 
+		mfem::GMRESSolver *gmres; 
+		if (comm) gmres = new mfem::GMRESSolver(*comm); 
+		else gmres = new mfem::GMRESSolver; 
 		sol::optional<int> kdim_avail = table["kdim"]; 
 		if (kdim_avail) { gmres->SetKDim(kdim_avail.value()); }
 		else { table["kdim"] = 50; }
@@ -73,7 +79,9 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 	}
 
 	else if (type == "fgmres") {
-		auto *fgmres = new mfem::FGMRESSolver(comm); 
+		mfem::FGMRESSolver *fgmres; 
+		if (comm) fgmres = new mfem::FGMRESSolver(*comm); 
+		else fgmres = new mfem::FGMRESSolver; 
 		sol::optional<int> kdim_avail = table["kdim"]; 
 		if (kdim_avail) { fgmres->SetKDim(kdim_avail.value()); }
 		// mfem's default 
@@ -82,11 +90,13 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 	}
 
 	else if (type == "sli") {
-		s = new SLISolver(comm); 
+		if (comm) s = new mfem::SLISolver(*comm); 
+		else s = new mfem::SLISolver; 
 	}
 
 	else if (type == "bicg" or type == "bicgstab") {
-		s = new mfem::BiCGSTABSolver(comm); 
+		if (comm) s = new mfem::BiCGSTABSolver(*comm); 
+		else s = new mfem::BiCGSTABSolver; 
 	}
 
 	else if (type == "direct" or type == "superlu") {
@@ -94,7 +104,8 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 	}
 
 	else if (type == "fixed point" or type == "fp") {
-		s = new FixedPointIterationSolver(comm);
+		if (comm) s = new FixedPointIterationSolver(*comm); 
+		else if (root) MFEM_ABORT("serial not implemented"); 
 	}
 
 	else if (type == "kinsol") {
@@ -113,25 +124,25 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm)
 			strategy = KIN_LINESEARCH; 
 		}
 		table["strategy"] = mode; 
-		auto *kn = new mfem::KINSolver(comm, strategy, true); 
+		mfem::KINSolver *kn; 
+		if (comm) kn = new mfem::KINSolver(*comm, strategy, true); 
+		else kn = new mfem::KINSolver(strategy, true); 
 		int kdim = table["kdim"].get_or(0); 
 		kn->SetMAA(kdim); 
 		table["kdim"] = kdim; 
 		s = kn; 
-		int max_setup = table["max_setup_calls"].get_or(1); 
-		kn->SetMaxSetupCalls(max_setup); 
-		kn->SetPrintLevel(1); // default to 1 to call callback function 
 	#else 
-		MFEM_ABORT("MFEM not built with sundials"); 
+		if (root) MFEM_ABORT("MFEM not built with sundials"); 
 	#endif
 	}
 
 	else if (type == "newton") {
-		s = new mfem::NewtonSolver(comm); 
+		if (comm) s = new mfem::NewtonSolver(*comm);
+		else s = new mfem::NewtonSolver; 
 	}
 
 	else {
-		MFEM_ABORT("solver type " << type << " not supported"); 
+		if (root) MFEM_ABORT("solver type " << type << " not supported"); 
 	}
 
 	// load generic iterative solver options 
@@ -482,7 +493,7 @@ std::string ResolveRelativePath(std::string path)
 	return std::string(output_name_resolve); 
 }
 
-}
+} // end namespace io 
 
 YAML::Emitter &operator<<(YAML::Emitter &out, sol::table &table) 
 { 

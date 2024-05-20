@@ -18,7 +18,7 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table);
 
 // given a solver sol::table, construct an MFEM iterative solver object 
 // with the specified options 
-mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, MPI_Comm comm); 
+mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MPI_Comm> comm); 
 
 mfem::Mesh CreateMesh(sol::table &table, YAML::Emitter &out, bool root=true); 
 void SetMeshAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f,
