@@ -99,6 +99,7 @@ void SLISolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
 
 void FixedPointIterationSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const 
 {
+	if (!iterative_mode) x = 0.0; 
 	double norm, r0; 
 	int i; 
 	converged = false; 
