@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.26)
 set(CMAKE_CXX_STANDARD 20) 
 project(allium)
 
@@ -11,6 +11,7 @@ if (NOT ${HAS_STD_SPAN})
 	message(FATAL_ERROR "compiler does not have std::span")
 endif()
 
+# get info about git commit, branch, tag 
 if (EXISTS ${PROJECT_SOURCE_DIR}/.git)
 	execute_process(
 		COMMAND git describe --all --long --abbrev=40 --dirty --always
