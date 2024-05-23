@@ -388,6 +388,10 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 						elmat.AddMult(psi2, rhs, -dot); 
 					}
 				}
+
+				if (is_time_dependent) {
+					A.Add(time_absorption, *time_mass_matrices[e]);
+				}
 				// solve, solution overwritten into rhs, matrix is modified 
 				lu = A; 
 				sol = rhs; 
@@ -615,6 +619,27 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 	}
 }
 
+void InverseAdvectionOperator::SetTimeAbsorption(const double sigma)
+{
+	time_absorption = sigma; 
+	is_time_dependent = true; 
+	if (time_mass_matrices.Size() > 0) { return; }
+
+	time_mass_matrices.SetSize(fes.GetNE()); 
+	// no coefficient so time step can be changed 
+	// without re-assembling 
+	mfem::MassIntegrator mi; 
+	for (auto e=0; e<fes.GetNE(); e++) {
+		const auto &fe = *fes.GetFE(e); 
+		auto &trans = *mesh.GetElementTransformation(e);
+		LumpedIntegrationRule lumped_ir(fe); 
+
+		time_mass_matrices[e] = new mfem::DenseMatrix; 
+		if (IsMassLumped()) mi.SetIntegrationRule(lumped_ir); 
+		mi.AssembleElementMatrix(fe, trans, *time_mass_matrices[e]); 
+	}
+}
+
 void InverseAdvectionOperator::SetSendBufferSize(int s) 
 {
 	send_buffer_size = s; 
@@ -627,6 +652,12 @@ void InverseAdvectionOperator::SetSendBufferSize(int s)
 		max_send_per_fn	= std::max(size, max_send_per_fn); 
 	}
 	par_data_buffer.SetSize(send_buffer_size * max_send_per_fn * psi_ext.extent(0)); 
+}
+
+void InverseAdvectionOperator::UseFixup(bool use) 
+{
+	apply_fixup = use;
+	if (use and !fixup_op) MFEM_ABORT("no fixup operator set"); 
 }
 
 void InverseAdvectionOperator::WriteGraphToDot(std::string prefix) const 

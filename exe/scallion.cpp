@@ -555,12 +555,7 @@ int main(int argc, char *argv[]) {
 
 	// build sweep operator 
 	// total_gf += 1.0/time_step; // <-- hack, needs better design 
-	mfem::SumCoefficient total_dt_coef(1.0/time_step/constants::SpeedOfLight, total); 
-	mfem::ParGridFunction total_gf_dt(&sigma_fes); 
-	total_gf_dt.ProjectCoefficient(total_dt_coef); 
-	total_gf_dt.ExchangeFaceNbrData(); 
-	mfem::GridFunctionCoefficient total_dt(&total_gf_dt); 
-	InverseAdvectionOperator Linv(fes, *quad, total_gf_dt, reflection_bdr_attr, lump); 
+	InverseAdvectionOperator Linv(fes, *quad, total_gf, reflection_bdr_attr, lump); 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -605,6 +600,7 @@ int main(int argc, char *argv[]) {
 		Linv.SetFixupOperator(*nff_op); 
 		out << YAML::Key << "negative flux fixup" << YAML::Value << fixup; 
 	}
+	Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight); 
 
 	DiscreteToMoment D(*quad, psi_ext, phi_ext); 
 	D.MultTranspose(E, psi0);
@@ -666,7 +662,7 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver, local_meb_solver, global_meb_solver,
 		linear_solver, dsa_solver; 
 	std::unique_ptr<BlockDiagonalByElementNonlinearSolver> meb_solver;
-	std::unique_ptr<mfem::HypreParMatrix> dsa_mat; 
+	std::unique_ptr<mfem::HypreParMatrix> dsa_mat, dsa_time_mat; 
 	std::unique_ptr<mfem::ParBilinearForm> Kform; 
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
 	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor; 
@@ -698,7 +694,7 @@ int main(int argc, char *argv[]) {
 			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
 			local_meb_solver->SetPreconditioner(*local_mat_inv);
 			meb_solver = std::make_unique<BlockDiagonalByElementNonlinearSolver>(*local_meb_solver); 			
-			// meb_solver->SetOperator(meb_form); 
+			meb_solver->SetOperator(meb_form); 
 			stepper = std::make_unique<PicardTRTOperator>(
 				offsets, Linv, D, emission_form, Mtot, *meb_solver, *nonlinear_solver); 
 			inner_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver); 
@@ -751,7 +747,7 @@ int main(int argc, char *argv[]) {
 			if (Linv.IsGradientLumped()) 
 				diff_int->SetIntegrationRule(lumped_intrule); 
 			Kform->AddDomainIntegrator(diff_int); 
-			auto *mass_int = new mfem::MassIntegrator(total_dt); 
+			auto *mass_int = new mfem::MassIntegrator(total); 
 			if (Linv.IsMassLumped())
 				mass_int->SetIntegrationRule(lumped_intrule); 
 			Kform->AddDomainIntegrator(mass_int); 
@@ -768,6 +764,15 @@ int main(int argc, char *argv[]) {
 			Kform->Assemble(); 
 			Kform->Finalize(); 
 			dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform->ParallelAssemble()); 
+
+			mfem::ParBilinearForm Mform(&fes); 
+			if (Linv.IsMassLumped()) 
+				Mform.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator));
+			else 
+				Mform.AddDomainIntegrator(new mfem::MassIntegrator);
+			Mform.Assemble(); 
+			Mform.Finalize(); 
+			dsa_time_mat.reset(Mform.ParallelAssemble());
 
 			sol::table solver_table = prec_table["solver"]; 
 			dsa_solver.reset(io::CreateIterativeSolver(solver_table, MPI_COMM_WORLD)); 
@@ -946,7 +951,6 @@ int main(int argc, char *argv[]) {
 			double new_time_step = time_step_func_avail.value()(time); 
 			time_step_changed = std::fabs(new_time_step - time_step) > 1e-14; 
 			time_step = new_time_step; 
-			total_dt_coef.SetAConst(1.0/time_step/constants::SpeedOfLight); 
 			Cvdt.SetAConst(1.0/time_step); 
 		}
 
@@ -955,12 +959,11 @@ int main(int argc, char *argv[]) {
 		if (temp_dependent_opacity or time_step_changed) {
 			// recompute opacities 
 			total_gf.ProjectCoefficient(total_coef); 
-			total_gf_dt.ProjectCoefficient(total_dt_coef); 
 			total_gf.ExchangeFaceNbrData(); 
-			total_gf_dt.ExchangeFaceNbrData(); 
 
 			// recompute sweep data 
 			Linv.AssembleLocalMatrices(); 
+			Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 
 			// total interaction mass matrix
 			// depends on sigma and dt 
@@ -974,6 +977,7 @@ int main(int argc, char *argv[]) {
 				Kform->Assemble(); 
 				Kform->Finalize(); 
 				dsa_mat.reset(Kform->ParallelAssemble()); // delete current, replace with new 
+				dsa_mat->Add(Linv.GetTimeAbsorption(), *dsa_time_mat); 
 				dsa_solver->SetOperator(*dsa_mat); 			
 			}
 		}

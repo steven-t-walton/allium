@@ -58,6 +58,11 @@ private:
 	// map an igraph edge id to the mesh's face id 
 	mfem::Array<int> edge_to_face_id; 
 
+	// time-dependent sweep data 
+	bool is_time_dependent = false; 
+	mfem::Array<mfem::DenseMatrix*> time_mass_matrices;
+	double time_absorption;	
+
 	// parallel buffer for psi 
 	mutable mfem::Vector psi_fnbr; 
 	// local buffer for sending messages 
@@ -82,9 +87,12 @@ public:
 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
 	void AssembleLocalMatrices(); 
+	void SetTimeAbsorption(const double sigma); 
+	double GetTimeAbsorption() const { return time_absorption; }
+
 	void SetSendBufferSize(int s);
 	// allow disabling or re-enabling fixup 
-	void UseFixup(bool use=true) { apply_fixup = use; }
+	void UseFixup(bool use=true);
 	bool IsFixupOn() const { return apply_fixup and fixup_op; }
 	void SetFixupOperator(NegativeFluxFixupOperator &op) {
 		fixup_op = &op; 
