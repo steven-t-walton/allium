@@ -668,6 +668,10 @@ void InverseAdvectionOperator::WriteGraphToDot(std::string prefix) const
 	fclose(file); 	
 }
 
+bool InverseAdvectionOperator::IsMassLumped() const { return lump & LumpingType::MASS; }
+bool InverseAdvectionOperator::IsGradientLumped() const { return lump & LumpingType::GRADIENT; }
+bool InverseAdvectionOperator::IsFaceLumped() const { return lump & LumpingType::FACE; }
+
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 
 	PhaseSpaceCoefficient &inflow_coef, TransportVectorView source_view)

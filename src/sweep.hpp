@@ -9,17 +9,6 @@
 
 class InverseAdvectionOperator : public mfem::Operator 
 {
-public:
-	// enum for bitset operations to define lumping scheme 
-	// 0 = no lumping 
-	// 1 = lump mass 
-	// 5 = lump mass and faces 
-	// 7 = lump everything 
-	enum LumpType {
-		MASS = 1, 
-		GRADIENT = 2, 
-		FACE = 4 
-	};
 private:
 	mfem::ParMesh &mesh; 
 	mfem::ParFiniteElementSpace &fes; 
@@ -86,8 +75,16 @@ public:
 	~InverseAdvectionOperator(); 
 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
+
+	// must be called before Mult 
+	// pre-assembles components of local sweep matrix 
+	// to save cost 
 	void AssembleLocalMatrices(); 
+	// indicates sweep is time dependent with 
+	// provided time absorption (e.g. 1/c/dt)
+	// time mass matrix is assembled once and stored
 	void SetTimeAbsorption(const double sigma); 
+	// access set time absorption value 
 	double GetTimeAbsorption() const { return time_absorption; }
 
 	void SetSendBufferSize(int s);
@@ -102,9 +99,9 @@ public:
 
 	// lumping type accessors 
 	int GetLumpingType() const { return lump; }
-	bool IsMassLumped() const { return lump & LumpType::MASS; }
-	bool IsGradientLumped() const { return lump & LumpType::GRADIENT; }
-	bool IsFaceLumped() const { return lump & LumpType::FACE; }
+	bool IsMassLumped() const;
+	bool IsGradientLumped() const; 
+	bool IsFaceLumped() const; 
 
 	friend class AdvectionOperator; 
 };
@@ -113,6 +110,9 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 
 	PhaseSpaceCoefficient &inflow_coef, TransportVectorView source_view); 
 
+// assemble face mass matrices using the FaceElementTransformations object 
+// used in sweep by multiplying the face matrices by Omega.normal 
+// and using upwinding 
 class FaceMassMatricesIntegrator : public mfem::BilinearFormIntegrator 
 {
 private:
@@ -125,6 +125,9 @@ public:
 		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat);
 };
 
+// apply the transport streaming and collision operator 
+// performs a halo exchange of all angles, groups 
+// uses assembled matrices from InverseAdvectionOperator 
 class AdvectionOperator : public mfem::Operator
 {
 private:
