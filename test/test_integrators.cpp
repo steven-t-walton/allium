@@ -348,3 +348,24 @@ TEST(Integrators, SweepFaceIntegratorLumped) {
 	ex22 -= M22; 
 	EXPECT_NEAR(ex22.FNorm(), 0.0, 1e-14); 
 }
+
+TEST(Integrators, TriMassMatrix) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(1,1, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace fes(&mesh, &fec); 
+
+	const auto &fe = *fes.GetFE(0);
+	auto &trans = *mesh.GetElementTransformation(0); 
+	mfem::DenseMatrix elmat; 
+	mfem::MassIntegrator mi; 
+	mi.AssembleElementMatrix(fe, trans, elmat); 
+	elmat.Lump(); 
+
+	mfem::DenseMatrix elmat_lump;
+	LumpedIntegrationRule lumped_ir(fe); 
+	mi.SetIntegrationRule(lumped_ir); 
+	mi.AssembleElementMatrix(fe, trans, elmat_lump); 
+	elmat -= elmat_lump; 
+	EXPECT_NEAR(elmat.FNorm(), 0.0, 1e-14); 
+}
