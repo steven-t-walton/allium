@@ -31,7 +31,7 @@ private:
 
 	mfem::Array<int> reduced_offsets; // size of [ phi, T ] for Newton operator 
 	mutable std::unique_ptr<mfem::BlockVector> reduced_x, reduced_b; 
-	mfem::IterativeSolver *rebalance_solver = nullptr; 
+	mfem::Solver *rebalance_solver = nullptr; 
 public:
 	NewtonTRTOperator(
 		const mfem::Array<int> &offsets, // [psi, T]
@@ -49,7 +49,7 @@ public:
 
 	// if set, solves local temperature equation in case Newton did not converge 
 	// or a fix up is used 
-	void SetRebalanceSolver(mfem::IterativeSolver &op) { rebalance_solver = &op; }
+	void SetRebalanceSolver(mfem::Solver &op) { rebalance_solver = &op; }
 
 	// block operator that applies 
 	// [    I    -D Linv B ]
@@ -63,6 +63,7 @@ public:
 		const mfem::Operator &Linv, &D, &B, &Bt, &sigma; 
 		mfem::Vector &psi; 
 
+		const mfem::Vector *source = nullptr; 
 		mutable mfem::Vector tmp;
 		mutable std::unique_ptr<mfem::BlockOperator> grad; 
 		mutable std::unique_ptr<mfem::Operator> F11, F12; 
@@ -75,6 +76,7 @@ public:
 			const mfem::Operator &Bt, 
 			const mfem::Operator &sigma, 
 			mfem::Vector &psi);
+		void SetSource(const mfem::Vector &s) { source = &s; }
 		void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
 		mfem::Operator &GetGradient(const mfem::Vector &x) const override; 
 	}; 
@@ -164,8 +166,8 @@ private:
 	mfem::Solver &meb_grad_inv; 
 	const mfem::Solver *dsa_solver = nullptr; 
 
-	mutable mfem::Vector temp_resid, dT, em_source, phi_source, phi; 
-	mfem::IterativeSolver *rebalance_solver = nullptr; 
+	mutable mfem::Vector temp_resid, dT, em_source, phi_source, phi, t1; 
+	mfem::Solver *rebalance_solver = nullptr; 
 public:
 	LinearizedTRTOperator(
 		const mfem::Array<int> &offsets, // [psi, T]
@@ -182,5 +184,5 @@ public:
 
 	// if set, solves local temperature equation in case Newton did not converge 
 	// or a fix up is used 
-	void SetRebalanceSolver(mfem::IterativeSolver &op) { rebalance_solver = &op; }
+	void SetRebalanceSolver(mfem::Solver &op) { rebalance_solver = &op; }
 };

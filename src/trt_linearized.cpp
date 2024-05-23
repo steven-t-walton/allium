@@ -47,10 +47,30 @@ void NewtonTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(false); 
 
 	NonlinearOperator op(reduced_offsets, Linv, D, B, Bt, sigma, psi); 
+	op.SetSource(*reduced_b); 
 	JacobianSolver grad_inv(reduced_offsets, schur_solver, meb_grad_inv, dsa_solver); 
 	nonlinear_solver.SetOperator(op); 
 	nonlinear_solver.SetPreconditioner(grad_inv);
-	nonlinear_solver.Mult(*reduced_b, *reduced_x); 		
+	auto *kinsol = dynamic_cast<mfem::KINSolver*>(&nonlinear_solver); 
+	D.Mult(psi, reduced_x->GetBlock(0)); 
+	reduced_x->GetBlock(1) = T; 
+	mfem::Vector blank; 
+	if (kinsol) {
+		kinsol->SetMaxSetupCalls(1); 
+		mfem::BlockVector xscale(reduced_offsets), fscale(reduced_offsets); 
+		// xscale.GetBlock(0) = 1.0/reduced_x->GetBlock(0).Normlinf(); 
+		// xscale.GetBlock(1) = 1.0/T.Normlinf(); 
+		op.Mult(*reduced_x, fscale); 
+		fscale = 1.0/fscale.Normlinf(); 
+		xscale.GetBlock(0) = 1.0/reduced_x->GetBlock(0).Normlinf(); 
+		xscale.GetBlock(1) = 1.0/reduced_x->GetBlock(1).Normlinf(); 
+		auto flag = KINSetFuncNormTol(kinsol->GetMem(), 1e-4);
+		MFEM_ASSERT(flag == KIN_SUCCESS, "error in KINSetFuncNormTol()");
+		kinsol->Mult(*reduced_x, xscale, fscale); 
+		// kinsol->Mult(blank, *reduced_x); 
+	} else {
+		nonlinear_solver.Mult(blank, *reduced_x); 				
+	}
 
 	T = reduced_x->GetBlock(1); 
 	B.Mult(T, reduced_b->GetBlock(0)); 
@@ -103,6 +123,7 @@ NonlinearOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	sigma.Mult(phi, f_T); 
 	Bt.Mult(T, tmp); 
 	add(tmp, -1.0, f_T, f_T); // tmp - f_T -> f_T 
+	if (source) y -= *source; 
 }
 
 mfem::Operator &NewtonTRTOperator::
@@ -193,6 +214,7 @@ LinearizedTRTOperator::LinearizedTRTOperator(
 	em_source.SetSize(D.Height()); 
 	phi_source.SetSize(D.Height()); 
 	phi.SetSize(D.Height()); 
+	t1.SetSize(Bt.Height()); 
 }
 
 void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
@@ -206,6 +228,9 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	// disable fixup for newton operations 
 	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(false); 
 
+	// initial guess for schur solve 
+	D.Mult(psi, phi); 
+
 	// --- form RHS --- 
 	Bt.Mult(T, temp_resid); 
 	add(source_T, -1.0, temp_resid, temp_resid); // T0 - temp_resid -> temp_resid 
@@ -215,12 +240,12 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	meb_grad_inv.SetOperator(Bt_grad); 
 	// ( 4a sigma T^3 u, v)
 	const auto &dplanck = B.GetGradient(T); 
-	mfem::ProductOperator linearized_elim(&dplanck, &meb_grad_inv, false, false); 
 
 	// form transport residual 
 	B.Mult(T, em_source); 
 	// eliminate down to phi
-	linearized_elim.Mult(temp_resid, phi_source);
+	meb_grad_inv.Mult(temp_resid, t1); 
+	dplanck.Mult(t1, phi_source); 
 	em_source += phi_source; 
 	D.MultTranspose(em_source, psi); 
 	psi += source_psi; 
@@ -235,21 +260,7 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 		dsa_op = std::make_unique<DiffusionSyntheticAccelerationOperator>(*dsa_solver, Ms_form); 
 	if (dsa_op) schur_solver.SetPreconditioner(*dsa_op); 
 	schur_solver.SetOperator(transport_op); 
-	D.Mult(psi, phi); 
 	schur_solver.Mult(phi_source, phi); 
-
-	sigma.Mult(phi, phi_source); 
-	phi_source += temp_resid; 
-	meb_grad_inv.Mult(phi_source, dT); 
-	for (int i=0; i<T.Size(); i++) {
-		double Tnew = T(i) + dT(i); 
-		if (Tnew < 0.0) {
-			EventLog["under relax"] += 1; 
-			T(i) = T(i) + 0.05*dT(i); 
-		} else {
-			T(i) = Tnew; 
-		}
-	}
 
 	// sweep to recover psi 
 	Ms_form.Mult(phi, phi_source); 
@@ -267,5 +278,18 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 		sigma.Mult(phi, phi_source); 
 		phi_source += source_T; 
 		rebalance_solver->Mult(phi_source, T); 
+	} else {
+		sigma.Mult(phi, phi_source); 
+		phi_source += temp_resid; 
+		meb_grad_inv.Mult(phi_source, dT); 
+		for (int i=0; i<T.Size(); i++) {
+			double Tnew = T(i) + dT(i); 
+			if (Tnew < 0.0) {
+				EventLog["under relax"] += 1; 
+				T(i) = T(i) + 0.05*dT(i); 
+			} else {
+				T(i) = Tnew; 
+			}
+		}
 	}
 }

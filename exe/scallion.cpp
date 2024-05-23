@@ -19,41 +19,17 @@
 
 using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
 
-class MockSolver : public mfem::Solver {
-public:
-	void SetOperator(const mfem::Operator &op) { }
-	void Mult(const mfem::Vector &x, mfem::Vector &y) const { y = x; }
-};
-
-class InnerIterativeSolverMonitor : public mfem::IterativeSolverMonitor
+class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
 {
-private:
-	const mfem::IterativeSolver &solver; 
 public:
-	mfem::Array<int> iters;
+	mfem::Array<int> iters; 
 	double max_norm = 0.0; 
 
-	InnerIterativeSolverMonitor(const mfem::IterativeSolver &s) : solver(s) {
-		iters.Reserve(50); 
-	}
-	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
-		if (it==0) {
-			iters.SetSize(0); 
-			max_norm = 0.0; 
-			// hack to fix poor design of call to monitor in mfem::NewtonSolver 
-			if (dynamic_cast<const mfem::NewtonSolver*>(iter_solver)) {
-				return; 
-			}
-		}
-		const auto iter = solver.GetNumIterations(); 
-		if (iter > 0) {
-			iters.Append(iter); 
-			max_norm = std::max(solver.GetFinalRelNorm(), max_norm); 
-		}
-	}
+	ScallionInnerSolverMonitor() { iters.Reserve(50); }
+	void Reset() { iters.SetSize(0); max_norm = 0.0; }
 
 	friend YAML::Emitter &operator<<(YAML::Emitter &out, 
-		const InnerIterativeSolverMonitor &monitor)
+		const ScallionInnerSolverMonitor &monitor)
 	{
 		// for some reason mfem::Array::Sum isn't const... 
 		auto &iters = *const_cast<mfem::Array<int>*>(&monitor.iters); 
@@ -74,26 +50,71 @@ public:
 	}
 };
 
+class InnerIterativeSolverMonitor : public ScallionInnerSolverMonitor
+{
+private:
+	const mfem::IterativeSolver &solver; 
+public:
+	InnerIterativeSolverMonitor(const mfem::IterativeSolver &s) : solver(s)
+	{ }
+	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
+		if (it==0) {
+			Reset(); 
+			// hack to fix poor design of call to monitor in mfem::NewtonSolver 
+			if (dynamic_cast<const mfem::NewtonSolver*>(iter_solver)) {
+				return; 
+			}
+		}
+		const auto iter = solver.GetNumIterations(); 
+		if (iter > 0) {
+			iters.Append(iter); 
+			max_norm = std::max(solver.GetFinalRelNorm(), max_norm); 
+		}
+	}
+};
+
+class BlockNonlinearSolverMonitor : public ScallionInnerSolverMonitor
+{
+private:
+	const BlockDiagonalByElementNonlinearSolver &solver; 
+public:
+	BlockNonlinearSolverMonitor(const BlockDiagonalByElementNonlinearSolver &s) 
+		: solver(s)
+	{ 
+	}
+	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
+		if (it==0) {
+			Reset(); 
+		}
+		const auto iter = solver.GetNumIterations(); 
+		if (iter >= 0) {
+			iters.Append(iter); 
+			max_norm = std::max(max_norm, solver.GetFinalRelNorm()); 		
+		}
+	}
+};
+
 struct KinsolCallbackData {
-	InnerIterativeSolverMonitor *monitor = nullptr; 
-	mfem::IterativeSolver *solver = nullptr;
+	mfem::IterativeSolverMonitor *monitor = nullptr; 
 	int it = -1; 
 	double norm = -1.0; 
+
+	KinsolCallbackData(mfem::IterativeSolverMonitor *m) : monitor(m) { }
 };
 
 void KinsolCallbackFunction(const char *module, const char *function, char *msg, void *user_data)
 {
 	KinsolCallbackData *data = static_cast<KinsolCallbackData*>(user_data); 
 	if (!data) MFEM_ABORT("did not get callback data struct"); 
-	int it; 
-	double norm;
+	int it = 0; 
+	double norm = 0.0;
 	if (io::ParseKINSOLMessage(msg, it, norm)) {
 		data->it = it; 
 		data->norm = norm; 
 	}
-	if (data->solver and data->monitor) {
-		data->monitor->iters.Append(data->solver->GetNumIterations()); 
-		data->monitor->max_norm = std::max(data->solver->GetFinalRelNorm(), data->monitor->max_norm); 
+	if (data->monitor) {
+		mfem::Vector blank;
+		data->monitor->MonitorResidual(it-1, norm, blank, false); 
 	}
 }
 
@@ -605,7 +626,12 @@ int main(int argc, char *argv[]) {
 		meb_form.AddDomainIntegrator(new BlackBodyEmissionNFI(total, 2, 2 + sigma_fe_order)); 
 		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}
-	BlockDiagonalByElementSolver meb_grad_inv(lump); 
+	std::unique_ptr<mfem::Solver> local_mat_inv; 
+	if (lump) 
+		local_mat_inv = std::make_unique<DiagonalDenseMatrixInverse>(); 
+	else
+		local_mat_inv = std::make_unique<mfem::DenseMatrixInverse>(); 
+	BlockDiagonalByElementSolver meb_grad_inv(*local_mat_inv); 
 
 	BlockDiagonalByElementNonlinearForm emission_form(&fes); 
 	auto *bbenfi = new BlackBodyEmissionNFI(total, 2, 2 + sigma_fe_order); 
@@ -637,12 +663,13 @@ int main(int argc, char *argv[]) {
 	if (!solver.valid()) MFEM_ABORT("must supply solver options"); 
 	const std::string solver_type = solver["type"]; 
 	io::ValidateOption<std::string>("solver type", solver_type, {"picard", "linearized", "newton"}, root); 
-	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver,
-		meb_solver, linear_solver, dsa_solver, rebalance_solver; 
+	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver, local_meb_solver, global_meb_solver,
+		linear_solver, dsa_solver; 
+	std::unique_ptr<BlockDiagonalByElementNonlinearSolver> meb_solver;
 	std::unique_ptr<mfem::HypreParMatrix> dsa_mat; 
 	std::unique_ptr<mfem::ParBilinearForm> Kform; 
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
-	std::unique_ptr<InnerIterativeSolverMonitor> inner_monitor, dsa_monitor; 
+	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor; 
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
 	std::unique_ptr<mfem::Operator> stepper; 
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
@@ -655,21 +682,34 @@ int main(int argc, char *argv[]) {
 		nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
 		sol::table meb_solver_table = solver["energy_balance_solver"]; 
 		if (!meb_solver_table.valid()) MFEM_ABORT("must supply solver for energy balance"); 
-		io::ValidateOption<std::string>("energy balance solver", meb_solver_table["type"], {"newton"}, root); 
-		meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
-		meb_solver->SetOperator(meb_form); 
-		meb_solver->SetPreconditioner(meb_grad_inv); 
-
-		stepper = std::make_unique<PicardTRTOperator>(
-			offsets, Linv, D, emission_form, Mtot, *meb_solver, *nonlinear_solver); 
-		inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*meb_solver); 
-		nonlinear_solver->SetMonitor(*inner_monitor); 
+		const std::string meb_type = meb_solver_table["type"]; 
+		io::ValidateOption<std::string>("energy balance solver", 
+			meb_solver_table["type"], {"newton", "local newton"}, root); 
+		if (meb_type == "newton") {
+			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
+			global_meb_solver->SetPreconditioner(meb_grad_inv); 
+			global_meb_solver->SetOperator(meb_form); 
+			stepper = std::make_unique<PicardTRTOperator>(
+				offsets, Linv, D, emission_form, Mtot, *global_meb_solver, *nonlinear_solver); 
+			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*global_meb_solver); 
+			nonlinear_solver->SetMonitor(*inner_monitor); 
+		} else if (meb_type == "local newton") {
+			local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
+			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
+			local_meb_solver->SetPreconditioner(*local_mat_inv);
+			meb_solver = std::make_unique<BlockDiagonalByElementNonlinearSolver>(*local_meb_solver); 			
+			// meb_solver->SetOperator(meb_form); 
+			stepper = std::make_unique<PicardTRTOperator>(
+				offsets, Linv, D, emission_form, Mtot, *meb_solver, *nonlinear_solver); 
+			inner_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver); 
+			nonlinear_solver->SetMonitor(*inner_monitor); 
+		}
 
 		auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get()); 
 		if (sundials) {
 			mfem::IdentityOperator identity(fes.GetVSize()); 
 			sundials->SetOperator(identity); 
-			kinsol_data = std::make_unique<KinsolCallbackData>(inner_monitor.get(), meb_solver.get()); 
+			kinsol_data = std::make_unique<KinsolCallbackData>(inner_monitor.get()); 
 			KINSetInfoHandlerFn(sundials->GetMem(), KinsolCallbackFunction, kinsol_data.get()); 
 			KINSetErrHandlerFn(sundials->GetMem(), io::SundialsErrorFunction, nullptr); 
 		}
@@ -686,9 +726,10 @@ int main(int argc, char *argv[]) {
 			io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
 				{"newton", "kinsol"}, root); 
 			nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
-			if (dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get())) {
+			auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get());
+			if (sundials) {
 				const std::string strategy = nonlin_solve_table["strategy"]; 
-				io::ValidateOption<std::string>("kinsol strategy", strategy, {"none", "linesearch"}, root); 				
+				io::ValidateOption<std::string>("kinsol strategy", strategy, {"none", "linesearch", "picard"}, root); 		
 			}
 			out << YAML::Key << "nonlinear solver" << YAML::Key << nonlin_solve_table; 
 		}
@@ -739,26 +780,22 @@ int main(int argc, char *argv[]) {
 		}
 		out << YAML::Key << "transport solver" << YAML::Value << transport_solve_table; 
 
-		// create "rebalance" solver 
-		// iterates temperature if newton doesn't converge 
-		sol::optional<sol::table> rebalance_solve_table_avail = solver["rebalance_solver"]; 
-		if (rebalance_solve_table_avail) {
-			sol::table rebalance_solve_table = rebalance_solve_table_avail.value(); 
-			io::ValidateOption<std::string>("rebalance solver type", rebalance_solve_table["type"], 
-				{"newton"}, root); 
-			rebalance_solver.reset(io::CreateIterativeSolver(rebalance_solve_table, MPI_COMM_WORLD)); 
-			rebalance_solver->SetPreconditioner(meb_grad_inv); 
-			rebalance_solver->SetOperator(meb_form); 
-			out << YAML::Key << "rebalance solver" << YAML::Value << rebalance_solve_table; 
-		}
-
 		if (nonlinear_solver) {
 			auto *ptr = new NewtonTRTOperator(
 				offsets, Linv, D, emission_form, meb_form, 
 				Mtot, *nonlinear_solver, *linear_solver, meb_grad_inv, dsa_solver.get());
 			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
-			nonlinear_solver->SetMonitor(*inner_monitor); 
-			if (rebalance_solver) ptr->SetRebalanceSolver(*rebalance_solver); 
+			auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get());
+			if (sundials) {
+				mfem::IdentityOperator identity(2*fes.GetVSize()); 
+				sundials->SetOperator(identity); 
+				kinsol_data = std::make_unique<KinsolCallbackData>(inner_monitor.get()); 
+				KINSetInfoHandlerFn(sundials->GetMem(), KinsolCallbackFunction, kinsol_data.get()); 
+				KINSetErrHandlerFn(sundials->GetMem(), io::SundialsErrorFunction, nullptr); 		
+			} else {
+				nonlinear_solver->SetMonitor(*inner_monitor); 				
+			}
+
 			stepper.reset(ptr); 
 		} 
 
@@ -766,7 +803,6 @@ int main(int argc, char *argv[]) {
 			auto *ptr = new LinearizedTRTOperator(
 				offsets, Linv, D, emission_form, meb_form, 
 				Mtot, *linear_solver, meb_grad_inv, dsa_solver.get());
-			if (rebalance_solver) ptr->SetRebalanceSolver(*rebalance_solver); 
 			stepper.reset(ptr); 
 		}
 	}
@@ -967,7 +1003,7 @@ int main(int argc, char *argv[]) {
 					out << nonlinear_solver->GetFinalRelNorm(); 
 			}
 			if (inner_monitor) {
-				out << YAML::Key << "inner solver" << YAML::Value << *inner_monitor; 				
+				out << YAML::Key << "inner solver" << YAML::Value << *inner_monitor;
 			} else if (linear_solver) {
 				out << YAML::Key << "linear solver" << YAML::Value << YAML::BeginMap; 
 					out << YAML::Key << "it" << YAML::Value << linear_solver->GetNumIterations(); 
@@ -976,12 +1012,6 @@ int main(int argc, char *argv[]) {
 			}
 			if (dsa_monitor) {
 				out << YAML::Key << "dsa solver" << YAML::Value << *dsa_monitor;
-			}
-			if (rebalance_solver) {
-				out << YAML::Key << "rebalance" << YAML::Value << YAML::BeginMap; 
-					out << YAML::Key << "it" << YAML::Value << rebalance_solver->GetNumIterations(); 
-					out << YAML::Key << "norm" << YAML::Value << rebalance_solver->GetFinalRelNorm(); 
-				out << YAML::EndMap; 
 			}
 			if (EventLog.size()) {
 				out << YAML::Key << "event log" << YAML::Value << YAML::BeginMap; 

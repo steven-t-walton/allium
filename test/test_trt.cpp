@@ -102,7 +102,8 @@ TEST(TRT, BlockInverse) {
 	mfem::GridFunction temperature(&fes); 
 	temperature = 1.0; 
 	const auto &grad = form.GetGradient(temperature); 
-	BlockDiagonalByElementSolver inv_grad(false);
+	mfem::DenseMatrixInverse local_inv; 
+	BlockDiagonalByElementSolver inv_grad(local_inv);
 	inv_grad.SetOperator(grad);  
 
 	mfem::Vector x(fes.GetVSize()), z(fes.GetVSize()); 
@@ -130,7 +131,8 @@ TEST(LumpedTRT, BlockInverse) {
 	mfem::GridFunction temperature(&fes); 
 	temperature = 1.0; 
 	const auto &grad = form.GetGradient(temperature); 
-	BlockDiagonalByElementSolver inv_grad(true); 
+	DiagonalDenseMatrixInverse local_inv; 
+	BlockDiagonalByElementSolver inv_grad(local_inv); 
 	inv_grad.SetOperator(grad); 
 	mfem::Vector x(fes.GetVSize()), z(fes.GetVSize()); 
 	x.Randomize(); 
@@ -160,14 +162,16 @@ TEST(LumpedTRT, NewtonSolve) {
 	mfem::GridFunction T(&fes); 
 	T(0) = 12.0; T(1) = 7.3; T(2) = 9.6; T(3) = 10.0; 
 
-	mfem::NewtonSolver solver; 
+	mfem::NewtonSolver newton; 
+	DiagonalDenseMatrixInverse local_inv; 
+	newton.SetSolver(local_inv); 
+	newton.SetAbsTol(1e-12); 
+	newton.SetMaxIter(20); 
+	BlockDiagonalByElementNonlinearSolver solver(newton); 
 	solver.SetOperator(form); 
-	BlockDiagonalByElementSolver grad_inv(true); 
-	solver.SetSolver(grad_inv); 
-	solver.SetAbsTol(1e-12); 
-	solver.SetMaxIter(20); 
 	mfem::Vector blank; 
 	solver.Mult(blank, T); 
+	EXPECT_TRUE(solver.GetConverged()); 
 
 	mfem::Vector ones(fes.GetVSize()); 
 	ones = 1.0; 
@@ -188,14 +192,16 @@ TEST(TRT, NewtonSolve) {
 	mfem::GridFunction T(&fes); 
 	T(0) = 12.0; T(1) = 7.3; T(2) = 9.6; T(3) = 10.0; 
 
-	mfem::NewtonSolver solver; 
+	mfem::NewtonSolver newton; 
+	mfem::DenseMatrixInverse local_inv; 
+	newton.SetSolver(local_inv); 
+	newton.SetAbsTol(1e-12); 
+	newton.SetMaxIter(20); 
+	BlockDiagonalByElementNonlinearSolver solver(newton); 
 	solver.SetOperator(form); 
-	BlockDiagonalByElementSolver grad_inv(false); 
-	solver.SetSolver(grad_inv); 
-	solver.SetAbsTol(1e-12); 
-	solver.SetMaxIter(20); 
-	mfem::Vector blank; 
+	mfem::Vector blank;
 	solver.Mult(blank, T); 
+	EXPECT_TRUE(solver.GetConverged()); 
 
 	mfem::Vector ones(fes.GetVSize()); 
 	ones = 1.0; 
@@ -219,12 +225,13 @@ TEST(TRT, SundialsSolve) {
 
 	mfem::KINSolver solver(KIN_NONE); 
 	solver.SetOperator(form); 
-	BlockDiagonalByElementSolver grad_inv(false); 
+	mfem::DenseMatrixInverse local_inv; 
+	BlockDiagonalByElementSolver grad_inv(local_inv); 
 	solver.SetSolver(grad_inv); 
 	solver.SetAbsTol(1e-12); 
 	solver.SetRelTol(1e-12); 
 	solver.SetMaxIter(40); 
-	solver.SetPrintLevel(1); 
+	solver.SetPrintLevel(0); 
 	solver.SetMaxSetupCalls(1); 
 	solver.iterative_mode = true;
 	mfem::Vector blank; 
@@ -236,6 +243,114 @@ TEST(TRT, SundialsSolve) {
 	EXPECT_NEAR(T.Norml2(), 0.0, 1e-12); 	
 }
 #endif
+
+TEST(TRT, BlockDiagResidual) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(3, 3, mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
+	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
+	mfem::ConstantCoefficient sbi(1.0/constants::StefanBoltzmann); 
+	mfem::ConstantCoefficient none(-1.0); 
+	BlockDiagonalByElementNonlinearForm form(&fes); 
+	form.AddDomainIntegrator(new BlackBodyEmissionNFI(sbi, 2, 2)); 
+	form.AddDomainIntegrator(new mfem::MassIntegrator(none)); 
+
+	mfem::GridFunction T(&fes); 
+	T.Randomize(); 
+	mfem::Vector f1(T.Size()); 
+	form.Mult(T, f1); 
+
+	mfem::Array<int> vdofs; 
+	mfem::Vector subx, subf; 
+	mfem::Vector f2(T.Size()); 
+	for (int e=0; e<fes.GetNE(); e++) {
+		fes.GetElementVDofs(e, vdofs); 
+		T.GetSubVector(vdofs, subx); 
+		subf.SetSize(vdofs.Size()); 
+		form.AssembleLocalResidual(e, subx, subf); 
+		f2.SetSubVector(vdofs, subf); 
+	}
+	f1 -= f2; 
+	EXPECT_NEAR(f1.Norml2(), 0.0, 1e-12); 
+}
+
+TEST(TRT, BlockDiagGradient) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(3, 3, mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
+	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
+	mfem::ConstantCoefficient sbi(1.0/constants::StefanBoltzmann); 
+	mfem::ConstantCoefficient none(-1.0); 
+	BlockDiagonalByElementNonlinearForm form(&fes); 
+	form.AddDomainIntegrator(new BlackBodyEmissionNFI(sbi, 2, 2)); 
+	form.AddDomainIntegrator(new mfem::MassIntegrator(none)); 
+
+	mfem::GridFunction T(&fes); 
+	T.Randomize(); 
+
+	const auto *grad = dynamic_cast<BlockDiagonalByElementOperator*>(&form.GetGradient(T)); 
+
+	mfem::Array<int> vdofs; 
+	mfem::Vector subx;
+	mfem::DenseMatrix elmat; 
+	double sum = 0.0; 
+	for (int e=0; e<fes.GetNE(); e++) {
+		fes.GetElementVDofs(e, vdofs); 
+		T.GetSubVector(vdofs, subx); 
+		form.AssembleLocalGradient(e, subx, elmat); 
+		const auto &elmat2 = grad->GetElementMatrix(e); 
+		elmat -= elmat2; 
+		sum += elmat.FNorm(); 
+	}
+	EXPECT_NEAR(sum, 0.0, 1e-12); 
+}
+
+TEST(TRT, LocalTemperatureSolve) {
+	auto smesh = mfem::Mesh::MakeCartesian1D(10, 1.0); 
+	auto mesh = mfem::ParMesh(MPI_COMM_WORLD, smesh); 
+	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
+	auto fes = mfem::ParFiniteElementSpace(&mesh, &fec); 
+	mfem::ConstantCoefficient sigma(1e3); 
+	mfem::ConstantCoefficient Cvdt(1e10/1e-9); 
+	BlockDiagonalByElementNonlinearForm form(&fes); 
+	form.AddDomainIntegrator(new BlackBodyEmissionNFI(sigma, 2, 2)); 
+	form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
+
+	mfem::BilinearForm Msigma(&fes); 
+	Msigma.AddDomainIntegrator(new mfem::MassIntegrator(sigma)); 
+	Msigma.Assemble(); 
+	Msigma.Finalize(); 
+
+	mfem::BilinearForm M(&fes); 
+	M.AddDomainIntegrator(new mfem::MassIntegrator); 
+	M.Assemble(); 
+	M.Finalize(); 
+
+	mfem::ParGridFunction phi(&fes), T(&fes); 
+	phi = constants::StefanBoltzmann * 1e4; // 10 eV radiation temperature 
+	T = 0.025; // room temp 
+	mfem::Vector source(fes.GetVSize()); 
+	Msigma.Mult(phi, source); 
+	M.AddMult(T, source); 
+
+	mfem::DenseMatrixInverse local_mat_inv; 
+	EnergyBalanceNewtonSolver local_solver; 
+	local_solver.SetSolver(local_mat_inv); 
+	local_solver.SetRelTol(1e-6); 
+	local_solver.SetMaxIter(40); 
+	local_solver.SetPrintLevel(-1); 
+	BlockDiagonalByElementNonlinearSolver solver(local_solver); 
+	solver.SetOperator(form); 
+	mfem::Vector f(fes.GetVSize()); 
+	form.Mult(T, f); 
+	f -= source; 
+	double initial_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, f, f));
+	solver.Mult(source, T); 
+	EXPECT_TRUE(solver.GetConverged()); 
+
+	form.Mult(T, f);
+	f -= source; 
+	double norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, f, f));
+	EXPECT_LT(solver.GetFinalRelNorm(), 1e-6); 
+}
 
 TEST(NewtonTRT, JacobianSolver) {
 	const int fe_order = 1; 
@@ -284,7 +399,8 @@ TEST(NewtonTRT, JacobianSolver) {
 	offsets[2] = fes.GetVSize(); 
 	offsets.PartialSum(); 
 
-	BlockDiagonalByElementSolver meb_grad_inv; 
+	mfem::DenseMatrixInverse local_inv; 
+	BlockDiagonalByElementSolver meb_grad_inv(local_inv); 
 
 	mfem::GMRESSolver gmres(MPI_COMM_WORLD); 
 	gmres.SetAbsTol(1e-6); 

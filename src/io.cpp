@@ -61,6 +61,9 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MP
 	mfem::IterativeSolver *s = nullptr; 
 	std::string type = table["type"]; 
 	std::transform(type.begin(), type.end(), type.begin(), ::tolower); 
+	io::ValidateOption<std::string>("iterative solver type", type, 
+		{"cg", "conjugate gradient", "gmres", "fgmres", 
+		"sli", "bicg", "bicgstab", "direct", "superlu", "fixed point", "fp", "kinsol", "newton"}, root); 
 	if (type == "cg" or type == "conjugate gradient") {
 		if (comm)
 			s = new mfem::CGSolver(*comm); 
@@ -140,30 +143,30 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MP
 		if (comm) s = new mfem::NewtonSolver(*comm);
 		else s = new mfem::NewtonSolver; 
 	}
+	if (s) SetIterativeSolverOptions(table, *s); 
+	return s; 
+}
 
-	else {
-		if (root) MFEM_ABORT("solver type " << type << " not supported"); 
-	}
-
+void SetIterativeSolverOptions(sol::table &table, mfem::IterativeSolver &solver)
+{
 	// load generic iterative solver options 
 	int print_level = table["print_level"].get_or(0); 
-	s->SetPrintLevel( (dynamic_cast<mfem::KINSolver*>(s) ? 1 : print_level)); 
+	solver.SetPrintLevel( (dynamic_cast<mfem::KINSolver*>(&solver) ? 1 : print_level)); 
 	sol::optional<double> abstol = table["abstol"]; 
 	sol::optional<double> reltol = table["reltol"]; 
 	if (!abstol and !reltol) {
 		MFEM_ABORT("must specify one of \"abstol\" or \"reltol\""); 
 	}
-	if (abstol) { s->SetAbsTol(abstol.value()); }
+	if (abstol) { solver.SetAbsTol(abstol.value()); }
 	else { table["abstol"] = 0.0; }
-	if (reltol) { s->SetRelTol(reltol.value()); }
+	if (reltol) { solver.SetRelTol(reltol.value()); }
 	else { table["reltol"] = 0.0; }
 	int maxit = table["max_iter"].get_or(50);
-	s->SetMaxIter(maxit);  
+	solver.SetMaxIter(maxit);  
 	table["max_iter"] = maxit; 
 	bool iterative_mode = table["iterative_mode"].get_or(false);
-	s->iterative_mode = iterative_mode; 
+	solver.iterative_mode = iterative_mode; 
 	table["iterative_mode"] = iterative_mode; 
-	return s; 
 }
 
 mfem::Mesh CreateMesh(sol::table &table, YAML::Emitter &out, bool root) 
