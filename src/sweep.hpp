@@ -99,9 +99,6 @@ public:
 
 	// lumping type accessors 
 	int GetLumpingType() const { return lump; }
-	bool IsMassLumped() const;
-	bool IsGradientLumped() const; 
-	bool IsFaceLumped() const; 
 
 	friend class AdvectionOperator; 
 };

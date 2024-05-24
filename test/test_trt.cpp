@@ -13,10 +13,8 @@ TEST(LumpedTRT, Emission1D) {
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0); 
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
-	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
 	mfem::ConstantCoefficient coef(1.0/constants::StefanBoltzmann); 
-	auto nfi = BlackBodyEmissionNFI(coef, 2, 2); 
-	nfi.SetIntegrationRule(lumped_intrule); 
+	auto nfi = QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(coef, 2, 2)); 
 	const auto &fe = *fes.GetFE(0); 
 	mfem::Vector elfun(fe.GetDof()); 
 	elfun(0) = 1.0; 
@@ -32,10 +30,8 @@ TEST(LumpedTRT, Emission2D) {
 	auto mesh = mfem::Mesh::MakeCartesian2D(1, 1, mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
-	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
 	mfem::ConstantCoefficient coef(1.0/constants::StefanBoltzmann); 
-	auto nfi = BlackBodyEmissionNFI(coef, 2, 2); 
-	nfi.SetIntegrationRule(lumped_intrule); 
+	auto nfi = QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(coef, 2, 2)); 
 	const auto &fe = *fes.GetFE(0); 
 	mfem::Vector elfun(fe.GetDof()); 
 	elfun(0) = 0.0; 
@@ -53,10 +49,8 @@ TEST(LumpedTRT, EmissionJacobian1D) {
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0); 
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
-	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
 	mfem::ConstantCoefficient coef(1.0); 
-	auto nfi = BlackBodyEmissionNFI(coef, 2, 2); 
-	nfi.SetIntegrationRule(lumped_intrule); 
+	auto nfi = QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(coef, 2, 2)); 
 	const auto &fe = *fes.GetFE(0); 
 	mfem::Vector elfun(fe.GetDof()); 
 	elfun = 1.0; 
@@ -73,10 +67,8 @@ TEST(LumpedTRT, EmissionJacobian2D) {
 	auto mesh = mfem::Mesh::MakeCartesian2D(1, 1, mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
-	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
 	mfem::ConstantCoefficient coef(1.0); 
-	auto nfi = BlackBodyEmissionNFI(coef, 2, 2); 
-	nfi.SetIntegrationRule(lumped_intrule); 
+	auto nfi = QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(coef, 2, 2)); 
 	const auto &fe = *fes.GetFE(0); 
 	mfem::Vector elfun(fe.GetDof()); 
 	elfun = 1.0; 
@@ -120,14 +112,9 @@ TEST(LumpedTRT, BlockInverse) {
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
 	mfem::ConstantCoefficient coef(1.0); 
-	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
 	BlockDiagonalByElementNonlinearForm form(&fes); 
-	form.AddDomainIntegrator(new BlackBodyEmissionNFI(coef, 2, 2)); 
-	form.AddDomainIntegrator(new mfem::MassIntegrator(coef)); 
-	auto &dnfi = *form.GetDNFI(); 
-	for (auto &ptr : dnfi) {
-		ptr->SetIntegrationRule(lumped_intrule); 
-	}
+	form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(coef))); 
+	form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new mfem::MassIntegrator(coef))); 
 	mfem::GridFunction temperature(&fes); 
 	temperature = 1.0; 
 	const auto &grad = form.GetGradient(temperature); 
@@ -150,14 +137,9 @@ TEST(LumpedTRT, NewtonSolve) {
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
 	mfem::ConstantCoefficient sbi(1.0/constants::StefanBoltzmann); 
 	mfem::ConstantCoefficient none(-1.0); 
-	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); 
 	BlockDiagonalByElementNonlinearForm form(&fes); 
-	form.AddDomainIntegrator(new BlackBodyEmissionNFI(sbi, 2, 2)); 
-	form.AddDomainIntegrator(new mfem::MassIntegrator(none)); 
-	auto &dnfi = *form.GetDNFI(); 
-	for (auto &ptr : dnfi) {
-		ptr->SetIntegrationRule(lumped_intrule); 
-	}
+	form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(sbi))); 
+	form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new mfem::MassIntegrator(none))); 
 
 	mfem::GridFunction T(&fes); 
 	T(0) = 12.0; T(1) = 7.3; T(2) = 9.6; T(3) = 10.0; 

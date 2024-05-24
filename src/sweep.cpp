@@ -559,13 +559,13 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 	for (auto e=0; e<fes.GetNE(); e++) {
 		const auto &fe = *fes.GetFE(e); 
 		auto &trans = *mesh.GetElementTransformation(e);
-		LumpedIntegrationRule lumped_ir(fe); 
+		LumpedIntegrationRule lumped_ir(trans.GetGeometryType()); 
 
 		for (int g=0; g<G; g++) {
 			mfem::GridFunctionCoefficient total(&total_data, g+1); // component is 1-based :( 
 			mfem::MassIntegrator mi(total); 
 			mass_mat_view(g,e) = new mfem::DenseMatrix; 
-			if (IsMassLumped()) mi.SetIntegrationRule(lumped_ir); 
+			if (IsMassLumped(lump)) mi.SetIntegrationRule(lumped_ir); 
 			mi.AssembleElementMatrix(fe, trans, *mass_mat_view(g,e)); 
 		}
 
@@ -576,7 +576,7 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			Omega(d) = 1.0; 
 			mfem::VectorConstantCoefficient Q(Omega); 
 			mfem::ConservativeConvectionIntegrator conv_int(Q, 1.0); 
-			if (IsGradientLumped()) conv_int.SetIntegrationRule(lumped_ir); 
+			if (IsGradientLumped(lump)) conv_int.SetIntegrationRule(lumped_ir); 
 			conv_int.AssembleElementMatrix(fe, trans, *grad_mat_view(d,e)); 
 		}
 	}	
@@ -603,9 +603,8 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 		}
 
 		// setup lumped integration rule 
-		const auto &trace_fe = *fes.GetTraceElement(face_trans->Elem1No, face_trans->GetGeometryType()); 
-		LumpedIntegrationRule lumped_ir(trace_fe); 
-		if (IsFaceLumped()) fmi.SetIntegrationRule(lumped_ir); 
+		LumpedIntegrationRule lumped_ir(face_trans->GetGeometryType()); 
+		if (IsFaceLumped(lump)) fmi.SetIntegrationRule(lumped_ir); 
 
 		fmi.AssembleFaceMatrix(el1, *el2, *face_trans, elmat);
 		const auto dof1 = el1.GetDof(); 
@@ -632,10 +631,10 @@ void InverseAdvectionOperator::SetTimeAbsorption(const double sigma)
 	for (auto e=0; e<fes.GetNE(); e++) {
 		const auto &fe = *fes.GetFE(e); 
 		auto &trans = *mesh.GetElementTransformation(e);
-		LumpedIntegrationRule lumped_ir(fe); 
+		LumpedIntegrationRule lumped_ir(trans.GetGeometryType()); 
 
 		time_mass_matrices[e] = new mfem::DenseMatrix; 
-		if (IsMassLumped()) mi.SetIntegrationRule(lumped_ir); 
+		if (IsMassLumped(lump)) mi.SetIntegrationRule(lumped_ir); 
 		mi.AssembleElementMatrix(fe, trans, *time_mass_matrices[e]); 
 	}
 }
@@ -667,10 +666,6 @@ void InverseAdvectionOperator::WriteGraphToDot(std::string prefix) const
 	igraph_write_graph_dot(&graph, file); 
 	fclose(file); 	
 }
-
-bool InverseAdvectionOperator::IsMassLumped() const { return lump & LumpingType::MASS; }
-bool InverseAdvectionOperator::IsGradientLumped() const { return lump & LumpingType::GRADIENT; }
-bool InverseAdvectionOperator::IsFaceLumped() const { return lump & LumpingType::FACE; }
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 

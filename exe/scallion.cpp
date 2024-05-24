@@ -566,9 +566,9 @@ int main(int argc, char *argv[]) {
 			Linv.SetSendBufferSize(send_buffer_size.value()); 
 	}
 	out << YAML::Key << "lumping type" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "mass" << YAML::Value << Linv.IsMassLumped(); 
-		out << YAML::Key << "gradient" << YAML::Value << Linv.IsGradientLumped(); 
-		out << YAML::Key << "faces" << YAML::Value << Linv.IsFaceLumped(); 
+		out << YAML::Key << "mass" << YAML::Value << IsMassLumped(lump); 
+		out << YAML::Key << "gradient" << YAML::Value << IsGradientLumped(lump); 
+		out << YAML::Key << "faces" << YAML::Value << IsFaceLumped(lump); 
 	out << YAML::EndMap; 
 	if (sweep_opts_avail) out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value(); 
 
@@ -607,33 +607,22 @@ int main(int argc, char *argv[]) {
 	psi0 *= constants::SpeedOfLight; 
 	psi = psi0; 
 
-	LumpedIntegrationRule lumped_intrule(*fes.GetFE(0)); // <--- limits lumping to meshes with only one type of element 
-	LumpedIntegrationRule lumped_intrule_face(
-		*fes.GetTraceElement(0, mesh.GetFaceElementTransformations(0)->GetGeometryType())); 
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	BlockDiagonalByElementNonlinearForm meb_form(&fes);
-	if (lump) {
-		auto *bbenfi = new BlackBodyEmissionNFI(total, 2, 2); 
-		bbenfi->SetIntegrationRule(lumped_intrule); 
-		meb_form.AddDomainIntegrator(bbenfi); // meb_form owns ptr 
+	if (IsMassLumped(lump)) {
+		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(total))); 
 		meb_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
 	}
 	else {
 		meb_form.AddDomainIntegrator(new BlackBodyEmissionNFI(total, 2, 2 + sigma_fe_order)); 
 		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}
-	std::unique_ptr<mfem::Solver> local_mat_inv; 
-	if (lump) 
-		local_mat_inv = std::make_unique<DiagonalDenseMatrixInverse>(); 
-	else
-		local_mat_inv = std::make_unique<mfem::DenseMatrixInverse>(); 
-	BlockDiagonalByElementSolver meb_grad_inv(*local_mat_inv); 
 
 	BlockDiagonalByElementNonlinearForm emission_form(&fes); 
-	auto *bbenfi = new BlackBodyEmissionNFI(total, 2, 2 + sigma_fe_order); 
-	if (lump) 
-		bbenfi->SetIntegrationRule(lumped_intrule); 
-	emission_form.AddDomainIntegrator(bbenfi); // emission_form owns ptr 
+	if (IsMassLumped(lump)) 
+		emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(total)));
+	else
+		emission_form.AddDomainIntegrator(new BlackBodyEmissionNFI(total, 2, 2 + sigma_fe_order));
 
 	mfem::BilinearForm Mtot(&fes); 
 	if (lump) 
@@ -642,6 +631,14 @@ int main(int argc, char *argv[]) {
 		Mtot.AddDomainIntegrator(new mfem::MassIntegrator(total)); 
 	Mtot.Assemble(); 
 	Mtot.Finalize(); 
+
+	// solver for local dense matrices 
+	// assume diagonal if mass lumped
+	std::unique_ptr<mfem::Solver> local_mat_inv; 
+	if (IsMassLumped(lump)) 
+		local_mat_inv = std::make_unique<DiagonalDenseMatrixInverse>(); 
+	else
+		local_mat_inv = std::make_unique<mfem::DenseMatrixInverse>(); 
 
 	// --- useful components of moment discretizations --- 
 	mfem::Vector nor(dim); 
@@ -662,6 +659,7 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver, local_meb_solver, global_meb_solver,
 		linear_solver, dsa_solver; 
 	std::unique_ptr<BlockDiagonalByElementNonlinearSolver> meb_solver;
+	std::unique_ptr<BlockDiagonalByElementSolver> linearized_meb_solver;
 	std::unique_ptr<mfem::HypreParMatrix> dsa_mat, dsa_time_mat; 
 	std::unique_ptr<mfem::ParBilinearForm> Kform; 
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
@@ -682,8 +680,9 @@ int main(int argc, char *argv[]) {
 		io::ValidateOption<std::string>("energy balance solver", 
 			meb_solver_table["type"], {"newton", "local newton"}, root); 
 		if (meb_type == "newton") {
+			linearized_meb_solver = std::make_unique<BlockDiagonalByElementSolver>(*local_mat_inv);
 			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
-			global_meb_solver->SetPreconditioner(meb_grad_inv); 
+			global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
 			global_meb_solver->SetOperator(meb_form); 
 			stepper = std::make_unique<PicardTRTOperator>(
 				offsets, Linv, D, emission_form, Mtot, *global_meb_solver, *nonlinear_solver); 
@@ -743,31 +742,33 @@ int main(int argc, char *argv[]) {
 			const double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
 			io::ValidateOption<std::string>("preconditioner type", type, {"mip"}, root); 
 			Kform = std::make_unique<mfem::ParBilinearForm>(&fes); 
-			auto *diff_int = new mfem::DiffusionIntegrator(diffco); 
-			if (Linv.IsGradientLumped()) 
-				diff_int->SetIntegrationRule(lumped_intrule); 
-			Kform->AddDomainIntegrator(diff_int); 
+			auto *diff_int = new mfem::DiffusionIntegrator(diffco);
+			if (IsGradientLumped(lump)) 
+				Kform->AddDomainIntegrator(new QuadratureLumpedIntegrator(diff_int));
+			else
+				Kform->AddDomainIntegrator(diff_int);
 			auto *mass_int = new mfem::MassIntegrator(total); 
-			if (Linv.IsMassLumped())
-				mass_int->SetIntegrationRule(lumped_intrule); 
-			Kform->AddDomainIntegrator(mass_int); 
-			Kform->AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2)); 
-			Kform->AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
-			if (Linv.IsFaceLumped()) {
-				for (auto &ptr : *Kform->GetBBFI()) {
-					ptr->SetIntegrationRule(lumped_intrule_face); 
-				}
-				for (auto &ptr : *Kform->GetFBFI()) {
-					ptr->SetIntegrationRule(lumped_intrule_face); 
-				}		
+			if (IsMassLumped(lump))
+				Kform->AddDomainIntegrator(new QuadratureLumpedIntegrator(mass_int)); 
+			else
+				Kform->AddDomainIntegrator(mass_int);
+			auto *mip = new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2);
+			auto *bdr_int = new mfem::BoundaryMassIntegrator(alpha_c);
+			if (IsFaceLumped(lump)) {
+				Kform->AddInteriorFaceIntegrator(new QuadratureLumpedIntegrator(mip)); 
+				Kform->AddBdrFaceIntegrator(new QuadratureLumpedIntegrator(bdr_int));
+			}
+			else {
+				Kform->AddInteriorFaceIntegrator(mip);
+				Kform->AddBdrFaceIntegrator(bdr_int);
 			}
 			Kform->Assemble(); 
 			Kform->Finalize(); 
 			dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform->ParallelAssemble()); 
 
 			mfem::ParBilinearForm Mform(&fes); 
-			if (Linv.IsMassLumped()) 
-				Mform.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator));
+			if (IsMassLumped(lump)) 
+				Mform.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator));
 			else 
 				Mform.AddDomainIntegrator(new mfem::MassIntegrator);
 			Mform.Assemble(); 
@@ -785,10 +786,11 @@ int main(int argc, char *argv[]) {
 		}
 		out << YAML::Key << "transport solver" << YAML::Value << transport_solve_table; 
 
+		linearized_meb_solver = std::make_unique<BlockDiagonalByElementSolver>(*local_mat_inv);
 		if (nonlinear_solver) {
 			auto *ptr = new NewtonTRTOperator(
 				offsets, Linv, D, emission_form, meb_form, 
-				Mtot, *nonlinear_solver, *linear_solver, meb_grad_inv, dsa_solver.get());
+				Mtot, *nonlinear_solver, *linear_solver, *linearized_meb_solver, dsa_solver.get());
 			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
 			auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get());
 			if (sundials) {
@@ -807,7 +809,7 @@ int main(int argc, char *argv[]) {
 		else {
 			auto *ptr = new LinearizedTRTOperator(
 				offsets, Linv, D, emission_form, meb_form, 
-				Mtot, *linear_solver, meb_grad_inv, dsa_solver.get());
+				Mtot, *linear_solver, *linearized_meb_solver, dsa_solver.get());
 			stepper.reset(ptr); 
 		}
 	}

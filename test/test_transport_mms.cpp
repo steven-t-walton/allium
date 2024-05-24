@@ -48,7 +48,7 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
 	InverseAdvectionOperator Linv(fes, quad, total_data, -1, lump); 
 
 	mfem::ParBilinearForm Ms_form(&fes); 
-	if (Linv.IsMassLumped())
+	if (IsMassLumped(lump))
 		Ms_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(scattering))); 
 	else
 		Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 

@@ -317,11 +317,7 @@ TEST(Integrators, SweepFaceIntegratorLumped) {
 		if (trans) break; 
 	}
 
-	const auto &trace_fe = *fec.TraceFiniteElementForGeometry(trans->GetGeometryType()); 
-	LumpedIntegrationRule rule(trace_fe); 
-
-	FaceMassMatricesIntegrator bfi; 
-	bfi.SetIntegrationRule(rule); 
+	QuadratureLumpedIntegrator bfi(new FaceMassMatricesIntegrator);
 	mfem::DenseMatrix M; 
 	bfi.AssembleFaceMatrix(*fes.GetFE(trans->Elem1No), *fes.GetFE(trans->Elem2No), *trans, M); 
 	mfem::DenseMatrix ex11({{0,0,0,0}, {0,1./2,0,0.0}, {0,0,0,0}, {0,0.0,0,1./2}}); 
@@ -363,9 +359,8 @@ TEST(Integrators, TriMassMatrix) {
 	elmat.Lump(); 
 
 	mfem::DenseMatrix elmat_lump;
-	LumpedIntegrationRule lumped_ir(fe); 
-	mi.SetIntegrationRule(lumped_ir); 
-	mi.AssembleElementMatrix(fe, trans, elmat_lump); 
+	QuadratureLumpedIntegrator lmi(&mi, 0);
+	lmi.AssembleElementMatrix(fe, trans, elmat_lump); 
 	elmat -= elmat_lump; 
 	EXPECT_NEAR(elmat.FNorm(), 0.0, 1e-14); 
 }

@@ -9,7 +9,7 @@ private:
 	mfem::Vector shape; 
 	int oa, ob; 
 public:
-	BlackBodyEmissionNFI(mfem::Coefficient &s, int a, int b) 
+	BlackBodyEmissionNFI(mfem::Coefficient &s, int a=2, int b=1) 
 		: sigma(s), oa(a), ob(b)
 	{ }
 	void AssembleElementVector(const mfem::FiniteElement &el, mfem::ElementTransformation &trans, 
