@@ -2,7 +2,7 @@
 #include <deque>
 #include "config.hpp"
 #include "log.hpp"
-#include "lumped_intrule.hpp"
+#include "lumping.hpp"
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	mfem::GridFunction &_total_data, int reflection_bdr_attr, int use_lumping)

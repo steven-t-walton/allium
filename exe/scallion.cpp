@@ -12,7 +12,7 @@
 #include "trt_picard.hpp"
 #include "trt_linearized.hpp"
 #include "mip.hpp"
-#include "lumped_intrule.hpp"
+#include "lumping.hpp"
 #include "tracer.hpp"
 #include "p1diffusion.hpp"
 #include "block_diag_op.hpp"

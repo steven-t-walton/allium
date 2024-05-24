@@ -1,5 +1,5 @@
 #include "trt_integrators.hpp"
-#include "lumped_intrule.hpp"
+#include "lumping.hpp"
 #include "constants.hpp"
 
 void BlackBodyEmissionNFI::AssembleElementVector(

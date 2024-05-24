@@ -1,5 +1,5 @@
 #include "gtest/gtest.h"
-#include "lumped_intrule.hpp"
+#include "lumping.hpp"
 #include "constants.hpp"
 #include "block_diag_op.hpp"
 #include "transport_op.hpp"

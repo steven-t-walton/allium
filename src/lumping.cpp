@@ -1,4 +1,4 @@
-#include "lumped_intrule.hpp"
+#include "lumping.hpp"
 
 LumpedIntegrationRule::LumpedIntegrationRule(const mfem::Geometry::Type geom)
 {

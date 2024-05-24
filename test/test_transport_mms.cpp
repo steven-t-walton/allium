@@ -1,7 +1,7 @@
 #include "gtest/gtest.h"
 #include "sweep.hpp"
 #include "transport_op.hpp"
-#include "lumped_intrule.hpp"
+#include "lumping.hpp"
 
 double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 

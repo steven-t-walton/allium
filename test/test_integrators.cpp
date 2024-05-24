@@ -2,7 +2,7 @@
 #include "p1diffusion.hpp"
 #include "smm_integrators.hpp"
 #include "sweep.hpp"
-#include "lumped_intrule.hpp"
+#include "lumping.hpp"
 
 TEST(Integrators, Penalty1D) {
 	mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D(3, 1.0); 
