@@ -95,7 +95,7 @@ public:
 	{
 	}
 	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
-		if (it==1) {
+		if (it==0) {
 			out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
 		}
 		out << YAML::BeginMap; 

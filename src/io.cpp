@@ -93,8 +93,8 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MP
 	}
 
 	else if (type == "sli") {
-		if (comm) s = new mfem::SLISolver(*comm); 
-		else s = new mfem::SLISolver; 
+		if (comm) s = new SLISolver(*comm); 
+		else s = new SLISolver; 
 	}
 
 	else if (type == "bicg" or type == "bicgstab") {

@@ -107,6 +107,7 @@ private:
 	mutable mfem::Vector r,z; 
 public:
 	SLISolver(MPI_Comm _comm) : mfem::IterativeSolver(_comm) { }
+	SLISolver() = default;
 	void SetOperator(const mfem::Operator &op) { 
 		mfem::IterativeSolver::SetOperator(op); 
 		r.SetSize(width); 
