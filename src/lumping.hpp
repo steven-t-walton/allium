@@ -12,9 +12,9 @@ enum LumpingType {
 	FACE = 4 
 };
 
-static bool IsMassLumped(int lump) { return lump & LumpingType::MASS; }
-static bool IsGradientLumped(int lump) { return lump & LumpingType::GRADIENT; }
-static bool IsFaceLumped(int lump) { return lump & LumpingType::FACE; }
+constexpr bool IsMassLumped(int lump) { return lump & LumpingType::MASS; }
+constexpr bool IsGradientLumped(int lump) { return lump & LumpingType::GRADIENT; }
+constexpr bool IsFaceLumped(int lump) { return lump & LumpingType::FACE; }
 
 // sets up a nodal quadrature rule based on a provided finite element 
 class LumpedIntegrationRule : public mfem::IntegrationRule
@@ -76,4 +76,25 @@ public:
 	void AssembleElementGrad(
 		const mfem::FiniteElement &el, mfem::ElementTransformation &trans, 
 		const mfem::Vector &elfun, mfem::DenseMatrix &elmat);
+};
+
+class QuadratureLumpedLFIntegrator : public mfem::LinearFormIntegrator
+{
+private:
+	mfem::LinearFormIntegrator *lfi;
+	int own_lfi;
+public:
+	QuadratureLumpedLFIntegrator(mfem::LinearFormIntegrator *lfi, int own_lfi=1)
+		: lfi(lfi), own_lfi(own_lfi)
+	{ }
+	~QuadratureLumpedLFIntegrator()
+	{
+		if (own_lfi) delete lfi;
+	}
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, 
+		mfem::ElementTransformation &Tr, mfem::Vector &elvect) override;
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, 
+		mfem::FaceElementTransformations &Tr, mfem::Vector &elvect) override;
+	void AssembleRHSElementVect(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
+		mfem::FaceElementTransformations &Tr, mfem::Vector &elvect) override;
 };
