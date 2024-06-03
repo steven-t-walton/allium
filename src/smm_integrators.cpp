@@ -752,7 +752,11 @@ void LDGTraceIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &tr_fe1,
 		T.SetAllIntPoints(&ip);
 		const auto &eip1 = T.GetElement1IntPoint();
 		const auto &eip2 = T.GetElement2IntPoint();
-		mfem::CalcOrtho(T.Jacobian(), nor);
+		if (dim == 1) {
+			nor(0) = 2*eip1.x - 1.0;
+		} else {
+			mfem::CalcOrtho(T.Jacobian(), nor);			
+		}
 		w = ip.weight;
 		if (tr_ndof2) { w /= 2; }
 		// set sign = sign(beta . normal)
