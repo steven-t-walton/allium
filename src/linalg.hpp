@@ -163,3 +163,24 @@ public:
 	}
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const; 
 };
+
+// SuperLUSolver but SetOperator constructs 
+// and stores the mfem::SuperLURowLocMatrix 
+// copy of the operator 
+class SuperLUSolverWrapper : public mfem::Solver
+{
+private:
+	mfem::SuperLUSolver &slu;
+	std::unique_ptr<mfem::SuperLURowLocMatrix> slu_op;
+public:
+	SuperLUSolverWrapper(mfem::SuperLUSolver &slu) : slu(slu)
+	{
+	}
+	void SetOperator(const mfem::Operator &op) override {
+		slu_op.reset(new mfem::SuperLURowLocMatrix(op));
+		slu.SetOperator(*slu_op);
+	}
+	void Mult(const mfem::Vector &b, mfem::Vector &x) const override {
+		slu.Mult(b, x);
+	}
+};
