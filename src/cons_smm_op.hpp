@@ -5,6 +5,23 @@
 #include "dg_trace_coll.hpp"
 #include "block_smm_op.hpp"
 
+class MomentFaceClosuresOperator : public mfem::Operator
+{
+private:
+	mfem::ParFiniteElementSpace &fes, &trace_fes, &trace_vfes;
+	const AngularQuadrature &quad;
+	const TransportVectorExtents &psi_ext;
+	int reflect_bdr_attr;
+
+	std::unique_ptr<const mfem::Table> element_to_face; 
+	std::unordered_map<int,int> face_to_bdr_el; 
+public:
+	MomentFaceClosuresOperator(mfem::ParFiniteElementSpace &fes, 
+		mfem::ParFiniteElementSpace &trace_fes, mfem::ParFiniteElementSpace &trace_vfes, 
+		const AngularQuadrature &quad, const TransportVectorExtents &psi_ext, int reflect_bdr_attr);
+	void Mult(const mfem::Vector &psi, mfem::Vector &closures) const override;
+};
+
 class ConsistentSMMSourceOperatorBase : public mfem::Operator {
 protected:
 	mfem::ParFiniteElementSpace &fes, &vfes; 
@@ -12,21 +29,20 @@ protected:
 	const TransportVectorExtents &psi_ext; 
 	double alpha; 
 	int reflect_bdr_attr; 
-
-	std::unique_ptr<const mfem::Table> element_to_face; 
-	std::unordered_map<int,int> face_to_bdr_el; 
+	int lumping;
 
 	mfem::Array<int> offsets; 
 	mfem::Vector Q0, Q1; 
 	std::unique_ptr<DGTrace_FECollection> trace_coll; 
 	std::unique_ptr<mfem::ParFiniteElementSpace> trace_fes, trace_vfes; 
-	mutable mfem::ParGridFunction beta, tensor; 
+	mutable mfem::Vector face_closure_data;
+	std::unique_ptr<MomentFaceClosuresOperator> face_closure_op;
 
 	mutable mfem::Array<int> marshak_bdr_attrs, reflect_bdr_attrs; 
 public:
 	ConsistentSMMSourceOperatorBase(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 		const AngularQuadrature &quad, const TransportVectorExtents &psi_ext, ConstTransportVectorView source_vec, 
-		double alpha, int reflect_bdr_attr); 
+		double alpha, int reflect_bdr_attr, int lumping=0); 
 	virtual void Mult(const mfem::Vector &psi, mfem::Vector &source) const; 
 private:
 	void ComputeHalfRangeInterfaceTerms(ConstTransportVectorView psi, 

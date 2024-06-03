@@ -3,108 +3,32 @@
 #include "transport_op.hpp"
 #include "p1diffusion.hpp"
 #include "mip.hpp"
+#include "lumping.hpp"
 
-void FormTransportSourceMoments(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	const AngularQuadrature &quad, ConstTransportVectorView source_vec, mfem::Vector &Q0, mfem::Vector &Q1)
+MomentFaceClosuresOperator::MomentFaceClosuresOperator(
+	mfem::ParFiniteElementSpace &fes,
+	mfem::ParFiniteElementSpace &trace_fes, mfem::ParFiniteElementSpace &trace_vfes, 
+	const AngularQuadrature &quad, const TransportVectorExtents &psi_ext, int reflect_bdr_attr)
+	: fes(fes), trace_fes(trace_fes), trace_vfes(trace_vfes), 
+	  quad(quad), psi_ext(psi_ext), reflect_bdr_attr(reflect_bdr_attr)
 {
-	const auto dim = fes.GetMesh()->Dimension(); 
-	Q0.SetSize(fes.GetVSize()); 
-	Q0 = 0.0; 
-	Q1.SetSize(vfes.GetVSize()); 
-	Q1 = 0.0; 
-
-	mfem::Array<int> dofs, vdofs; 
-	for (auto a=0; a<quad.Size(); a++) {
-		const auto &Omega = quad.GetOmega(a); 
-		for (auto e=0; e<fes.GetNE(); e++) {
-			fes.GetElementDofs(e, dofs); 
-			vfes.GetElementVDofs(e, vdofs); 
-			for (const auto &dof : dofs) {
-				Q0(dof) += source_vec(0,a,dof) * quad.GetWeight(a); 
-			}
-			for (auto d=0; d<dim; d++) {
-				for (auto i=0; i<dofs.Size(); i++) {
-					Q1(vdofs[i + dofs.Size()*d]) += Omega(d) * source_vec(0,a,dofs[i]) * quad.GetWeight(a); 
-				}
-			}
-		}
-	}
-}
-
-ConsistentSMMSourceOperatorBase::ConsistentSMMSourceOperatorBase(
-	mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
-	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, 
-	ConstTransportVectorView source_vec, double _alpha, int _reflect_bdr_attr)
-	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), alpha(_alpha), reflect_bdr_attr(_reflect_bdr_attr)
-{
-	offsets.SetSize(3); 
-	offsets[0] = 0; 
-	offsets[1] = vfes.GetVSize(); 
-	offsets[2] = fes.GetVSize(); 
-	offsets.PartialSum(); 
-
 	width = TotalExtent(psi_ext); 
-	height = offsets.Last(); 
-	const auto dim = fes.GetMesh()->Dimension(); 
-
-	FormTransportSourceMoments(fes, vfes, quad, source_vec, Q0, Q1); 
-	Q1 *= 3.0; 
-
+	height = trace_fes.GetVSize() + trace_vfes.GetVSize(); 
 	auto &mesh = *fes.GetParMesh(); 
 	auto face_to_element = std::unique_ptr<const mfem::Table>(mesh.GetFaceToAllElementTable()); 
 	element_to_face = std::unique_ptr<const mfem::Table>(mfem::Transpose(*face_to_element)); 
 	for (auto i=0; i<mesh.GetNBE(); i++) {
 		face_to_bdr_el[mesh.GetBdrElementFaceIndex(i)] = i; 
 	}
-
-	if (fes.IsVariableOrder()) { MFEM_ABORT("variable order not supported for consistent SMM"); }
-	trace_coll = std::make_unique<DGTrace_FECollection>(fes.GetOrder(0), dim); 
-	trace_fes = std::make_unique<mfem::ParFiniteElementSpace>(&mesh, trace_coll.get()); 
-	trace_vfes = std::make_unique<mfem::ParFiniteElementSpace>(&mesh, trace_coll.get(), dim); 
-	beta.SetSpace(trace_fes.get());
-	tensor.SetSpace(trace_vfes.get());  
-
-	const auto &mesh_bdr_attributes = mesh.bdr_attributes; 
-	marshak_bdr_attrs.SetSize(mesh_bdr_attributes.Max());
-	reflect_bdr_attrs.SetSize(mesh_bdr_attributes.Max()); 
-	marshak_bdr_attrs = 1; 
-	reflect_bdr_attrs = 0; 
-	if (reflect_bdr_attr > 0) {
-		marshak_bdr_attrs[reflect_bdr_attr-1] = 0; 
-		reflect_bdr_attrs[reflect_bdr_attr-1] = 1; 
-	}
 }
 
-void ConsistentSMMSourceOperatorBase::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+void MomentFaceClosuresOperator::Mult(const mfem::Vector &psi, mfem::Vector &closures) const
 {
-	mfem::BlockVector bv(source.GetData(), offsets); 
-	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 
-	SecondMomentTensorCoefficient P(fes, quad, psi_view); 
-	ComputeHalfRangeInterfaceTerms(psi_view, beta, tensor); 
-
-	mfem::ParLinearForm fform(&fes, bv.GetBlock(1).GetData()); 
-	fform.AddInteriorFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta));
-	fform.AddBdrFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta), marshak_bdr_attrs); 
-	fform.Assemble(); 
-
-	mfem::ParLinearForm gform(&vfes, bv.GetBlock(0).GetData()); 
-	gform.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(P)); 
-	gform.AddInteriorFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
-	gform.AddBdrFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
-	gform.Assemble(); 
-	gform *= 3.0; 
-
-	fform += Q0; 
-	gform += Q1; 
-}
-
-void ConsistentSMMSourceOperatorBase::ComputeHalfRangeInterfaceTerms(ConstTransportVectorView psi, 
-	mfem::ParGridFunction &beta, mfem::ParGridFunction &tensor) const
-{
+	ConstTransportVectorView psi_view(psi.GetData(), psi_ext);
+	mfem::Vector beta(closures, 0, trace_fes.GetVSize()); 
+	mfem::Vector tensor(closures, trace_fes.GetVSize(), trace_vfes.GetVSize());
 	auto &mesh = *fes.GetParMesh(); 
 	const auto dim = mesh.Dimension(); 
-	const auto &beta_fes = *beta.FESpace(); 
-	const auto &tensor_fes = *tensor.FESpace(); 
 	mfem::Vector nor(dim), shape, psi_local; 
 	mfem::Array<int> psi_dof, beta_dof, tensor_dof; 
 	for (auto e=0; e<fes.GetNE(); e++) {
@@ -112,8 +36,8 @@ void ConsistentSMMSourceOperatorBase::ComputeHalfRangeInterfaceTerms(ConstTransp
 		shape.SetSize(psi_el.GetDof()); 
 		psi_local.SetSize(psi_el.GetDof()); 
 		fes.GetElementDofs(e, psi_dof);
-		beta_fes.GetElementDofs(e, beta_dof);  
-		tensor_fes.GetElementVDofs(e, tensor_dof); 
+		trace_fes.GetElementDofs(e, beta_dof);  
+		trace_vfes.GetElementVDofs(e, tensor_dof); 
 		const auto *faces = element_to_face->GetRow(e); 
 		for (auto f=0; f<element_to_face->RowSize(e); f++) {
 			bool reflect = false, bdr = false; 
@@ -132,7 +56,7 @@ void ConsistentSMMSourceOperatorBase::ComputeHalfRangeInterfaceTerms(ConstTransp
 			}			
 			bool keep_order = e == trans->Elem1No; 
 			const auto local_face_id = info.element[keep_order ? 0 : 1].local_face_id; 
-			const auto &tr_el = *beta_fes.GetTraceElement(face, mesh.GetFaceGeometry(face)); 
+			const auto &tr_el = *trace_fes.GetTraceElement(face, mesh.GetFaceGeometry(face)); 
 			const auto &ir = tr_el.GetNodes(); 
 
 			const auto ip = mfem::Geometries.GetCenter(trans->GetGeometryType()); 
@@ -164,7 +88,7 @@ void ConsistentSMMSourceOperatorBase::ComputeHalfRangeInterfaceTerms(ConstTransp
 					double w = quad.GetWeight(a); 
 					double dot = Omega * nor; 
 					if (dot > 0) {
-						for (auto i=0; i<psi_dof.Size(); i++) { psi_local[i] = psi(0,a,psi_dof[i]); }
+						for (auto i=0; i<psi_dof.Size(); i++) { psi_local[i] = psi_view(0,a,psi_dof[i]); }
 						double psi_at_ip = shape * psi_local; 
 						dot2 += dot*dot * psi_at_ip * w; // \int_{Omega.n>0} (Omega.n)^2 psi dOmega 
 						for (auto d=0; d<dim; d++) {
@@ -187,9 +111,119 @@ void ConsistentSMMSourceOperatorBase::ComputeHalfRangeInterfaceTerms(ConstTransp
 			}
 		}
 	}
+}
 
+void FormTransportSourceMoments(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	const AngularQuadrature &quad, ConstTransportVectorView source_vec, mfem::Vector &Q0, mfem::Vector &Q1)
+{
+	const auto dim = fes.GetMesh()->Dimension(); 
+	Q0.SetSize(fes.GetVSize()); 
+	Q0 = 0.0; 
+	Q1.SetSize(vfes.GetVSize()); 
+	Q1 = 0.0; 
+
+	mfem::Array<int> dofs, vdofs; 
+	for (auto a=0; a<quad.Size(); a++) {
+		const auto &Omega = quad.GetOmega(a); 
+		for (auto e=0; e<fes.GetNE(); e++) {
+			fes.GetElementDofs(e, dofs); 
+			vfes.GetElementVDofs(e, vdofs); 
+			for (const auto &dof : dofs) {
+				Q0(dof) += source_vec(0,a,dof) * quad.GetWeight(a); 
+			}
+			for (auto d=0; d<dim; d++) {
+				for (auto i=0; i<dofs.Size(); i++) {
+					Q1(vdofs[i + dofs.Size()*d]) += Omega(d) * source_vec(0,a,dofs[i]) * quad.GetWeight(a); 
+				}
+			}
+		}
+	}
+}
+
+ConsistentSMMSourceOperatorBase::ConsistentSMMSourceOperatorBase(
+	mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
+	const AngularQuadrature &_quad, const TransportVectorExtents &_psi_ext, 
+	ConstTransportVectorView source_vec, double _alpha, int _reflect_bdr_attr, int _lumping)
+	: fes(_fes), vfes(_vfes), quad(_quad), psi_ext(_psi_ext), 
+	  alpha(_alpha), reflect_bdr_attr(_reflect_bdr_attr), lumping(_lumping)
+{
+	offsets.SetSize(3); 
+	offsets[0] = 0; 
+	offsets[1] = vfes.GetVSize(); 
+	offsets[2] = fes.GetVSize(); 
+	offsets.PartialSum(); 
+
+	width = TotalExtent(psi_ext); 
+	height = offsets.Last(); 
+	const auto dim = fes.GetMesh()->Dimension(); 
+
+	FormTransportSourceMoments(fes, vfes, quad, source_vec, Q0, Q1); 
+	Q1 *= 3.0; 
+
+	auto &mesh = *fes.GetParMesh(); 
+
+	if (fes.IsVariableOrder()) { MFEM_ABORT("variable order not supported for consistent SMM"); }
+	trace_coll = std::make_unique<DGTrace_FECollection>(fes.GetOrder(0), dim); 
+	trace_fes = std::make_unique<mfem::ParFiniteElementSpace>(&mesh, trace_coll.get()); 
+	trace_vfes = std::make_unique<mfem::ParFiniteElementSpace>(&mesh, trace_coll.get(), dim); 
+	face_closure_op = std::make_unique<MomentFaceClosuresOperator>(
+		fes, *trace_fes, *trace_vfes, quad, psi_ext, reflect_bdr_attr);
+	face_closure_data.SetSize(face_closure_op->Height());
+
+	const auto &mesh_bdr_attributes = mesh.bdr_attributes; 
+	marshak_bdr_attrs.SetSize(mesh_bdr_attributes.Max());
+	reflect_bdr_attrs.SetSize(mesh_bdr_attributes.Max()); 
+	marshak_bdr_attrs = 1; 
+	reflect_bdr_attrs = 0; 
+	if (reflect_bdr_attr > 0) {
+		marshak_bdr_attrs[reflect_bdr_attr-1] = 0; 
+		reflect_bdr_attrs[reflect_bdr_attr-1] = 1; 
+	}
+}
+
+void ConsistentSMMSourceOperatorBase::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+{
+	const bool lump_grad = IsGradientLumped(lumping);
+	const bool lump_face = IsFaceLumped(lumping);
+
+	mfem::BlockVector bv(source.GetData(), offsets); 
+	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 
+	SecondMomentTensorCoefficient P(fes, quad, psi_view); 
+	face_closure_op->Mult(psi, face_closure_data);
+	mfem::ParGridFunction beta(trace_fes.get(), face_closure_data, 0); 
+	mfem::ParGridFunction tensor(trace_vfes.get(), face_closure_data, trace_fes->GetVSize());
 	beta.ExchangeFaceNbrData(); 
-	tensor.ExchangeFaceNbrData(); 
+	tensor.ExchangeFaceNbrData();
+
+	mfem::ParLinearForm fform(&fes, bv.GetBlock(1).GetData());
+	if (lump_face) {
+		fform.AddInteriorFaceIntegrator(new QuadratureLumpedLFIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta)));
+		fform.AddBdrFaceIntegrator(new QuadratureLumpedLFIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta)), 
+			marshak_bdr_attrs); 		
+	} else {
+		fform.AddInteriorFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta));
+		fform.AddBdrFaceIntegrator(new CSMMZerothMomentFaceLFIntegrator(beta), marshak_bdr_attrs); 		
+	}
+	fform.Assemble(); 
+
+	mfem::ParLinearForm gform(&vfes, bv.GetBlock(0).GetData()); 
+	if (lump_grad) {
+		gform.AddDomainIntegrator(new QuadratureLumpedLFIntegrator(new WeakTensorDivergenceLFIntegrator(P))); 
+	} else {
+		gform.AddDomainIntegrator(new WeakTensorDivergenceLFIntegrator(P)); 
+	}
+	if (lump_face) {
+		gform.AddInteriorFaceIntegrator(new QuadratureLumpedLFIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor))); 
+		gform.AddBdrFaceIntegrator(new QuadratureLumpedLFIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor))); 				
+	} else {
+		gform.AddInteriorFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 
+		gform.AddBdrFaceIntegrator(new CSMMFirstMomentFaceLFIntegrator(tensor)); 		
+	}
+	gform.Assemble(); 
+	gform *= 3.0; 
+
+	fform += Q0; 
+	gform += Q1; 
 }
 
 ConsistentSMMSourceOperator::ConsistentSMMSourceOperator(mfem::ParFiniteElementSpace &_fes, mfem::ParFiniteElementSpace &_vfes, 
