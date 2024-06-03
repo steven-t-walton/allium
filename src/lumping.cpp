@@ -76,20 +76,19 @@ void QuadratureLumpedLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElem
 {
 	LumpedIntegrationRule rule(Tr.GetGeometryType());
 	lfi->SetIntRule(&rule);
-	AssembleRHSElementVect(el, Tr, elvect);
+	lfi->AssembleRHSElementVect(el, Tr, elvect);
 }
 void QuadratureLumpedLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el, 
 	mfem::FaceElementTransformations &Tr, mfem::Vector &elvect)
 {
 	LumpedIntegrationRule rule(Tr.GetGeometryType());
 	lfi->SetIntRule(&rule);
-	AssembleRHSElementVect(el, Tr, elvect);
-
+	lfi->AssembleRHSElementVect(el, Tr, elvect);
 }
 void QuadratureLumpedLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 	mfem::FaceElementTransformations &Tr, mfem::Vector &elvect)
 {
 	LumpedIntegrationRule rule(Tr.GetGeometryType());
 	lfi->SetIntRule(&rule);
-	AssembleRHSElementVect(el1, el2, Tr, elvect);
+	lfi->AssembleRHSElementVect(el1, el2, Tr, elvect);
 }
