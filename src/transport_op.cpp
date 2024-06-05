@@ -6,7 +6,7 @@ void DiscreteToMoment::Mult(const mfem::Vector &psi, mfem::Vector &phi) const
 	auto phi_view = MomentVectorView(phi.GetData(), extents_phi);
 	const auto num_moments = extents_phi.extent(1); 
 	const auto dim = quad.Dimension(); 
-	assert(num_moments==1 or (dim==2 and num_moments == 3) or (dim==3 and num_moments==4)); 
+	assert(num_moments==1 or num_moments == dim+1);
 	phi = 0.0; 
 	for (auto g=0; g<extents_psi.extent(0); g++) {
 		for (auto a=0; a<extents_psi.extent(1); a++) {
