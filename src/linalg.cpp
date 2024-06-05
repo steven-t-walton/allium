@@ -22,6 +22,20 @@ mfem::HypreParMatrix *ElementByElementBlockInverse(const mfem::ParFiniteElementS
 	return ptr; 
 }
 
+mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop) 
+{
+	mfem::Array2D<mfem::HypreParMatrix*> blocks(bop.NumRowBlocks(), bop.NumColBlocks()); 
+	for (auto row=0; row<blocks.NumRows(); row++) {
+		for (auto col=0; col<blocks.NumCols(); col++) {
+			const mfem::Operator *op = &bop.GetBlock(row,col); 
+			const auto *hypre_op = dynamic_cast<const mfem::HypreParMatrix*>(op); 
+			if (!hypre_op) MFEM_ABORT("blocks must be HypreParMatrix"); 
+			blocks(row,col) = const_cast<mfem::HypreParMatrix*>(hypre_op); 
+		}
+	}
+	return mfem::HypreParMatrixFromBlocks(blocks); 
+}
+
 TripleProductOperator::TripleProductOperator(const mfem::Operator *a, const mfem::Operator *b, const mfem::Operator *c,
 	bool owna, bool ownb, bool ownc)
 	: A(a), B(b), C(c), ownA(owna), ownB(ownb), ownC(ownc), mfem::Operator(a->Height(), c->Width())

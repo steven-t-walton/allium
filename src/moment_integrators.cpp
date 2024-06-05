@@ -1,6 +1,207 @@
-#include "p1diffusion.hpp"
-#include "linalg.hpp"
-#include "smm_integrators.hpp"
+#include "moment_integrators.hpp"
+
+void MIPDiffusionIntegrator::AssembleFaceMatrix(
+	const mfem::FiniteElement &el1, const mfem::FiniteElement &el2,
+	mfem::FaceElementTransformations &Trans, mfem::DenseMatrix &elmat)
+{
+	using namespace mfem; 
+	int dim, ndof1, ndof2, ndofs;
+	bool kappa_is_nonzero = (kappa != 0.);
+	double w, wq = 0.0;
+
+	dim = el1.GetDim();
+	ndof1 = el1.GetDof();
+
+	nor.SetSize(dim);
+	nh.SetSize(dim);
+	ni.SetSize(dim);
+	adjJ.SetSize(dim);
+	if (MQ) {
+		mq.SetSize(dim);
+	}
+
+	shape1.SetSize(ndof1);
+	dshape1.SetSize(ndof1, dim);
+	dshape1dn.SetSize(ndof1);
+	if (Trans.Elem2No >= 0) {
+		ndof2 = el2.GetDof();
+		shape2.SetSize(ndof2);
+		dshape2.SetSize(ndof2, dim);
+		dshape2dn.SetSize(ndof2);
+	}
+	else {
+		ndof2 = 0;
+	}
+
+	ndofs = ndof1 + ndof2;
+	elmat.SetSize(ndofs);
+	elmat = 0.0;
+	if (kappa_is_nonzero) {
+		jmat.SetSize(ndofs);
+		jmat = 0.;
+	}
+
+	const IntegrationRule *ir = IntRule;
+	if (ir == NULL) {
+		// a simple choice for the integration order; is this OK?
+		int order;
+		if (ndof2) {
+			order = 2*std::max(el1.GetOrder(), el2.GetOrder());
+		}
+		else {
+			order = 2*el1.GetOrder();
+		}
+		ir = &IntRules.Get(Trans.GetGeometryType(), order);
+	}
+
+	// assemble: < {(Q \nabla u).n},[v] >      --> elmat
+	//           kappa < {h^{-1} Q} [u],[v] >  --> jmat
+	for (int p = 0; p < ir->GetNPoints(); p++) {
+		const IntegrationPoint &ip = ir->IntPoint(p);
+
+		// Set the integration point in the face and the neighboring elements
+		Trans.SetAllIntPoints(&ip);
+
+		// Access the neighboring elements' integration points
+		// Note: eip2 will only contain valid data if Elem2 exists
+		const IntegrationPoint &eip1 = Trans.GetElement1IntPoint();
+		const IntegrationPoint &eip2 = Trans.GetElement2IntPoint();
+
+		if (dim == 1) {
+			nor(0) = 2*eip1.x - 1.0;
+		}
+		else {
+			CalcOrtho(Trans.Jacobian(), nor);
+		}
+
+		el1.CalcShape(eip1, shape1);
+		el1.CalcDShape(eip1, dshape1);
+		w = ip.weight/Trans.Elem1->Weight();
+		if (ndof2) {
+			w /= 2;
+		}
+		if (!MQ) {
+			if (Q) {
+				w *= Q->Eval(*Trans.Elem1, eip1);
+			}
+			ni.Set(w, nor);
+		}
+		else {
+			nh.Set(w, nor);
+			MQ->Eval(mq, *Trans.Elem1, eip1);
+			mq.MultTranspose(nh, ni);
+		}
+		CalcAdjugate(Trans.Elem1->Jacobian(), adjJ);
+		adjJ.Mult(ni, nh);
+		if (kappa_is_nonzero) {
+			wq = ni * nor;
+		}
+		// Note: in the jump term, we use 1/h1 = |nor|/det(J1) which is
+		// independent of Loc1 and always gives the size of element 1 in
+		// direction perpendicular to the face. Indeed, for linear transformation
+		//     |nor|=measure(face)/measure(ref. face),
+		//   det(J1)=measure(element)/measure(ref. element),
+		// and the ratios measure(ref. element)/measure(ref. face) are
+		// compatible for all element/face pairs.
+		// For example: meas(ref. tetrahedron)/meas(ref. triangle) = 1/3, and
+		// for any tetrahedron vol(tet)=(1/3)*height*area(base).
+		// For interior faces: q_e/h_e=(q1/h1+q2/h2)/2.
+
+		dshape1.Mult(nh, dshape1dn);
+		for (int i = 0; i < ndof1; i++)
+			for (int j = 0; j < ndof1; j++) {
+				elmat(i, j) += shape1(i) * dshape1dn(j);
+			}
+
+		if (ndof2) {
+			el2.CalcShape(eip2, shape2);
+			el2.CalcDShape(eip2, dshape2);
+			w = ip.weight/2/Trans.Elem2->Weight();
+			if (!MQ) {
+				if (Q) {
+					w *= Q->Eval(*Trans.Elem2, eip2);
+				}
+				ni.Set(w, nor);
+			}
+			else {
+				nh.Set(w, nor);
+				MQ->Eval(mq, *Trans.Elem2, eip2);
+				mq.MultTranspose(nh, ni);
+			}
+			CalcAdjugate(Trans.Elem2->Jacobian(), adjJ);
+			adjJ.Mult(ni, nh);
+			if (kappa_is_nonzero) {
+				wq += ni * nor;
+			}
+
+			dshape2.Mult(nh, dshape2dn);
+
+			for (int i = 0; i < ndof1; i++)
+				for (int j = 0; j < ndof2; j++) {
+					elmat(i, ndof1 + j) += shape1(i) * dshape2dn(j);
+				}
+
+			for (int i = 0; i < ndof2; i++)
+				for (int j = 0; j < ndof1; j++) {
+					elmat(ndof1 + i, j) -= shape2(i) * dshape1dn(j);
+				}
+
+			for (int i = 0; i < ndof2; i++)
+				for (int j = 0; j < ndof2; j++) {
+					elmat(ndof1 + i, ndof1 + j) -= shape2(i) * dshape2dn(j);
+				}
+		}
+
+		if (kappa_is_nonzero) {
+			// only assemble the lower triangular part of jmat
+			wq *= kappa;
+			if (wq < alpha * ip.weight * Trans.Weight()) 
+				wq = alpha * ip.weight * Trans.Weight(); 
+
+			for (int i = 0; i < ndof1; i++) {
+				const double wsi = wq*shape1(i);
+				for (int j = 0; j <= i; j++)
+				{
+					jmat(i, j) += wsi * shape1(j);
+				}
+			}
+			if (ndof2) {
+				for (int i = 0; i < ndof2; i++) {
+					const int i2 = ndof1 + i;
+					const double wsi = wq*shape2(i);
+					for (int j = 0; j < ndof1; j++) {
+						jmat(i2, j) -= wsi * shape1(j);
+					}
+					for (int j = 0; j <= i; j++) {
+						jmat(i2, ndof1 + j) += wsi * shape2(j);
+					}
+				}
+			}
+		}
+	}
+
+	// elmat := -elmat + sigma*elmat^t + jmat
+	if (kappa_is_nonzero) {
+		for (int i = 0; i < ndofs; i++) {
+			for (int j = 0; j < i; j++) {
+				double aij = elmat(i,j), aji = elmat(j,i), mij = jmat(i,j);
+				elmat(i,j) = sigma*aji - aij + mij;
+				elmat(j,i) = sigma*aij - aji + mij;
+			}
+			elmat(i,i) = (sigma - 1.)*elmat(i,i) + jmat(i,i);
+		}
+	}
+	else {
+		for (int i = 0; i < ndofs; i++) {
+			for (int j = 0; j < i; j++) {
+				double aij = elmat(i,j), aji = elmat(j,i);
+				elmat(i,j) = sigma*aji - aij;
+				elmat(j,i) = sigma*aij - aji;
+			}
+			elmat(i,i) *= (sigma - 1.);
+		}
+	}
+}
 
 void PenaltyIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 	mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat)
@@ -24,16 +225,13 @@ void PenaltyIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &el1, const
 	elmat = 0.0; 
 
 	const mfem::IntegrationRule *ir = IntRule;
-	if (ir == NULL)
-	{
+	if (ir == NULL) {
 		// a simple choice for the integration order; is this OK?
 		int order;
-		if (ndof2)
-		{
+		if (ndof2) {
 		   order = 2*std::max(el1.GetOrder(), el2.GetOrder());
 		}
-		else
-		{
+		else {
 		   order = 2*el1.GetOrder();
 		}
 		ir = &mfem::IntRules.Get(trans.GetGeometryType(), order);
@@ -390,138 +588,4 @@ void DGVectorJumpJumpIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &e
 		}
 	}
 	elmat *= beta; 
-}
-
-mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, int reflect_bdr_attr)
-{
-	mfem::Array<int> offsets(3); 
-	offsets[0] = 0; 
-	offsets[1] = vfes.GetVSize(); 
-	offsets[2] = fes.GetVSize(); 
-	offsets.PartialSum();
-
-	const auto &mesh = *fes.GetParMesh(); 
-	const auto &mesh_bdr_attributes = mesh.bdr_attributes; 
-	mfem::Array<int> marshak_bdr_attrs(mesh_bdr_attributes.Max()), reflect_bdr_attrs(mesh_bdr_attributes.Max()); 
-	marshak_bdr_attrs = 1; 
-	reflect_bdr_attrs = 0; 
-	if (reflect_bdr_attr > 0) {
-		marshak_bdr_attrs[reflect_bdr_attr-1] = 0; 
-		reflect_bdr_attrs[reflect_bdr_attr-1] = 1; 
-	}
-
-	mfem::ParBilinearForm Mtform(&vfes);
-	mfem::ProductCoefficient total3(3.0, total); 
-	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3));
-	Mtform.AddInteriorFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/2/alpha)); 
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/2/alpha), marshak_bdr_attrs);
-	Mtform.AddBdrFaceIntegrator(new DGVectorJumpJumpIntegrator(1.0/alpha), reflect_bdr_attrs);  
-	Mtform.Assemble(); 
-	Mtform.Finalize();  
-	mfem::HypreParMatrix *Mt = Mtform.ParallelAssemble(); 
-
-	mfem::ParBilinearForm Maform(&fes); 
-	mfem::ConstantCoefficient alpha_c(alpha/2); 
-	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
-	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha/2, false)); 
-	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
-	Maform.Assemble(); 
-	Maform.Finalize(); 
-	mfem::HypreParMatrix *Ma = Maform.ParallelAssemble();
-
-	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
-	mfem::ConstantCoefficient neg_one(-1.0); 
-	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
-	Dform.AddInteriorFaceIntegrator(new DGJumpAverageIntegrator); 
-	Dform.AddBdrFaceIntegrator(new DGJumpAverageIntegrator(0.5), marshak_bdr_attrs); 
-	Dform.Assemble(); 
-	Dform.Finalize(); 
-	mfem::HypreParMatrix *D = Dform.ParallelAssemble(); 
-	mfem::HypreParMatrix *G = D->Transpose(); 
-	(*G) *= -1.0; 
-
-	// mfem::ParMixedBilinearForm Gform(&fes, &vfes); 
-	// mfem::ConstantCoefficient pos_one(1.0); 
-	// Gform.AddDomainIntegrator(new mfem::GradientIntegrator(pos_one)); 
-	// Gform.AddInteriorFaceIntegrator(new mfem::TransposeIntegrator(new DGJumpAverageIntegrator(-1.0))); 
-	// Gform.AddBdrFaceIntegrator(new mfem::TransposeIntegrator(new DGJumpAverageIntegrator(-0.5)), marshak_bdr_attrs); 
-	// Gform.Assemble(); 
-	// Gform.Finalize(); 
-	// mfem::HypreParMatrix *G = Gform.ParallelAssemble(); 
-
-	auto *op = new mfem::BlockOperator(offsets); 
-	op->SetBlock(0,0, Mt); 
-	op->SetBlock(0,1, G); 
-	op->SetBlock(1,0, D); 
-	op->SetBlock(1,1, Ma); 
-	op->owns_blocks = 1; 
-	return op; 
-}
-
-mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop) 
-{
-	mfem::Array2D<mfem::HypreParMatrix*> blocks(bop.NumRowBlocks(), bop.NumColBlocks()); 
-	for (auto row=0; row<blocks.NumRows(); row++) {
-		for (auto col=0; col<blocks.NumCols(); col++) {
-			const mfem::Operator *op = &bop.GetBlock(row,col); 
-			const auto *hypre_op = dynamic_cast<const mfem::HypreParMatrix*>(op); 
-			if (!hypre_op) MFEM_ABORT("blocks must be HypreParMatrix"); 
-			blocks(row,col) = const_cast<mfem::HypreParMatrix*>(hypre_op); 
-		}
-	}
-	return mfem::HypreParMatrixFromBlocks(blocks); 
-}
-
-mfem::HypreParMatrix *CreateLDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha, mfem::Vector *beta, 
-		bool scale_stabilization, int reflect_bdr_attr) 
-{
-	const auto &mesh = *fes.GetParMesh(); 
-	const auto &mesh_bdr_attributes = mesh.bdr_attributes; 
-	mfem::Array<int> marshak_bdr_attrs(mesh_bdr_attributes.Max()), reflect_bdr_attrs(mesh_bdr_attributes.Max()); 
-	marshak_bdr_attrs = 1; 
-	reflect_bdr_attrs = 0; 
-	if (reflect_bdr_attr > 0) {
-		marshak_bdr_attrs[reflect_bdr_attr-1] = 0; 
-		reflect_bdr_attrs[reflect_bdr_attr-1] = 1; 
-	}
-
-	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>; 
-	mfem::ParBilinearForm Mtform(&vfes);
-	mfem::ProductCoefficient total3(3.0, total); 
-	Mtform.AddDomainIntegrator(new mfem::VectorMassIntegrator(total3));
-	Mtform.Assemble(); 
-	Mtform.Finalize();  
-	auto Mt = HypreParMatrixPtr(Mtform.ParallelAssemble()); 
-	auto iMt = HypreParMatrixPtr(ElementByElementBlockInverse(vfes, *Mt)); 
-
-	mfem::ParBilinearForm Maform(&fes); 
-	mfem::ConstantCoefficient alpha_c(alpha); 
-	Maform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
-	Maform.AddInteriorFaceIntegrator(new PenaltyIntegrator(alpha/2, false)); 
-	Maform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
-	Maform.Assemble(); 
-	Maform.Finalize(); 
-	auto Ma = HypreParMatrixPtr(Maform.ParallelAssemble());
-
-	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
-	mfem::ConstantCoefficient neg_one(-1.0); 
-	Dform.AddDomainIntegrator(new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one))); 
-	mfem::RatioCoefficient diffco(1.0/3, total); 
-	if (scale_stabilization) {
-		double kappa = pow(fes.GetOrder(0)+1, 2); 
-		Dform.AddInteriorFaceIntegrator(new LDGTraceIntegrator(diffco, *beta, kappa, alpha/2)); 
-	} else {
-		Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(beta)); 		
-	}
-	Dform.Assemble(); 
-	Dform.Finalize(); 
-	auto D = HypreParMatrixPtr(Dform.ParallelAssemble()); 
-	auto DT = HypreParMatrixPtr(D->Transpose()); 
-
-	auto iMtDT = HypreParMatrixPtr(mfem::ParMult(iMt.get(), DT.get(), true)); 
-	auto DiMtDT = HypreParMatrixPtr(mfem::ParMult(D.get(), iMtDT.get(), true)); 
-	auto *S = mfem::ParAdd(DiMtDT.get(), Ma.get()); 
-	return S; 
 }

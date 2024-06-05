@@ -3,7 +3,12 @@
 #include "mfem.hpp"
 #include "log.hpp"
 
+// extract diagonal blocks according to element dofs and invert
+// caller must delete ptr 
 mfem::HypreParMatrix *ElementByElementBlockInverse(const mfem::ParFiniteElementSpace &fes, const mfem::HypreParMatrix &A); 
+// combine a block operator of hypre matrices into a single hypre matrix 
+// caller must delete ptr 
+mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop); 
 
 class ComponentExtractionOperator : public mfem::Operator 
 {
@@ -164,23 +169,30 @@ public:
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const; 
 };
 
-// SuperLUSolver but SetOperator constructs 
-// and stores the mfem::SuperLURowLocMatrix 
-// copy of the operator 
-class SuperLUSolverWrapper : public mfem::Solver
+// wrap mfem::SuperLUSolver to modify SetOperator behavior 
+// to first create a mfem::SuperLURowLocMatrix 
+// enabling this SuperLUSolver to function like 
+// any other sparse solver 
+// NOTE: doubles storage of operator since both 
+// the original operator and SuperLURowLocMatrix 
+// copy 
+class SuperLUSolver : public mfem::Solver 
 {
 private:
-	mfem::SuperLUSolver &slu;
+	mfem::SuperLUSolver slu;
 	std::unique_ptr<mfem::SuperLURowLocMatrix> slu_op;
 public:
-	SuperLUSolverWrapper(mfem::SuperLUSolver &slu) : slu(slu)
-	{
-	}
+	SuperLUSolver(MPI_Comm comm) : slu(comm) { }
 	void SetOperator(const mfem::Operator &op) override {
+		height = op.Height(); 
+		width = op.Width();
 		slu_op.reset(new mfem::SuperLURowLocMatrix(op));
 		slu.SetOperator(*slu_op);
 	}
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const override {
 		slu.Mult(b, x);
 	}
+
+	mfem::SuperLUSolver &GetSolver() { return slu; }
+	const mfem::SuperLUSolver &GetSolver() const { return slu; }
 };

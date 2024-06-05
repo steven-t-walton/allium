@@ -2,6 +2,34 @@
 
 #include "mfem.hpp"
 
+// implements mfem::DGDiffusionIntegrator 
+// with option to allow the "Modified Interior Penalty" approach 
+// where kappa_MIP = max(kappa_IP, alpha) 
+class MIPDiffusionIntegrator : public mfem::BilinearFormIntegrator
+{
+protected:
+	mfem::Coefficient *Q;
+	mfem::MatrixCoefficient *MQ;
+	double sigma, kappa, alpha=0.25;
+
+	// these are not thread-safe!
+	mfem::Vector shape1, shape2, dshape1dn, dshape2dn, nor, nh, ni;
+	mfem::DenseMatrix jmat, dshape1, dshape2, mq, adjJ;
+public:
+	MIPDiffusionIntegrator(const double s, const double k)
+		: Q(NULL), MQ(NULL), sigma(s), kappa(k) { }
+	MIPDiffusionIntegrator(mfem::Coefficient &q, const double s, const double k, const double a)
+		: Q(&q), MQ(NULL), sigma(s), kappa(k), alpha(a) { }
+	MIPDiffusionIntegrator(mfem::MatrixCoefficient &q, const double s, const double k)
+		: Q(NULL), MQ(&q), sigma(s), kappa(k) { }
+	using BilinearFormIntegrator::AssembleFaceMatrix;
+	virtual void AssembleFaceMatrix(const mfem::FiniteElement &el1,
+		const mfem::FiniteElement &el2,
+		mfem::FaceElementTransformations &Trans,
+		mfem::DenseMatrix &elmat);
+};
+
+// integrates < {k} [u], [v] > 
 class PenaltyIntegrator : public mfem::BilinearFormIntegrator
 {
 private:
@@ -60,12 +88,3 @@ public:
 	void AssembleFaceMatrix(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat); 
 };
-
-mfem::BlockOperator *CreateP1DiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.5, int reflect_bdr_attr=-1); 
-
-mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop); 
-
-mfem::HypreParMatrix *CreateLDGDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	mfem::Coefficient &total, mfem::Coefficient &absorption, double alpha=0.25, mfem::Vector *beta=nullptr, 
-	bool scale_stabilization=false, int reflect_bdr_attr=-1); 
