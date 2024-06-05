@@ -1,5 +1,6 @@
 #pragma once 
 
+#include "bdr_conditions.hpp"
 #include "tvector.hpp"
 #include "angular_quadrature.hpp"
 #include "mfem.hpp"
@@ -71,7 +72,7 @@ private:
 	NegativeFluxFixupOperator *fixup_op = nullptr; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-		mfem::GridFunction &_total_data, int reflection_bdr_attr=-1, int lump=0); 
+		mfem::GridFunction &_total_data, const BoundaryConditionMap &bc_map, int lump=0); 
 	~InverseAdvectionOperator(); 
 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 

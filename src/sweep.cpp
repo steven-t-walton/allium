@@ -5,7 +5,7 @@
 #include "lumping.hpp"
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-	mfem::GridFunction &_total_data, int reflection_bdr_attr, int use_lumping)
+	mfem::GridFunction &_total_data, const BoundaryConditionMap &bc_map, int use_lumping)
 	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total_data(_total_data), lump(use_lumping)
 {
 	if (lump) {
@@ -174,7 +174,7 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 			const auto be = face_to_bdr_el.at(r); 
 			auto *btrans = mesh.GetBdrFaceTransformations(be); 
 			const auto attr = btrans->Attribute; 
-			if (attr == reflection_bdr_attr) {
+			if (bc_map.at(attr) == BoundaryCondition::REFLECTIVE) {
 				for (int a=0; a<Nomega; a++) {
 					const auto &Omega = quad.GetOmega(a); 
 					double dot = normal * Omega; 
