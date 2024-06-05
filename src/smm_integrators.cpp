@@ -482,6 +482,7 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 	mfem::FaceElementTransformations &trans, mfem::Vector &elvec) 
 {
 	// extract beta data for this face 
+	const auto dim = trans.GetSpaceDim();
 	const auto &tr_fes = *beta.ParFESpace();
 	const auto &tr_el = *tr_fes.GetTraceElement(trans.ElementNo, trans.GetGeometryType()); 
 	const auto tr_dof = tr_el.GetDof(); 
@@ -514,10 +515,11 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 	for (int i=0; i<tr_dof; i++) { beta_trace2(i) = beta_all2(local_face_id2 * tr_dof + i); }
 	tr_shape2.SetSize(tr_dof); 		
 
-	mfem::IntegrationPointTransformation iptrans; 
-	iptrans.Transf.SetIdentityTransformation(trans.GetGeometryType()); 
-	if (nbr_el >= 0) {
-		ReorientPointMat(trans.GetGeometryType(), info.element[1].orientation, iptrans.Transf.GetPointMat()); 		
+	mfem::IntegrationPointTransformation *iptrans = nullptr; 
+	if (nbr_el >= 0 and dim>1) {
+		iptrans = new mfem::IntegrationPointTransformation;
+		iptrans->Transf.SetIdentityTransformation(trans.GetGeometryType()); 
+		ReorientPointMat(trans.GetGeometryType(), info.element[1].orientation, iptrans->Transf.GetPointMat()); 		
 	}
 
 	const auto dof1 = el1.GetDof(); 
@@ -545,7 +547,8 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 		el1.CalcShape(eip1, shape1); 
 		el2.CalcShape(eip2, shape2); 
 		tr_el.CalcShape(ip, tr_shape1); 
-		iptrans.Transform(ip, ip2); 
+		if (iptrans) iptrans->Transform(ip, ip2); 
+		else ip2 = ip;
 		tr_el.CalcShape(ip2, tr_shape2); // <-- should there be a second trace element?
 		double jump = (tr_shape1 * beta_trace1) - (tr_shape2 * beta_trace2); 
 		double val = trans.Weight() * ip.weight * jump; 
@@ -644,10 +647,11 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 	tr_shape1.SetSize(tr_dof); 
 	tr_shape2.SetSize(tr_dof); 
 
-	mfem::IntegrationPointTransformation iptrans; 
-	iptrans.Transf.SetIdentityTransformation(trans.GetGeometryType()); 
-	if (nbr_el >= 0) {
-		ReorientPointMat(trans.GetGeometryType(), info.element[1].orientation, iptrans.Transf.GetPointMat()); 		
+	mfem::IntegrationPointTransformation *iptrans = nullptr; 
+	if (nbr_el >= 0 and dim>1) {
+		iptrans = new mfem::IntegrationPointTransformation;
+		iptrans->Transf.SetIdentityTransformation(trans.GetGeometryType()); 
+		ReorientPointMat(trans.GetGeometryType(), info.element[1].orientation, iptrans->Transf.GetPointMat()); 		
 	}
 
 	const auto dof1 = el1.GetDof(); 
@@ -675,7 +679,8 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 		el1.CalcShape(eip1, shape1); 
 		el2.CalcShape(eip2, shape2); 
 		tr_el.CalcShape(ip, tr_shape1); 
-		iptrans.Transform(ip, ip2); 
+		if (iptrans) iptrans->Transform(ip, ip2);
+		else ip2 = ip;
 		tr_el.CalcShape(ip2, tr_shape2); 
 		double w = ip.weight * trans.Weight(); 
 		for (auto d=0; d<dim; d++) {
