@@ -4,26 +4,42 @@
 #include "sol/sol.hpp"
 #include "yaml-cpp/yaml.h"
 #include "transport_op.hpp"
-#include "block_smm_op.hpp"
 
 namespace io 
 {
 
+// 6D specification of phase-space functions from Lua 
+using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
+
+// convert seconds to days-hours:minutes:seconds format 
 std::string FormatTimeString(double time); 
+// print git commit, branch, tag information 
+void PrintGitString(YAML::Emitter &out); 
 
 // iterate over table and print to yaml map 
 // tables in Lua do not have an order => this function 
 // kind of annoyingly prints values in random order :( 
 void PrintSolTable(YAML::Emitter &out, sol::table &table); 
 
-// given a solver sol::table, construct an MFEM iterative solver object 
+mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 
+	mfem::Mesh &mesh, bool root);
+
+// given a solver sol::table, construct an MFEM solver object 
 // with the specified options 
-mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MPI_Comm> comm); 
+mfem::Solver *CreateSolver(sol::table &table, std::optional<MPI_Comm> comm);
+mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MPI_Comm> comm);
+// set common iterative solver settings such as 
+// tolerances, max iterations, print level, iterative mode, etc 
 void SetIterativeSolverOptions(sol::table &table, mfem::IterativeSolver &solver); 
 
+// --- helper functions for creating meshes --- 
+// creates a mesh from lua input either from a mesh file 
+// or from specification of cartesian domain 
 mfem::Mesh CreateMesh(sol::table &table, YAML::Emitter &out, bool root=true); 
+// set element attribute according to a provided material map function 
 void SetMeshAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f,
 	const std::unordered_map<std::string,int> &map, bool root=true);
+// set bdr element attribute according to a provide boundary condition map 
 void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f, 
 	const std::unordered_map<std::string,int> &map, bool root=true);
 
@@ -51,8 +67,10 @@ bool ParseKINSOLMessage(char *msg, int &it, double &norm);
 void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data); 
 void SundialsErrorFunction(int error_code, const char *module, const char *function, char *msg, void *user_data); 
 
-DiffusionBoundaryConditionType GetDiffusionBCType(std::string type); 
+// DiffusionBoundaryConditionType GetDiffusionBCType(std::string type);  
 
+// --- functions to validate input --- 
+// print an error message if input is not valid 
 template<typename T>
 void PrintOptionsAbort(std::string key, T res, std::initializer_list<T> options)
 {
@@ -64,6 +82,8 @@ void PrintOptionsAbort(std::string key, T res, std::initializer_list<T> options)
 	MFEM_ABORT(ss.str()); 
 }
 
+// check if res is in options 
+// key is an identifier in the abort message 
 template<typename T>
 void ValidateOption(std::string key, T res, std::initializer_list<T> options, bool root=true)
 {
@@ -79,6 +99,7 @@ void ValidateOption(std::string key, T res, std::initializer_list<T> options, bo
 template<>
 void ValidateOption<const char*>(std::string key, const char *res, std::initializer_list<const char*> options, bool root);
 
+// combine getting option from lua table and checking for valid input 
 template<typename T> 
 T GetAndValidateOption(sol::table &table, std::string key, std::initializer_list<T> options, T def, bool root=true) 
 {
@@ -93,6 +114,7 @@ T GetAndValidateOption(sol::table &table, std::string key, std::initializer_list
 	}
 }
 
+// given a relative path, convert it to absolute 
 std::string ResolveRelativePath(std::string path); 
 
 } // end namespace io 

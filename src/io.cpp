@@ -31,6 +31,22 @@ std::string FormatTimeString(double time) {
 	return ss.str(); 
 }
 
+void PrintGitString(YAML::Emitter &out)
+{
+#ifdef ALLIUM_GIT_COMMIT 
+	out << YAML::Key << "git" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "branch" << YAML::Value << ALLIUM_GIT_BRANCH; 
+		out << YAML::Key << "commit" << YAML::Value << ALLIUM_GIT_COMMIT; 
+	#ifdef ALLIUM_GIT_TAG 
+		out << YAML::Key << "tag" << YAML::Value << ALLIUM_GIT_TAG; 
+	#endif
+	#ifdef MFEM_GIT_STRING
+		out << YAML::Key << "mfem" << YAML::Value << MFEM_GIT_STRING; 
+	#endif
+	out << YAML::EndMap; 
+#endif
+}
+
 void PrintSolTable(YAML::Emitter &out, sol::table &table) 
 {
 	out << YAML::BeginMap; 
@@ -51,19 +67,69 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table)
 	out << YAML::EndMap; 
 }
 
-mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MPI_Comm> comm) 
+mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 
+	mfem::Mesh &mesh, bool root)
+{
+	ValidateOption<std::string>("data collection type", type, {"paraview", "visit", "glvis"}, root);
+	if (type == "paraview") {
+		return new mfem::ParaViewDataCollection(output_root, &mesh);
+	} else if (type == "visit") {
+		const std::string collection_name = output_root + "/" + output_root; 
+		return new mfem::VisItDataCollection(collection_name, &mesh); 
+	} else if (type == "glvis") {
+		const std::string collection_name = output_root + "/" + output_root; 
+		return new mfem::DataCollection(collection_name, &mesh); 
+	}
+	return nullptr;
+}
+
+mfem::Solver *CreateSolver(sol::table &table, std::optional<MPI_Comm> comm)
 {
 	int rank; 
 	if (comm) MPI_Comm_rank(*comm, &rank);
-	else rank = 0; 
-	const bool root = rank == 0; 		
+	else rank = 0;
+	const bool root = rank == 0;
 
-	mfem::IterativeSolver *s = nullptr; 
-	std::string type = table["type"]; 
-	std::transform(type.begin(), type.end(), type.begin(), ::tolower); 
-	io::ValidateOption<std::string>("iterative solver type", type, 
+	std::string type = table["type"];
+	std::transform(type.begin(), type.end(), type.begin(), ::tolower);
+
+	io::ValidateOption<std::string>("solver type", type, 
 		{"cg", "conjugate gradient", "gmres", "fgmres", 
 		"sli", "bicg", "bicgstab", "direct", "superlu", "fixed point", "fp", "kinsol", "newton"}, root); 
+
+	mfem::Solver *s;
+
+	if (type == "direct" or type == "superlu") {
+	#ifdef MFEM_USE_SUPERLU
+		if (!comm) MFEM_ABORT("MPI communicator required for SuperLU constructor");
+		auto *slu = new SuperLUSolver(*comm);
+		SetSuperLUOptions(table, slu->GetSolver(), root);
+		s = slu;
+	#else 
+		if (root) MFEM_ABORT("MFEM not built with superlu");
+	#endif
+	}
+
+	else {
+		s = CreateIterativeSolver(table, comm);
+	}
+	return s;
+}
+
+mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MPI_Comm> comm)
+{
+	int rank; 
+	if (comm) MPI_Comm_rank(*comm, &rank);
+	else rank = 0;
+	const bool root = rank == 0;
+
+	mfem::IterativeSolver *s;
+	std::string type = table["type"];
+	std::transform(type.begin(), type.end(), type.begin(), ::tolower);
+	io::ValidateOption<std::string>("solver type", type, 
+		{"cg", "conjugate gradient", "gmres", "fgmres", 
+		"sli", "bicg", "bicgstab", "fixed point", "fp", "kinsol", "newton"}, root); 
+
 	if (type == "cg" or type == "conjugate gradient") {
 		if (comm)
 			s = new mfem::CGSolver(*comm); 
@@ -100,10 +166,6 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MP
 	else if (type == "bicg" or type == "bicgstab") {
 		if (comm) s = new mfem::BiCGSTABSolver(*comm); 
 		else s = new mfem::BiCGSTABSolver; 
-	}
-
-	else if (type == "direct" or type == "superlu") {
-		return nullptr; 
 	}
 
 	else if (type == "fixed point" or type == "fp") {
@@ -143,8 +205,8 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MP
 		if (comm) s = new mfem::NewtonSolver(*comm);
 		else s = new mfem::NewtonSolver; 
 	}
-	if (s) SetIterativeSolverOptions(table, *s); 
-	return s; 
+	SetIterativeSolverOptions(table, *s);
+	return s;
 }
 
 void SetIterativeSolverOptions(sol::table &table, mfem::IterativeSolver &solver)
@@ -477,17 +539,17 @@ void ValidateOption<const char*>(std::string key, const char *res, std::initiali
 	}
 }
 
-DiffusionBoundaryConditionType GetDiffusionBCType(std::string type) 
-{
-	DiffusionBoundaryConditionType bc; 
-	if (type == "half range") 
-		bc = DiffusionBoundaryConditionType::HALF_RANGE; 	
-	else if (type == "full range") 
-		bc = DiffusionBoundaryConditionType::FULL_RANGE; 
-	else if (type == "half range reflect") 
-		bc = DiffusionBoundaryConditionType::HALF_RANGE_REFLECT; 
-	return bc; 
-}
+// DiffusionBoundaryConditionType GetDiffusionBCType(std::string type) 
+// {
+// 	DiffusionBoundaryConditionType bc; 
+// 	if (type == "half range") 
+// 		bc = DiffusionBoundaryConditionType::HALF_RANGE; 	
+// 	else if (type == "full range") 
+// 		bc = DiffusionBoundaryConditionType::FULL_RANGE; 
+// 	else if (type == "half range reflect") 
+// 		bc = DiffusionBoundaryConditionType::HALF_RANGE_REFLECT; 
+// 	return bc; 
+// }
 
 std::string ResolveRelativePath(std::string path) 
 {
