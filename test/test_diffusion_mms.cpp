@@ -1,5 +1,5 @@
 #include "gtest/gtest.h"
-#include "p1diffusion.hpp"
+#include "moment_integrators.hpp"
 
 #ifdef MFEM_USE_SUITESPARSE
 // use exact solution 

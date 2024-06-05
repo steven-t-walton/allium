@@ -2,27 +2,20 @@
 #include "yaml-cpp/yaml.h"
 #include "sol/sol.hpp"
 
+#include "bdr_conditions.hpp"
 #include "tvector.hpp"
 #include "angular_quadrature.hpp"
-#include "mip.hpp"
-#include "p1diffusion.hpp"
 #include "sweep.hpp"
 #include "transport_op.hpp"
-#include "block_smm_op.hpp"
-#include "cons_smm_op.hpp"
 #include "phase_coefficient.hpp"
 #include "comment_stream.hpp"
 #include "linalg.hpp"
 #include "io.hpp"
 #include "log.hpp"
+#include "lumping.hpp"
+#include "moment_discretization.hpp"
+#include "smm_source.hpp"
 #include <kinsol/kinsol.h>
-
-template<typename K, typename V> 
-void YAMLKeyValue(YAML::Emitter &out, K key, V value) {
-	out << YAML::Key << key << YAML::Value << value; 
-}
-
-using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
 
 class TransportIterationMonitor : public mfem::IterativeSolverMonitor
 {
@@ -198,18 +191,9 @@ int main(int argc, char *argv[]) {
 		lua.script(lua_cmds); 
 	}
 
-	#ifdef ALLIUM_GIT_COMMIT 
-	out << YAML::Key << "git" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "branch" << YAML::Value << ALLIUM_GIT_BRANCH; 
-		out << YAML::Key << "commit" << YAML::Value << ALLIUM_GIT_COMMIT; 
-		#ifdef ALLIUM_GIT_TAG 
-		out << YAML::Key << "tag" << YAML::Value << ALLIUM_GIT_TAG; 
-		#endif
-		#ifdef MFEM_GIT_STRING
-		out << YAML::Key << "mfem" << YAML::Value << MFEM_GIT_STRING; 
-		#endif
-	out << YAML::EndMap; 
-	#endif
+	// print git commit, branch, tag if available from CMake 
+	io::PrintGitString(out);
+	// output name of input file 
 	out << YAML::Key << "input file" << YAML::Value << io::ResolveRelativePath(input_file); 
 
 	// --- extract list of materials --- 
@@ -239,7 +223,7 @@ int main(int argc, char *argv[]) {
 			auto source_val = lua_source_objs[i].as<double>(); 
 			source_list[i] = new ConstantPhaseSpaceCoefficient(source_val); 
 		} else if (lua_source_objs[i].get_type() == sol::type::function) {
-			LuaPhaseFunction lua_source = lua_source_objs[i].as<sol::function>(); 
+			io::LuaPhaseFunction lua_source = lua_source_objs[i].as<sol::function>(); 
 			auto source_func = [lua_source](const mfem::Vector &x, const mfem::Vector &Omega) {
 				return lua_source(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
 			};
@@ -285,7 +269,7 @@ int main(int argc, char *argv[]) {
 	auto nbattr = bdr_attr_list.size(); 
 	std::vector<sol::object> lua_bc_objs(nbattr); 
 	mfem::Array<PhaseSpaceCoefficient*> inflow_list(nbattr); 
-	int reflection_bdr_attr = -1; 
+	BoundaryConditionMap bc_map;
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
 		sol::table data = bcs[bdr_attr_list[i].c_str()]; 
 		std::string type = data["type"]; 
@@ -297,20 +281,20 @@ int main(int argc, char *argv[]) {
 				auto val = value.as<double>(); 
 				inflow_list[i] = new ConstantPhaseSpaceCoefficient(val); 
 			} else if (value.get_type() == sol::type::function) {
-				auto lua_func = value.as<LuaPhaseFunction>();
+				auto lua_func = value.as<io::LuaPhaseFunction>();
 				auto func = [lua_func](const mfem::Vector &x, const mfem::Vector &Omega) {
 					return lua_func(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
 				};
 				inflow_list[i] = new FunctionGrayCoefficient(func);  
-			}			
+			}		
+			bc_map[i+1] = BoundaryCondition::INFLOW;
 		} else if (type == "reflective") {
-			if (reflection_bdr_attr<0) {
-				reflection_bdr_attr = i+1; 
-			}
 			inflow_list[i] = nullptr; 
+			bc_map[i+1] = BoundaryCondition::REFLECTIVE;
 		} 
 		else if (type == "vacuum") {
 			inflow_list[i] = nullptr; 
+			bc_map[i+1] = BoundaryCondition::INFLOW;
 		}
 	}
 
@@ -448,12 +432,12 @@ int main(int argc, char *argv[]) {
 	const int sn_order = driver["sn_order"]; 
 	const std::string sn_type = io::GetAndValidateOption(driver, "sn_quadrature_type", 
 		{"level symmetric", "abu shumays"}, "level symmetric", root); 
-	AngularQuadrature *quad; 
+	std::unique_ptr<AngularQuadrature> quad; 
 	if (sn_type == "level symmetric") {
-		quad = new LevelSymmetricQuadrature(sn_order, dim); 
+		quad = std::make_unique<LevelSymmetricQuadrature>(sn_order, dim);
 	} 
 	else if (sn_type == "abu shumays") {
-		quad = new AbuShumaysQuadrature(sn_order, dim); 
+		quad = std::make_unique<AbuShumaysQuadrature>(sn_order, dim);
 	}
 	const auto Nomega = quad->Size(); 
 
@@ -475,7 +459,7 @@ int main(int argc, char *argv[]) {
 	sol::optional<sol::table> accel_avail = driver["acceleration"]; 
 	sol::optional<sol::table> prec_avail = driver["preconditioner"]; 
 	if (accel_avail and prec_avail) { MFEM_ABORT("cannot use both preconditioning and acceleration"); }
-	auto *outer_solver = io::CreateIterativeSolver(solver, MPI_COMM_WORLD);
+	auto outer_solver = std::unique_ptr<mfem::IterativeSolver>(io::CreateIterativeSolver(solver, MPI_COMM_WORLD));
 	if (!outer_solver) { MFEM_ABORT("outer solver required"); }
 	if (accel_avail) {
 		io::ValidateOption<std::string>("driver::solver::type", solver["type"], 
@@ -486,7 +470,7 @@ int main(int argc, char *argv[]) {
 			{"cg", "conjugate gradient", "gmres", "fgmres", "sli", "bicg", "bicgstab", "direct", "superlu"}, root); 
 	}
 	sol::table inner_solver_table; 
-	mfem::IterativeSolver *inner_it_solver = nullptr; 
+	std::unique_ptr<mfem::Solver> inner_solver;
 	if (accel_avail) {
 		sol::optional<sol::table> inner_solver_table_avail = accel_avail.value()["solver"]; 
 		if (inner_solver_table_avail) {
@@ -496,8 +480,7 @@ int main(int argc, char *argv[]) {
 		else {
 			inner_solver_table = accel_avail.value().create_with("type", "direct"); 
 		}
-		// can be nullptr if direct solver specified 
-		inner_it_solver = io::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
+		inner_solver.reset(io::CreateSolver(inner_solver_table, MPI_COMM_WORLD));
 	}
 	if (prec_avail) {
 		sol::optional<sol::table> inner_solver_table_avail = prec_avail.value()["solver"]; 
@@ -508,14 +491,15 @@ int main(int argc, char *argv[]) {
 		else {
 			inner_solver_table = prec_avail.value().create_with("type", "direct"); 
 		}
-		// can be nullptr if direct solver specified 
-		inner_it_solver = io::CreateIterativeSolver(inner_solver_table, MPI_COMM_WORLD); 
+		inner_solver.reset(io::CreateSolver(inner_solver_table, MPI_COMM_WORLD));
 	}
 
 	// generic operator in case inner solver is SuperLU or product operator etc 
-	mfem::Operator *inner_solver = inner_it_solver; 
+	auto *inner_it_solver = dynamic_cast<mfem::IterativeSolver*>(inner_solver.get());
 	// sweep setup options 
 	sol::optional<sol::table> sweep_opts_avail = driver["sweep_opts"]; 
+
+	const int lumping = driver["lumping"].get_or(0);
 
 	// --- output algorithmic options used --- 
 	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
@@ -530,11 +514,19 @@ int main(int argc, char *argv[]) {
 		if (sweep_opts_avail) {
 			out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value();
 		}
+		out << YAML::Key << "lumping type" << YAML::Value << YAML::BeginMap; 
+			out << YAML::Key << "mass" << YAML::Value << IsMassLumped(lumping); 
+			out << YAML::Key << "gradient" << YAML::Value << IsGradientLumped(lumping); 
+			out << YAML::Key << "faces" << YAML::Value << IsFaceLumped(lumping); 
+		out << YAML::EndMap; 
 
 	// --- sweep setup --- 
 	// global scattering operator 
 	mfem::BilinearForm Ms_form(&fes); 
-	Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
+	if (IsMassLumped(lumping))
+		Ms_form.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(scattering)));
+	else
+		Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
 	Ms_form.Assemble(); 
 	Ms_form.Finalize();
 
@@ -555,7 +547,7 @@ int main(int argc, char *argv[]) {
 	FormTransportSource(fes, *quad, energy_grid, source, inflow, source_vec_view); 
 
 	// build sweep operator 
-	InverseAdvectionOperator Linv(fes, *quad, total_gf, reflection_bdr_attr); 
+	InverseAdvectionOperator Linv(fes, *quad, total_gf, bc_map, lumping); 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -578,13 +570,9 @@ int main(int argc, char *argv[]) {
 
 	// standard sn iteration with preconditioning if available 
 	if (!accel_avail) {
-		DiffusionSyntheticAccelerationOperator *prec = nullptr; // applies I + D^{-1} Ms
-		mfem::HypreParMatrix *dsa_mat = nullptr; // store diffusion system 
-		mfem::HypreBoomerAMG *amg = nullptr; // preconditioner for diffusion system 
-	#ifdef MFEM_USE_SUPERLU
-		mfem::SuperLURowLocMatrix *slu_op = nullptr; // operator for direct solves 
-	#endif
-		BlockDiffusionDiscretization *block_disc = nullptr; 
+		std::unique_ptr<DiffusionSyntheticAccelerationOperator> prec;
+		std::unique_ptr<mfem::Operator> dsa_op, dsa_op_extract;
+		std::unique_ptr<mfem::HypreBoomerAMG> amg;
 
 		// build preconditioner from input spec 
 		if (prec_avail) {
@@ -594,119 +582,76 @@ int main(int argc, char *argv[]) {
 			std::transform(type.begin(), type.end(), type.begin(), ::tolower); 
 			out << YAML::Key << "type" << YAML::Value << type; 
 			if (type == "p1sa") {
-			#ifdef MFEM_USE_SUPERLU
 				if (inner_it_solver) { MFEM_ABORT("only direct available for P1"); }
-				auto p1disc = std::unique_ptr<mfem::BlockOperator>(CreateP1DiffusionDiscretization(
-					fes, vfes, total, absorption, alpha, reflection_bdr_attr)); 
-				auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
-				slu_op = new mfem::SuperLURowLocMatrix(*mono); 
-				auto *slu = new mfem::SuperLUSolver(*slu_op); 
-				io::SetSuperLUOptions(inner_solver_table, *slu, root); 
-				auto *ceo = new ComponentExtractionOperator(p1disc->RowOffsets(), 1); 
+				P1Discretization p1(fes, vfes, total, absorption, lumping, bc_map);
+				dsa_op.reset(p1.GetOperator());
+				inner_solver->SetOperator(*dsa_op);
+				auto *ceo = new ComponentExtractionOperator(p1.GetOffsets(), 1); 
 				auto *ceo_t = new mfem::TransposeOperator(*ceo); 
 				// solve 2x2 but source and solution and scalar flux only 
-				inner_solver = new mfem::TripleProductOperator(ceo, slu, ceo_t, true, true, true); 
-			#else
-				MFEM_ABORT("super LU required for P1"); 
-			#endif
+				dsa_op_extract = std::make_unique<mfem::TripleProductOperator>(
+					ceo, inner_solver.get(), ceo_t, true, false, true); 
+				prec = std::make_unique<DiffusionSyntheticAccelerationOperator>(*dsa_op_extract, Ms_form);
 			} 
 			else if (type == "ldgsa") {
-				bool scale_stabilization = prec_table["scale_stabilization"].get_or(false); 
-				const auto bc_str = io::GetAndValidateOption<std::string>(prec_table, "bc_type", 
-					{"full range", "half range", "half range reflect"}, "full range", root); 
-				const auto bc_type = io::GetDiffusionBCType(bc_str); 
-				block_disc = new BlockLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
-					beta, scale_stabilization, reflection_bdr_attr, bc_type); 
-				const auto &S = block_disc->SchurComplement(); 
+				BlockLDGDiscretization disc(fes, vfes, total, absorption, lumping, bc_map);
+				disc.SetAlpha(alpha);
+				auto *block_op = disc.GetOperator();
+				dsa_op.reset(disc.FormSchurComplement(*block_op));
+				delete block_op;
 
 				// iterative solve
 				if (inner_it_solver) {
-					amg = new mfem::HypreBoomerAMG(S); 
-					inner_it_solver->SetOperator(S); 
+					amg = std::make_unique<mfem::HypreBoomerAMG>();
 					inner_it_solver->SetPreconditioner(*amg); 
 				} 
-
-				// direct solve 
-				else {
-				#ifdef MFEM_USE_SUPERLU
-					slu_op = new mfem::SuperLURowLocMatrix(S); 
-					auto *slu = new mfem::SuperLUSolver(*slu_op); 
-					io::SetSuperLUOptions(inner_solver_table, *slu, root); 
-					inner_solver = slu; 
-				#else 
-					MFEM_ABORT("superlu required for direct option"); 
-				#endif 
-				}
-
-				out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
-				out << YAML::Key << "boundary condition type" << YAML::Value << bc_str; 
+				inner_solver->SetOperator(*dsa_op);
+				prec = std::make_unique<DiffusionSyntheticAccelerationOperator>(*inner_solver, Ms_form);
 			}
 			else if (type == "mip") {
 				double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
 				bool lower_bound = prec_table["bound_stabilization_below"].get_or(true); 
-				const auto bc_str = io::GetAndValidateOption<std::string>(prec_table, "bc_type", 
-					{"full range", "half range", "half range reflect"}, "full range", root); 
-				const auto bc_type = io::GetDiffusionBCType(bc_str); 
-				block_disc = new BlockIPDiffusionDiscretization(fes, vfes, total, absorption, alpha, 
-					kappa, lower_bound, scale_stabilization, reflection_bdr_attr, bc_type); 
-				const auto &S = block_disc->SchurComplement(); 
+				// const auto bc_type = io::GetDiffusionBCType(bc_str); 
+				BlockIPDiscretization disc(fes, vfes, total, absorption, lumping, bc_map);
+				disc.SetAlpha(alpha);
+				disc.SetKappa(kappa);
+				disc.SetScalePenalty(scale_stabilization);
+				if (lower_bound)
+					disc.SetPenaltyLowerBound(alpha/2);
+				auto *block_op = disc.GetOperator();
+				dsa_op.reset(disc.FormSchurComplement(*block_op));
+				delete block_op;
 
 				// iterative solve
 				if (inner_it_solver) {
-					amg = new mfem::HypreBoomerAMG(S); 
-					inner_it_solver->SetOperator(S); 
+					amg = std::make_unique<mfem::HypreBoomerAMG>();
 					inner_it_solver->SetPreconditioner(*amg); 
 				} 
 
-				// direct solve 
-				else {
-				#ifdef MFEM_USE_SUPERLU
-					slu_op = new mfem::SuperLURowLocMatrix(S); 
-					auto *slu = new mfem::SuperLUSolver(*slu_op); 
-					io::SetSuperLUOptions(inner_solver_table, *slu, root); 
-					inner_solver = slu; 
-				#else 
-					MFEM_ABORT("superlu required for direct option"); 
-				#endif 
-				}
+				inner_solver->SetOperator(*dsa_op);
+				prec = std::make_unique<DiffusionSyntheticAccelerationOperator>(*inner_solver, Ms_form);
 
 				out << YAML::Key << "kappa" << YAML::Value << kappa; 
 				out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
 				out << YAML::Key << "bound stabilization from below" << YAML::Value << lower_bound; 
-				out << YAML::Key << "boundary condition type" << YAML::Value << bc_str; 
 			}
 			else if (type == "scalar mip") {
 				double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
 				double sigma = prec_table["sigma"].get_or(-1.0); 
-				mfem::Array<int> marshak_bdr_attrs(mesh.bdr_attributes.Max()); 
-				marshak_bdr_attrs = 1;
-				if (reflection_bdr_attr > 0) {
-					marshak_bdr_attrs[reflection_bdr_attr-1] = 0; 
-				}
-				mfem::ParBilinearForm Kform(&fes); 
-				mfem::RatioCoefficient diffco(1.0/3, total); 
-				mfem::ConstantCoefficient alpha_c(alpha/2); 
-				Kform.AddDomainIntegrator(new mfem::DiffusionIntegrator(diffco)); 
-				Kform.AddDomainIntegrator(new mfem::MassIntegrator(absorption)); 
-				Kform.AddInteriorFaceIntegrator(new MIPDiffusionIntegrator(diffco, sigma, kappa, alpha/2)); 
-				Kform.AddBdrFaceIntegrator(new mfem::BoundaryMassIntegrator(alpha_c), marshak_bdr_attrs); 
-				Kform.Assemble(); 
-				Kform.Finalize(); 
-				dsa_mat = Kform.ParallelAssemble();
+				InteriorPenaltyDiscretization ipdisc(fes, total, absorption, lumping, bc_map);
+				ipdisc.SetKappa(kappa);
+				ipdisc.SetSigma(sigma);
+				ipdisc.SetPenaltyLowerBound(alpha/2);
+				dsa_op.reset(ipdisc.GetOperator());
 
 				if (inner_it_solver) {
-					amg = new mfem::HypreBoomerAMG(*dsa_mat); 
-					inner_it_solver->SetOperator(*dsa_mat); 
+					amg = std::make_unique<mfem::HypreBoomerAMG>();
 					inner_it_solver->SetPreconditioner(*amg); 
 				}
 
-				else {
-					slu_op = new mfem::SuperLURowLocMatrix(*dsa_mat); 
-					auto *slu = new mfem::SuperLUSolver(*slu_op); 
-					io::SetSuperLUOptions(inner_solver_table, *slu, root); 
-					inner_solver = slu; 
-				}
+				inner_solver->SetOperator(*dsa_op);
+				prec = std::make_unique<DiffusionSyntheticAccelerationOperator>(*inner_solver, Ms_form);
 
 				out << YAML::Key << "kappa" << YAML::Value << kappa; 
 				out << YAML::Key << "sigma" << YAML::Value << sigma; 
@@ -719,10 +664,6 @@ int main(int argc, char *argv[]) {
 				sol::optional<sol::table> amg_opts = prec_table["solver"]["amg_opts"]; 
 				if (amg_opts) io::SetAMGOptions(amg_opts.value(), *amg, root); 				
 			}
-
-			// create DSA operator 
-			// I + D^{-1} Ms 
-			prec = new DiffusionSyntheticAccelerationOperator(*inner_solver, Ms_form); 
 
 			out << YAML::Key << "solver" << YAML::Value << inner_solver_table; 
 			out << YAML::EndMap; // end preconditioner map 
@@ -746,7 +687,7 @@ int main(int argc, char *argv[]) {
 
 		if (prec_avail) { outer_solver->SetPreconditioner(*prec); }
 		outer_solver->SetOperator(T); 
-		TransportIterationMonitor monitor(out, T, prec, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
+		TransportIterationMonitor monitor(out, T, prec.get(), inner_it_solver); 
 		outer_solver->SetMonitor(monitor); 
 		setup_timer.Stop(); 
 		solve_timer.Start(); 
@@ -772,13 +713,6 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "total" << YAML::Value << monitor.inner_it.Sum(); 
 			out << YAML::EndMap; 
 		}
-		if (prec) delete prec; 
-		if (amg) delete amg; 
-	#ifdef MFEM_USE_SUPERLU
-		if (slu_op) delete slu_op; 
-	#endif
-		if (dsa_mat) delete dsa_mat; 
-		if (block_disc) delete block_disc; 
 
 		sweep_time = monitor.sweep_time; 
 		moment_time = monitor.prec_time; 
@@ -789,13 +723,9 @@ int main(int argc, char *argv[]) {
 		// space for current 
 		mfem::Array<int> offsets; 
 		mfem::BlockVector block_x;
-		mfem::Operator *smm = nullptr; 
-		mfem::HypreBoomerAMG *amg = nullptr; 
-		BlockDiffusionDiscretization *block_disc = nullptr; 
-	#ifdef MFEM_USE_SUPERLU
-		mfem::SuperLURowLocMatrix *slu_op = nullptr; 
-		mfem::SuperLUSolver *slu = nullptr; 
-	#endif
+		std::unique_ptr<mfem::Operator> smm; 
+		std::unique_ptr<mfem::HypreBoomerAMG> amg;
+		std::unique_ptr<mfem::Operator> lo_op;
 
 		sol::table accel = accel_avail.value(); 
 		std::string type = accel["type"]; 
@@ -805,55 +735,40 @@ int main(int argc, char *argv[]) {
 		if (type == "LDGSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
 			bool scale_stabilization = accel["scale_stabilization"].get_or(false); 
-			const auto bc_str = io::GetAndValidateOption<std::string>(accel, "bc_type", 
-				{"full range", "half range", "half range reflect"}, "full range", root); 
-			const auto bc_type = io::GetDiffusionBCType(bc_str); 
-			auto *block_ldg = new BlockLDGDiffusionDiscretization(fes, vfes, total, absorption, alpha, beta, 
-				scale_stabilization, reflection_bdr_attr, bc_type); 
-			block_disc = block_ldg; 
-			const auto &S = block_disc->SchurComplement(); 
-
-			mfem::Operator *source_op; 
-			if (consistent) {
-				source_op = new ConsistentLDGSMMSourceOperator(*block_ldg, *quad, psi_ext, source_vec_view); 
-			} else {
-				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, *quad, psi_ext, source, inflow, 
-					alpha, reflection_bdr_attr, bc_type); 				
-			}
+			BlockLDGDiscretization disc(fes, vfes, total, absorption, lumping, bc_map);
+			disc.SetAlpha(alpha);
+			lo_op.reset(disc.GetOperator());
 
 			// iterative solve
 			if (inner_it_solver) {
-				amg = new mfem::HypreBoomerAMG(S); 
-				inner_it_solver->SetOperator(S); 
+				amg = std::make_unique<mfem::HypreBoomerAMG>();
 				inner_it_solver->SetPreconditioner(*amg); 				
 			} 
 
-			// direct solve 
-			else {
-			#ifdef MFEM_USE_SUPERLU
-				slu_op = new mfem::SuperLURowLocMatrix(S); 
-				auto *slu = new mfem::SuperLUSolver(*slu_op); 
-				io::SetSuperLUOptions(inner_solver_table, *slu, root); 
-				inner_solver = slu;
-			#else 
-				MFEM_ABORT("superlu required for direct option"); 
-			#endif 
+			auto *lo_solver = new BlockMomentDiscretization::Solver(vfes, *inner_solver);
+			lo_solver->SetOperator(*lo_op);
+
+			mfem::Operator *source_op;
+			if (consistent) {
+				source_op = new ConsistentLDGSMMOperator(disc, *quad, psi_ext, source_vec);
+			} else {
+				int source_lumping = accel["source_lumping"].get_or(0);
+				source_op = new IndependentSMMOperator(fes, vfes, *quad, psi_ext, source, inflow, 
+					alpha, bc_map, source_lumping);
 			}
 
-			auto *inv_ldg = new InverseBlockDiffusionOperator(*block_disc, *inner_solver); 
-			offsets = block_disc->GetOffsets(); // copy offsets 
+			offsets = disc.GetOffsets(); // copy offsets 
 			block_x.Update(offsets); // set size of block_x 
 			// extract scalar flux, storing [J,phi] in block_x 
 			auto *block_extract = new SubBlockExtractionOperator(block_x, 1); 
 			// psi -> SMM source -> diffusion solution -> extract phi from block vector 
 			// use allium version of triple product operator to ensure temp vectors 
 			// initialized to zero (for first initial guess when iterative_mode = true)
-			smm = new TripleProductOperator(block_extract, inv_ldg, source_op, true, true, true); 
+			smm = std::make_unique<TripleProductOperator>(block_extract, lo_solver, source_op, true, true, true); 
 
 			// output LDG specific options 
 			out << YAML::Key << "consistent" << YAML::Value << consistent; 
 			out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
-			out << YAML::Key << "boundary condition type" << YAML::Value << bc_str; 
 		} 
 		else if (type == "IPSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
@@ -862,85 +777,61 @@ int main(int argc, char *argv[]) {
 			bool scale_stabilization = accel["scale_stabilization"].get_or(true); 
 			// use kappa = alpha/2 if regular kappa goes below alpha/2 
 			bool stab_bound = accel["bound_stabilization_below"].get_or(true); 
-			const auto bc_str = io::GetAndValidateOption<std::string>(accel, "bc_type", 
-				{"full range", "half range", "half range reflect"}, "full range", root); 
-			const auto bc_type = io::GetDiffusionBCType(bc_str); 
 
-			auto *block_ip = new BlockIPDiffusionDiscretization(fes, vfes, total, absorption, alpha, kappa, stab_bound, 
-				scale_stabilization, reflection_bdr_attr, bc_type); 
-			block_disc = block_ip; 
-			const auto &S = block_disc->SchurComplement(); 
-
-			mfem::Operator *source_op; 
-			if (consistent) {
-				source_op = new ConsistentIPSMMSourceOperator(*block_ip, *quad, psi_ext, source_vec_view); 
-			} else {
-				source_op = new BlockDiffusionSMMSourceOperator(fes, vfes, *quad, psi_ext, source, inflow, alpha, 
-					reflection_bdr_attr, bc_type); 				
-			}
+			BlockIPDiscretization disc(fes, vfes, total, absorption, lumping, bc_map);
+			disc.SetAlpha(alpha);
+			if (stab_bound)
+				disc.SetPenaltyLowerBound(alpha/2);
+			disc.SetScalePenalty(scale_stabilization);
+			lo_op.reset(disc.GetOperator());
 
 			// iterative solve
 			if (inner_it_solver) {
-				amg = new mfem::HypreBoomerAMG(S); 
-				inner_it_solver->SetOperator(S); 
+				amg = std::make_unique<mfem::HypreBoomerAMG>();
 				inner_it_solver->SetPreconditioner(*amg); 				
 			} 
 
-			// direct solve 
+			auto *lo_solver = new BlockMomentDiscretization::Solver(vfes, *inner_solver);
+			lo_solver->SetOperator(*lo_op);
+
+			mfem::Operator *source_op;
+			if (consistent) 
+				source_op = new ConsistentIPSMMOperator(disc, *quad, psi_ext, source_vec);
 			else {
-			#ifdef MFEM_USE_SUPERLU
-				slu_op = new mfem::SuperLURowLocMatrix(S); 
-				auto *slu = new mfem::SuperLUSolver(*slu_op); 
-				io::SetSuperLUOptions(inner_solver_table, *slu, root); 
-				inner_solver = slu;
-			#else 
-				MFEM_ABORT("superlu required for direct option"); 
-			#endif 
+				const int source_lumping = accel["source_lumping"].get_or(0);
+				source_op = new IndependentSMMOperator(fes, vfes, *quad, psi_ext, source, inflow, 
+					alpha, bc_map, source_lumping);
 			}
 
-			auto *inv_ip = new InverseBlockDiffusionOperator(*block_disc, *inner_solver); 
-			offsets = block_disc->GetOffsets(); // copy offsets 
+			offsets = disc.GetOffsets(); // copy offsets 
 			block_x.Update(offsets); // set size of block_x 
 			// extract scalar flux, storing [J,phi] in block_x 
 			auto *block_extract = new SubBlockExtractionOperator(block_x, 1); 
 			// psi -> SMM source -> diffusion solution -> extract phi from block vector 
 			// use allium version of triple product operator to ensure temp vectors 
 			// initialized to zero (for first initial guess when iterative_mode = true)
-			smm = new TripleProductOperator(block_extract, inv_ip, source_op, true, true, true); 
+			smm = std::make_unique<TripleProductOperator>(block_extract, lo_solver, source_op, true, true, true); 
 
 			// output IP specific options 
 			out << YAML::Key << "kappa" << YAML::Value << kappa; 
 			out << YAML::Key << "consistent" << YAML::Value << consistent; 
 			out << YAML::Key << "scale stabilization" << YAML::Value << scale_stabilization; 
 			out << YAML::Key << "bound stabilization from below" << YAML::Value << stab_bound; 
-			out << YAML::Key << "boundary condition type" << YAML::Value << bc_str; 
 		}
 		else if (type == "P1SMM") {
-		#ifdef MFEM_USE_SUPERLU
 			if (inner_it_solver) { MFEM_ABORT("only direct supported for P1"); }
-			sol::optional<bool> consistent_avail = accel["consistent"]; 
-			if (consistent_avail) {
-				if (consistent_avail.value() == false) { MFEM_ABORT("only consistent supported for P1"); }
-			}
-			auto p1disc = std::unique_ptr<mfem::BlockOperator>(CreateP1DiffusionDiscretization(
-				fes, vfes, total, absorption, alpha, reflection_bdr_attr)); 
-			auto mono = std::unique_ptr<mfem::HypreParMatrix>(BlockOperatorToMonolithic(*p1disc)); 
-			slu_op = new mfem::SuperLURowLocMatrix(*mono); 
-			auto *slu = new mfem::SuperLUSolver(*slu_op); 
-			io::SetSuperLUOptions(inner_solver_table, *slu, root); 
+			const bool consistent = accel["consistent"].get_or(true);
+			if (!consistent) MFEM_ABORT("only consistent supported for P1");
 
-			auto *source_op = new ConsistentSMMSourceOperator(fes, vfes, *quad, psi_ext, source_vec_view, alpha, reflection_bdr_attr); 
-			offsets = p1disc->RowOffsets(); // copy offsets 
-			block_x.Update(offsets); // set size of block_x 
-			// extract scalar flux, storing [J,phi] in block_x 
-			auto *block_extract = new SubBlockExtractionOperator(block_x, 1); 
-			// build SM source, invert P1, extract phi 
-			smm = new TripleProductOperator(block_extract, slu, source_op, true, true, true); 
-
+			P1Discretization p1(fes, vfes, total, absorption, lumping, bc_map);
+			lo_op.reset(p1.GetOperator());
+			inner_solver->SetOperator(*lo_op);
+			auto *source_op = new ConsistentP1SMMOperator(p1, *quad, psi_ext, source_vec);
+			offsets = p1.GetOffsets();
+			block_x.Update(offsets);
+			auto *block_extract = new SubBlockExtractionOperator(block_x, 1);
+			smm = std::make_unique<TripleProductOperator>(block_extract, inner_solver.get(), source_op, true, false, true); 
 			out << YAML::Key << "consistent" << YAML::Value << true; 
-		#else
-			MFEM_ABORT("super LU required for P1"); 
-		#endif
 		} 
 		else { MFEM_ABORT("acceleration type " << type << " not defined"); }
 
@@ -951,7 +842,7 @@ int main(int argc, char *argv[]) {
 			if (amg_opts) io::SetAMGOptions(amg_opts.value(), *amg, root);	
 		}
 
-		auto *triple_prod = dynamic_cast<TripleProductOperator*>(smm); 
+		auto *triple_prod = dynamic_cast<TripleProductOperator*>(smm.get()); 
 		if (triple_prod) {
 			triple_prod->SetLoggingKeys("smm block extract", "smm solve", "smm source"); 
 		}
@@ -964,14 +855,14 @@ int main(int argc, char *argv[]) {
 
 		MomentMethodFixedPointOperator G(D, Linv, Ms_form, *smm, source_vec, psi); 
 		outer_solver->SetOperator(G); 
-		io::SundialsUserCallbackData sundials_data(out, G, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
-		auto *sundials = dynamic_cast<mfem::SundialsSolver*>(outer_solver);
+		io::SundialsUserCallbackData sundials_data(out, G, inner_it_solver); 
+		auto *sundials = dynamic_cast<mfem::SundialsSolver*>(outer_solver.get());
 		if (sundials) {
 			KINSetInfoHandlerFn(sundials->GetMem(), io::SundialsCallbackFunction, &sundials_data); 
 			KINSetErrHandlerFn(sundials->GetMem(), io::SundialsErrorFunction, &sundials_data); 
 		}
 
-		MomentMethodIterationMonitor monitor(out, G, dynamic_cast<mfem::IterativeSolver*>(inner_solver)); 
+		MomentMethodIterationMonitor monitor(out, G, inner_it_solver); 
 		outer_solver->SetMonitor(monitor); 
 
 		setup_timer.Stop(); 
@@ -1024,19 +915,9 @@ int main(int argc, char *argv[]) {
 			ss << consistency_J; 
 			out << YAML::Key << "current" << YAML::Value << ss.str(); 
 		out << YAML::EndMap; 
-
-		if (smm) delete smm; 
-		if (amg) delete amg; 
-		if (block_disc) delete block_disc; 
-	#ifdef MFEM_USE_SUPERLU
-		if (slu_op) delete slu_op; 
-	#endif
 	}
 
 	// --- clean up hanging pointers --- 
-	delete outer_solver; 
-	if (inner_solver) delete inner_solver; 
-	delete quad; 
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
 

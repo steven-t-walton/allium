@@ -2,6 +2,7 @@
 #include "yaml-cpp/yaml.h"
 #include "sol/sol.hpp"
 
+#include "bdr_conditions.hpp"
 #include "comment_stream.hpp"
 #include "io.hpp"
 #include "sweep.hpp"
@@ -11,13 +12,10 @@
 #include "trt_integrators.hpp"
 #include "trt_picard.hpp"
 #include "trt_linearized.hpp"
-#include "mip.hpp"
 #include "lumping.hpp"
 #include "tracer.hpp"
-#include "p1diffusion.hpp"
 #include "block_diag_op.hpp"
-
-using LuaPhaseFunction = std::function<double(double,double,double,double,double,double)>; 
+#include "moment_discretization.hpp"
 
 class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
 {
@@ -187,18 +185,9 @@ int main(int argc, char *argv[]) {
 		lua.script(lua_cmds); 
 	}
 
-	#ifdef ALLIUM_GIT_COMMIT 
-	out << YAML::Key << "git" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "branch" << YAML::Value << ALLIUM_GIT_BRANCH; 
-		out << YAML::Key << "commit" << YAML::Value << ALLIUM_GIT_COMMIT; 
-		#ifdef ALLIUM_GIT_TAG 
-		out << YAML::Key << "tag" << YAML::Value << ALLIUM_GIT_TAG; 
-		#endif
-		#ifdef MFEM_GIT_STRING
-		out << YAML::Key << "mfem" << YAML::Value << MFEM_GIT_STRING; 
-		#endif
-	out << YAML::EndMap; 
-	#endif
+	// print git commit, branch, tag if available from CMake 
+	io::PrintGitString(out);
+	// output name of input file 
 	out << YAML::Key << "input file" << YAML::Value << io::ResolveRelativePath(input_file); 
 
 	// --- print physical constants --- 
@@ -255,7 +244,7 @@ int main(int argc, char *argv[]) {
 			auto source_val = lua_source_objs[i].as<double>(); 
 			source_list[i] = new ConstantPhaseSpaceCoefficient(source_val); 
 		} else if (lua_source_objs[i].get_type() == sol::type::function) {
-			LuaPhaseFunction lua_source = lua_source_objs[i].as<sol::function>(); 
+			io::LuaPhaseFunction lua_source = lua_source_objs[i].as<sol::function>(); 
 			auto source_func = [lua_source](const mfem::Vector &x, const mfem::Vector &Omega) {
 				return lua_source(x(0), x(1), x(2), Omega(0), Omega(1), Omega(2)); 
 			};
@@ -298,7 +287,7 @@ int main(int argc, char *argv[]) {
 	// get values 
 	auto nbattr = bdr_attr_list.size(); 
 	mfem::Array<PhaseSpaceCoefficient*> inflow_list(nbattr); 
-	int reflection_bdr_attr = -1; 
+	BoundaryConditionMap bc_map;
 	out << YAML::Key << "boundary conditions" << YAML::Value << YAML::BeginSeq; 
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
 		sol::table data = bcs[bdr_attr_list[i].c_str()]; 
@@ -309,14 +298,14 @@ int main(int argc, char *argv[]) {
 			value = data["value"]; 
 			double planck_value = constants::StefanBoltzmann * pow(value, 4) / 4.0 / constants::pi; 
 			inflow_list[i] = new ConstantPhaseSpaceCoefficient(planck_value); 
+			bc_map[i+1] = BoundaryCondition::INFLOW;
 		} else if (type == "reflective") {
-			if (reflection_bdr_attr<0) {
-				reflection_bdr_attr = i+1; 
-			}
 			inflow_list[i] = nullptr; 
+			bc_map[i+1] = BoundaryCondition::REFLECTIVE;
 		} 
 		else if (type == "vacuum") {
 			inflow_list[i] = nullptr; 
+			bc_map[i+1] = BoundaryCondition::INFLOW;
 		}
 
 		out << YAML::BeginMap; 
@@ -555,7 +544,7 @@ int main(int argc, char *argv[]) {
 
 	// build sweep operator 
 	// total_gf += 1.0/time_step; // <-- hack, needs better design 
-	InverseAdvectionOperator Linv(fes, *quad, total_gf, reflection_bdr_attr, lump); 
+	InverseAdvectionOperator Linv(fes, *quad, total_gf, bc_map, lump); 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -646,22 +635,18 @@ int main(int argc, char *argv[]) {
 	const double alpha = ComputeAlpha(*quad, nor); 
 	mfem::ConstantCoefficient alpha_c(alpha/2);
 	mfem::RatioCoefficient diffco(1.0/3, total); 
-	mfem::Array<int> marshak_bdr_attrs(mesh.bdr_attributes.Max()); 
-	marshak_bdr_attrs = 1;
-	if (reflection_bdr_attr > 0) {
-		marshak_bdr_attrs[reflection_bdr_attr-1] = 0; 
-	}
 
 	sol::table solver = driver["solver"]; 
 	if (!solver.valid()) MFEM_ABORT("must supply solver options"); 
 	const std::string solver_type = solver["type"]; 
 	io::ValidateOption<std::string>("solver type", solver_type, {"picard", "linearized", "newton"}, root); 
 	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver, local_meb_solver, global_meb_solver,
-		linear_solver, dsa_solver; 
+		linear_solver;
+	std::unique_ptr<mfem::Solver> dsa_solver;
 	std::unique_ptr<BlockDiagonalByElementNonlinearSolver> meb_solver;
 	std::unique_ptr<BlockDiagonalByElementSolver> linearized_meb_solver;
-	std::unique_ptr<mfem::HypreParMatrix> dsa_mat, dsa_time_mat; 
-	std::unique_ptr<mfem::ParBilinearForm> Kform; 
+	std::unique_ptr<mfem::Operator> dsa_mat, dsa_time_mat; 
+	std::unique_ptr<MomentDiscretization> Kform; 
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
 	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor; 
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
@@ -739,50 +724,37 @@ int main(int argc, char *argv[]) {
 		if (prec_table_avail) {
 			sol::table prec_table = prec_table_avail.value(); 
 			const std::string type = prec_table["type"]; 
-			const double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
-			io::ValidateOption<std::string>("preconditioner type", type, {"mip"}, root); 
-			Kform = std::make_unique<mfem::ParBilinearForm>(&fes); 
-			auto *diff_int = new mfem::DiffusionIntegrator(diffco);
-			if (IsGradientLumped(lump)) 
-				Kform->AddDomainIntegrator(new QuadratureLumpedIntegrator(diff_int));
-			else
-				Kform->AddDomainIntegrator(diff_int);
-			auto *mass_int = new mfem::MassIntegrator(total); 
-			if (IsMassLumped(lump))
-				Kform->AddDomainIntegrator(new QuadratureLumpedIntegrator(mass_int)); 
-			else
-				Kform->AddDomainIntegrator(mass_int);
-			auto *mip = new MIPDiffusionIntegrator(diffco, -1, kappa, alpha/2);
-			auto *bdr_int = new mfem::BoundaryMassIntegrator(alpha_c);
-			if (IsFaceLumped(lump)) {
-				Kform->AddInteriorFaceIntegrator(new QuadratureLumpedIntegrator(mip)); 
-				Kform->AddBdrFaceIntegrator(new QuadratureLumpedIntegrator(bdr_int));
-			}
-			else {
-				Kform->AddInteriorFaceIntegrator(mip);
-				Kform->AddBdrFaceIntegrator(bdr_int);
-			}
-			Kform->Assemble(); 
-			Kform->Finalize(); 
-			dsa_mat = std::unique_ptr<mfem::HypreParMatrix>(Kform->ParallelAssemble()); 
+			io::ValidateOption<std::string>("preconditioner type", type, {"mip", "ldg"}, root); 
 
-			mfem::ParBilinearForm Mform(&fes); 
-			if (IsMassLumped(lump)) 
-				Mform.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator));
-			else 
-				Mform.AddDomainIntegrator(new mfem::MassIntegrator);
-			Mform.Assemble(); 
-			Mform.Finalize(); 
-			dsa_time_mat.reset(Mform.ParallelAssemble());
+			if (type == "mip") {
+				const double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
+				auto *disc = new InteriorPenaltyDiscretization(fes, total, total, lump, bc_map);
+				disc->SetAlpha(alpha);
+				disc->SetKappa(kappa);
+				disc->SetPenaltyLowerBound(alpha/2);
+				Kform.reset(disc);
+			}
+
+			else if (type == "ldg") {
+				auto *disc = new LDGDiscretization(fes, total, total, lump, bc_map);
+				disc->SetAlpha(alpha);
+				Kform.reset(disc);
+			}
+
+			Kform->SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
+			dsa_mat.reset(Kform->GetOperator());				
 
 			sol::table solver_table = prec_table["solver"]; 
-			dsa_solver.reset(io::CreateIterativeSolver(solver_table, MPI_COMM_WORLD)); 
-			amg = std::make_unique<mfem::HypreBoomerAMG>(*dsa_mat); 
-			amg->SetPrintLevel(0); 
+			dsa_solver.reset(io::CreateSolver(solver_table, MPI_COMM_WORLD)); 
+			auto *dsa_it_solver = dynamic_cast<mfem::IterativeSolver*>(dsa_solver.get());
+			if (dsa_it_solver) {
+				amg = std::make_unique<mfem::HypreBoomerAMG>();
+				amg->SetPrintLevel(0); 
+				dsa_it_solver->SetPreconditioner(*amg);				
+				dsa_monitor = std::make_unique<InnerIterativeSolverMonitor>(*dsa_it_solver); 
+				linear_solver->SetMonitor(*dsa_monitor); 
+			}
 			dsa_solver->SetOperator(*dsa_mat); 
-			dsa_solver->SetPreconditioner(*amg); 
-			dsa_monitor = std::make_unique<InnerIterativeSolverMonitor>(*dsa_solver); 
-			linear_solver->SetMonitor(*dsa_monitor); 
 		}
 		out << YAML::Key << "transport solver" << YAML::Value << transport_solve_table; 
 
@@ -833,16 +805,8 @@ int main(int argc, char *argv[]) {
 		sol::optional<sol::table> viz_avail = output["visualization"];
 		if (viz_avail) {
 			sol::table viz = viz_avail.value(); 
-			const std::string type = io::GetAndValidateOption<std::string>(viz, "type", {"paraview", "visit", "glvis"}, "paraview", root); 
-			if (type == "paraview") {
-				dc = std::make_unique<mfem::ParaViewDataCollection>(output_root, &mesh); 
-			} else if (type == "visit") {
-				const std::string collection_name = output_root + "/" + output_root; 
-				dc = std::make_unique<mfem::VisItDataCollection>(collection_name, &mesh); 
-			} else if (type == "glvis") {
-				const std::string collection_name = output_root + "/" + output_root; 
-				dc = std::make_unique<mfem::DataCollection>(collection_name, &mesh); 
-			}
+			const std::string type = viz["type"];
+			dc.reset(io::CreateDataCollection(type, output_root, mesh, root));
 			output_freq = viz["frequency"].get_or(std::numeric_limits<int>::max()); 
 			const int precision = viz["precision"].get_or(6); 
 			dc->SetPrecision(precision); 
@@ -907,7 +871,6 @@ int main(int argc, char *argv[]) {
 
 	mfem::StopWatch cycle_timer; 
 	double time = 0.0; 
-	const double under_relax = 0.05; 
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
 	std::map<std::string,int> log; 
 	int cycle = 0; 
@@ -975,12 +938,8 @@ int main(int argc, char *argv[]) {
 
 			// DSA matrix depends on sigma and dt 
 			if (Kform) {
-				delete Kform->LoseMat(); // delete serial sparsematrix 
-				Kform->Assemble(); 
-				Kform->Finalize(); 
-				dsa_mat.reset(Kform->ParallelAssemble()); // delete current, replace with new 
-				dsa_mat->Add(Linv.GetTimeAbsorption(), *dsa_time_mat); 
-				dsa_solver->SetOperator(*dsa_mat); 			
+				dsa_mat.reset(Kform->GetOperator());
+				dsa_solver->SetOperator(*dsa_mat);
 			}
 		}
 

@@ -29,7 +29,12 @@ bool SweepConstantSolution(mfem::Mesh &smesh, int fe_order, bool lump=false) {
 	mfem::Vector source(psi_size), psi(psi_size); 
 	TransportVectorView source_view(source.GetData(), psi_ext); 
 	FormTransportSource(fes, quad, energy_grid, szero, inflow, source_view); 
-	InverseAdvectionOperator Linv(fes, quad, sigma, -1, (lump) ? 7 : 0); 
+	const auto &bdr_attr = mesh.bdr_attributes;
+	BoundaryConditionMap bc_map;
+	for (const auto &attr : bdr_attr) {
+		bc_map[attr] = INFLOW;
+	}
+	InverseAdvectionOperator Linv(fes, quad, sigma, bc_map, (lump) ? 7 : 0); 
 	Linv.Mult(source, psi); 
 	bool all_ones = true; 
 	for (const auto &i : psi) {
@@ -135,7 +140,12 @@ double ExponentialSolution(mfem::Mesh &smesh, int fe_order,
 	FormTransportSource(fes, quad, energy_grid, zero, inflow, source_view); 
 	psi = 0.0; 
 
-	InverseAdvectionOperator Linv(fes, quad, total, -1, (lump) ? 7 : 0); 
+	BoundaryConditionMap bc_map;
+	const auto &bdr_attr = mesh.bdr_attributes;
+	for (const auto &attr : bdr_attr) {
+		bc_map[attr] = INFLOW;
+	}
+	InverseAdvectionOperator Linv(fes, quad, total, bc_map, (lump) ? 7 : 0); 
 	Linv.Mult(source, psi); 
 
 	double err = 0.0; 
@@ -297,7 +307,12 @@ void L_Linv(mfem::Mesh &smesh, bool lump) {
 	source.Randomize(12345); 
 	mfem::Vector copy(source); 
 
-	InverseAdvectionOperator Linv(fes, quad, total, -1, (lump) ? 7 : 0); 
+	BoundaryConditionMap bc_map;
+	const auto &bdr_attr = mesh.bdr_attributes;
+	for (const auto &attr : bdr_attr) {
+		bc_map[attr] = INFLOW;
+	}
+	InverseAdvectionOperator Linv(fes, quad, total, bc_map, (lump) ? 7 : 0); 
 	AdvectionOperator L(Linv); 
 	L.Mult(source, psi); 
 	Linv.Mult(psi, psi); 

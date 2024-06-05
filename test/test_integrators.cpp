@@ -1,5 +1,5 @@
 #include "gtest/gtest.h"
-#include "p1diffusion.hpp"
+#include "moment_integrators.hpp"
 #include "smm_integrators.hpp"
 #include "sweep.hpp"
 #include "lumping.hpp"

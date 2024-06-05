@@ -1,11 +1,11 @@
 #include "gtest/gtest.h"
-#include "p1diffusion.hpp"
+#include "moment_discretization.hpp"
 #include "smm_integrators.hpp"
 #include "phase_coefficient.hpp"
 #include "linalg.hpp"
-#include "block_smm_op.hpp"
 #include "sweep.hpp"
 #include "transport_op.hpp"
+#include "dg_trace_coll.hpp"
 
 TEST(SMM, CorrectionTensorIsotropic) {
 	mfem::Mesh smesh = mfem::Mesh::MakeCartesian2D(5,5,mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
@@ -129,4 +129,26 @@ TEST(SMM, BdrCorrectionQuadratic) {
 	auto [E2,N2] = BetaError(24); 
 	double ooa = log(E1/E2) / log((double)N2/N1); 
 	EXPECT_NEAR(ooa, 1.0, .3); 
+}
+
+TEST(DGTraceColl, Quad) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	auto fec = DGTrace_FECollection(1, dim); 
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
+	const auto *fe = fes.GetTraceElement(0, mesh.GetFaceGeometry(0)); 
+	EXPECT_TRUE(fe); 
+	EXPECT_EQ(fe->GetDof(), 2); 
+	EXPECT_EQ(fes.GetVSize(), fes.GetNE()*8); 
+}
+
+TEST(DGTraceColl, Tri) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(2,2, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	auto fec = DGTrace_FECollection(1, dim); 
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
+	const auto *fe = fes.GetTraceElement(0, mesh.GetFaceGeometry(0)); 
+	EXPECT_TRUE(fe); 
+	EXPECT_EQ(fe->GetDof(), 2); 
+	EXPECT_EQ(fes.GetVSize(), fes.GetNE() * 6); 
 }

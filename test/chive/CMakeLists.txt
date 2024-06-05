@@ -7,32 +7,25 @@ add_test(NAME "chive.mms.p1smm" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_o
 	-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"p1smm\", consistent = true, solver = {type = \"direct\"}}" --phi-order 2 --J-order 2)
 set_tests_properties("chive.mms.p1smm" PROPERTIES LABELS "chive;parallel")
 
-foreach(bc full half)
-	# consistent LDG SMM test 
-	add_test(NAME "chive.mms.ldgsmm_${bc}" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
-		-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ldgsmm\", consistent = true, bc_type = \"${bc} range\"}" --phi-order 2 --J-order 2)
-	set_tests_properties("chive.mms.ldgsmm_${bc}" PROPERTIES LABELS "chive;parallel")
+# consistent LDG SMM test 
+add_test(NAME "chive.mms.ldgsmm" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
+	-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ldgsmm\", consistent = true}" --phi-order 2 --J-order 2)
+set_tests_properties("chive.mms.ldgsmm" PROPERTIES LABELS "chive;parallel")
 
-	# consistent IP SMM test 
-	add_test(NAME "chive.mms.ipsmm_${bc}" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
-		-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ipsmm\", consistent = true, bc_type=\"${bc} range\"}" --phi-order 2 --J-order 2)
-	set_tests_properties("chive.mms.ipsmm_${bc}" PROPERTIES LABELS "chive;parallel")
+# consistent IP SMM test 
+add_test(NAME "chive.mms.ipsmm" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
+	-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ipsmm\", consistent = true}" --phi-order 2 --J-order 2)
+set_tests_properties("chive.mms.ipsmm" PROPERTIES LABELS "chive;parallel")
 
-	# independent IP SMM test 
-	add_test(NAME "chive.mms.indep_ipsmm_${bc}" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
-		-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ipsmm\", consistent = false, bc_type=\"${bc} range\"}" --Ne 15 --phi-order 2 --J-order 1)
-	set_tests_properties("chive.mms.indep_ipsmm_${bc}" PROPERTIES LABELS "chive;parallel")
-endforeach()
+# independent IP SMM test 
+add_test(NAME "chive.mms.indep_ipsmm" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
+	-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ipsmm\", consistent = false}" --Ne 15 --phi-order 2 --J-order 1)
+set_tests_properties("chive.mms.indep_ipsmm" PROPERTIES LABELS "chive;parallel")
 
 # independent LDG SMM test 
-add_test(NAME "chive.mms.indep_ldgsmm_full" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
-	-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ldgsmm\", consistent = false, bc_type=\"full range\"}" --Ne 20 --phi-order 2 --J-order 1.5)
-set_tests_properties("chive.mms.indep_ldgsmm_full" PROPERTIES LABELS "chive;parallel")
-
-# independent LDG SMM test 
-add_test(NAME "chive.mms.indep_ldgsmm_half" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
-	-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ldgsmm\", consistent = false, bc_type=\"half range\"}" --Ne 20 --phi-order 2 --J-order 2)
-set_tests_properties("chive.mms.indep_ldgsmm_half" PROPERTIES LABELS "chive;parallel")
+add_test(NAME "chive.mms.indep_ldgsmm" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
+	-l "driver.solver.type = \"fp\"; driver.acceleration = {type = \"ldgsmm\", consistent = false}" --Ne 20 --phi-order 2 --J-order 1.5)
+set_tests_properties("chive.mms.indep_ldgsmm" PROPERTIES LABELS "chive;parallel")
 
 # MIP test 
 add_test(NAME "chive.mms.mip" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_ooa.py -e ${CHIVE} -i ${TEST_DIR}/mms.lua 
@@ -57,48 +50,52 @@ set_tests_properties("chive.mms.p1sa" PROPERTIES LABELS "chive;parallel")
 # --- consistency checks for chive --- 
 function(CheckConsistency name drv)
 	# serial 
+	# 1D 
+	add_test(NAME "chive.consistency.${name}_seg" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
+		-l "${drv}; mesh = {num_elements = {9}, extents = {1}}")
+	set_tests_properties("chive.consistency.${name}_seg" PROPERTIES LABELS "chive;serial")
+	# 2D quad 
 	add_test(NAME "chive.consistency.${name}_quad" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
 		-l "${drv}; mesh = {num_elements = {3,3}, extents = {1,1}}")
 	set_tests_properties("chive.consistency.${name}_quad" PROPERTIES LABELS "chive;serial")
-
+	# 2D tri 
 	add_test(NAME "chive.consistency.${name}_tri" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
 		-l "${drv}; mesh = {num_elements = {3,3}, extents = {1,1}, element_type = \"triangle\"}")
 	set_tests_properties("chive.consistency.${name}_tri" PROPERTIES LABELS "chive;serial")
-
+	# 2D quads and tris 
 	add_test(NAME "chive.consistency.${name}_mixed" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
 		-l "${drv}; mesh = {file = \"${TEST_DIR}/mixed.mesh\", serial_refinements = 2}")
 	set_tests_properties("chive.consistency.${name}_mixed" PROPERTIES LABELS "chive;serial")
-
+	# 3D hex 
 	add_test(NAME "chive.consistency.${name}_hex" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
 		-l " ${drv}; mesh = {num_elements = {2,2,2}, extents = {1,1,1}}")
 	set_tests_properties("chive.consistency.${name}_hex" PROPERTIES LABELS "chive;serial")
 
 	# repeat in parallel 
+	# 1D 
+	add_test(NAME "chive.consistency.${name}_seg_par" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
+		-l "${drv}; mesh = {num_elements = {9}, extents = {1}}" --np 4)
+	set_tests_properties("chive.consistency.${name}_seg_par" PROPERTIES LABELS "chive;parallel")
+	# 2D quad 
 	add_test(NAME "chive.consistency.${name}_quad_par" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
 		-l "${drv}; mesh = {num_elements = {3,3}, extents = {1,1}}" --np 4)
 	set_tests_properties("chive.consistency.${name}_quad_par" PROPERTIES LABELS "chive;parallel")
-
+	# 2D tri
 	add_test(NAME "chive.consistency.${name}_tri_par" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
 		-l "${drv}; mesh = {num_elements = {3,3}, extents = {1,1}, element_type = \"triangle\"}" --np 4)
 	set_tests_properties("chive.consistency.${name}_tri" PROPERTIES LABELS "chive;parallel")
-
+	# 2D quads and tris 
 	add_test(NAME "chive.consistency.${name}_mixed_par" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
 		-l "${drv}; mesh = {file = \"${TEST_DIR}/mixed.mesh\", serial_refinements = 2}" --np 4)
 	set_tests_properties("chive.consistency.${name}_mixed_par" PROPERTIES LABELS "chive;parallel")
-
+	# 3D hex 
 	add_test(NAME "chive.consistency.${name}_hex_par" COMMAND ${Python3_EXECUTABLE} ${TEST_DIR}/test_consistency.py -e ${CHIVE} -i ${TEST_DIR}/eps.lua 
 		-l " ${drv}; mesh = {num_elements = {2,2,2}, extents = {1,1,1}}" --np 4)
 	set_tests_properties("chive.consistency.${name}_hex_par" PROPERTIES LABELS "chive;parallel")
 endfunction()
 
-CheckConsistency("ldgsmm_half" "driver.acceleration.type = \"ldgsmm\"; driver.acceleration.bc_type = \"half range\"")
-CheckConsistency("ldgsmm_half_ref" "driver.acceleration.type = \"ldgsmm\"; driver.acceleration.bc_type = \"half range reflect\"")
-CheckConsistency("ldgsmm_full" "driver.acceleration.type = \"ldgsmm\"; driver.acceleration.bc_type = \"full range\"")
-
-CheckConsistency("ipsmm_half" "driver.acceleration.type = \"ipsmm\"; driver.acceleration.bc_type = \"half range\"")
-CheckConsistency("ipsmm_half_ref" "driver.acceleration.type = \"ipsmm\"; driver.acceleration.bc_type = \"half range reflect\"")
-CheckConsistency("ipsmm_full" "driver.acceleration.type = \"ipsmm\"; driver.acceleration.bc_type = \"full range\"")
-
+CheckConsistency("ldgsmm" "driver.acceleration.type = \"ldgsmm\"")
+CheckConsistency("ipsmm" "driver.acceleration.type = \"ipsmm\"")
 CheckConsistency("p1smm" "driver.acceleration.type = \"p1smm\"")
 
 # --- has thick diffusion limit check --- 

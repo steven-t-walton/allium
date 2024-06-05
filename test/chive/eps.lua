@@ -14,8 +14,7 @@ end
 
 boundary_conditions = {
 	vacuum = {
-		type = "inflow", 
-		value = 0
+		type = "vacuum", 
 	}, 
 	reflective = {
 		type = "reflective"

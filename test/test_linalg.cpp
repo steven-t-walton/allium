@@ -88,7 +88,12 @@ TEST(Linal, BlockLDUInverse) {
 
 	mfem::GridFunction total_data(&fes); 
 	total_data.ProjectCoefficient(total); 
-	InverseAdvectionOperator Linv(fes, quad, total_data); 
+	BoundaryConditionMap bc_map;
+	const auto &bdr_attr = mesh.bdr_attributes;
+	for (const auto &attr : bdr_attr) {
+		bc_map[attr] = INFLOW;
+	}
+	InverseAdvectionOperator Linv(fes, quad, total_data, bc_map); 
 
 	TransportOperator T(D, Linv, Ms_form, x.GetBlock(1)); 
 	mfem::GMRESSolver Sinv; 

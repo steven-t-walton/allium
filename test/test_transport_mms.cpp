@@ -45,7 +45,12 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
 
 	mfem::GridFunction total_data(&fes); 
 	total_data.ProjectCoefficient(total); 
-	InverseAdvectionOperator Linv(fes, quad, total_data, -1, lump); 
+	BoundaryConditionMap bc_map;
+	const auto &bdr_attr = mesh.bdr_attributes;
+	for (const auto &attr : bdr_attr) {
+		bc_map[attr] = INFLOW;
+	}
+	InverseAdvectionOperator Linv(fes, quad, total_data, bc_map, lump); 
 
 	mfem::ParBilinearForm Ms_form(&fes); 
 	if (IsMassLumped(lump))
