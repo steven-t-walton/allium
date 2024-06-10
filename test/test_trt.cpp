@@ -130,6 +130,27 @@ TEST(LumpedTRT, BlockInverse) {
 	EXPECT_NEAR(y.Norml2(), 0.0, 1e-12); 
 }
 
+TEST(TRT, BlockMult) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(1, 1, mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 
+	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec); 
+	BlockDiagonalByElementOperator A(fes), B(fes);
+	for (int e=0; e<mesh.GetNE(); e++) {
+		A.GetElementMatrix(e) = e;
+		B.GetElementMatrix(e) = e;
+	}
+	auto C = Mult(A,B);
+	double sum = 0.0;
+	for (int e=0; e<mesh.GetNE(); e++) {
+		const auto &c = C.GetElementMatrix(e);
+		mfem::DenseMatrix ex(c.Height());
+		ex = e*e;
+		ex -= c;
+		sum += ex.FNorm();
+	}
+	EXPECT_NEAR(sum, 0.0, 1e-12);
+}
+
 // solve T^4 - T = 0 <=> T (T^3 - 1) = 0 => solutions are 0 and +1 
 TEST(LumpedTRT, NewtonSolve) {
 	auto mesh = mfem::Mesh::MakeCartesian2D(1, 1, mfem::Element::QUADRILATERAL, false, 1.0, 1.0); 

@@ -19,7 +19,14 @@ public:
 	mfem::DenseMatrix &GetElementMatrix(int elem); 
 
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
+
+	void Invert();
+	// assume RVO works... 
+	mfem::SparseMatrix AsSparseMatrix() const;
 };
+
+// assume RVO works... 
+BlockDiagonalByElementOperator Mult(const BlockDiagonalByElementOperator &A, const BlockDiagonalByElementOperator &B);
 
 // apply a linear solver to each element 
 // local solver is intended to be one of mfem::DenseMatrixInverse 
@@ -63,7 +70,7 @@ public:
 	// reimplement to fix bug in mfem 
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
 	// reimplement to return block diagonal operator 
-	mfem::Operator &GetGradient(const mfem::Vector &x) const override;
+	BlockDiagonalByElementOperator &GetGradient(const mfem::Vector &x) const override;
 
 	// restrict the global nonlinear form to a single element 
 	// facilitates element-local solves 

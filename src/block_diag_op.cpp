@@ -55,6 +55,40 @@ void BlockDiagonalByElementOperator::Mult(const mfem::Vector &x, mfem::Vector &y
 	}
 }
 
+void BlockDiagonalByElementOperator::Invert()
+{
+	for (int e=0; e<fes.GetNE(); e++) {
+		auto &elmat = *data[e];
+		elmat.Invert();
+	}
+}
+
+mfem::SparseMatrix BlockDiagonalByElementOperator::AsSparseMatrix() const
+{
+	mfem::SparseMatrix A(height, width);
+	mfem::Array<int> vdofs;
+	for (int e=0; e<fes.GetNE(); e++) {
+		fes.GetElementVDofs(e, vdofs);
+		const auto &elmat = GetElementMatrix(e);
+		A.AddSubMatrix(vdofs, vdofs, elmat);
+	}
+	A.Finalize();
+	return A;
+}
+
+BlockDiagonalByElementOperator Mult(const BlockDiagonalByElementOperator &A, const BlockDiagonalByElementOperator &B)
+{
+	const auto &fes = *A.FESpace();
+	BlockDiagonalByElementOperator r(fes);
+	for (int e=0; e<fes.GetNE(); e++) {
+		const auto &a = A.GetElementMatrix(e);
+		const auto &b = B.GetElementMatrix(e);
+		auto &c = r.GetElementMatrix(e);
+		Mult(a, b, c);
+	}
+	return r;
+}
+
 void BlockDiagonalByElementSolver::SetOperator(const mfem::Operator &_op)
 {
 	op = dynamic_cast<const BlockDiagonalByElementOperator*>(&_op); 
@@ -164,7 +198,7 @@ void BlockDiagonalByElementNonlinearForm::Mult(const mfem::Vector &x, mfem::Vect
 	if (bfnfi.Size()) { MFEM_ABORT("bdr face nonlinear form integrators not supported"); }
 }
 
-mfem::Operator &BlockDiagonalByElementNonlinearForm::GetGradient(const mfem::Vector &x) const 
+BlockDiagonalByElementOperator &BlockDiagonalByElementNonlinearForm::GetGradient(const mfem::Vector &x) const 
 {
 	using namespace mfem; 
 	if (!grad) grad = new BlockDiagonalByElementOperator(*fes); 
