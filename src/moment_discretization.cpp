@@ -36,7 +36,7 @@ InteriorPenaltyDiscretization::InteriorPenaltyDiscretization(
 	SetKappa(kappa);
 }
 
-mfem::Operator *InteriorPenaltyDiscretization::GetOperator() const
+mfem::HypreParMatrix *InteriorPenaltyDiscretization::GetOperator() const
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -77,7 +77,7 @@ LDGDiscretization::LDGDiscretization(
 	beta = 1.0;
 }
 
-mfem::Operator *LDGDiscretization::GetOperator() const
+mfem::HypreParMatrix *LDGDiscretization::GetOperator() const
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -202,7 +202,7 @@ Solver::Mult(const mfem::Vector &b, mfem::Vector &x) const
 	iMt->Mult(t1, x1);
 }
 
-mfem::Operator *BlockMomentDiscretization::FormSchurComplement(const mfem::Operator &op) const
+mfem::HypreParMatrix *BlockMomentDiscretization::FormSchurComplement(const mfem::Operator &op) const
 {
 	const auto *block_op = dynamic_cast<const mfem::BlockOperator*>(&op);
 	if (!block_op) { MFEM_ABORT("operator must be a block operator"); }
@@ -231,7 +231,7 @@ BlockLDGDiscretization::BlockLDGDiscretization(
 	beta.Randomize(12345);
 }
 
-mfem::Operator *BlockLDGDiscretization::GetOperator() const
+mfem::BlockOperator *BlockLDGDiscretization::GetOperator() const
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -294,7 +294,7 @@ BlockIPDiscretization::BlockIPDiscretization(mfem::ParFiniteElementSpace &fes, m
 	SetKappa(kappa);
 }
 
-mfem::Operator *BlockIPDiscretization::GetOperator() const
+mfem::BlockOperator *BlockIPDiscretization::GetOperator() const
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -358,7 +358,7 @@ P1Discretization::P1Discretization(mfem::ParFiniteElementSpace &fes, mfem::ParFi
 {
 }
 
-mfem::Operator *P1Discretization::GetOperator() const
+mfem::HypreParMatrix *P1Discretization::GetOperator() const
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);

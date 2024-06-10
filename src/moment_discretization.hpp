@@ -42,7 +42,7 @@ public:
 	}
 	void SetPenaltyLowerBound(double lb) { mip_val = lb; }
 	void SetSigma(double s) { sigma = s; }
-	mfem::Operator *GetOperator() const override;
+	mfem::HypreParMatrix *GetOperator() const override;
 };
 
 class LDGDiscretization : public MomentDiscretization {
@@ -53,7 +53,7 @@ public:
 	LDGDiscretization(mfem::ParFiniteElementSpace &fes, mfem::Coefficient &total,
 		mfem::Coefficient &absorption, int lumping, const BoundaryConditionMap &bc_map);
 	void SetBeta(const mfem::Vector &b) { beta = b; } 
-	mfem::Operator *GetOperator() const override;
+	mfem::HypreParMatrix *GetOperator() const override;
 };
 
 class BlockMomentDiscretization : public MomentDiscretization {
@@ -87,7 +87,7 @@ public:
 		void SetOperator(const mfem::Operator &op) override;
 		void Mult(const mfem::Vector &b, mfem::Vector &x) const override;
 	};
-	mfem::Operator *FormSchurComplement(const mfem::Operator &op) const;
+	mfem::HypreParMatrix *FormSchurComplement(const mfem::Operator &op) const;
 };
 
 class BlockLDGDiscretization : public BlockMomentDiscretization {
@@ -98,7 +98,7 @@ public:
 		mfem::Coefficient &total, mfem::Coefficient &absorption, 
 		int lumping, const BoundaryConditionMap &bc_map);
 	void SetBeta(const mfem::Vector &b) { beta = b; }
-	mfem::Operator *GetOperator() const override;
+	mfem::BlockOperator *GetOperator() const override;
 
 	friend class ConsistentLDGSMMOperator;
 };
@@ -120,7 +120,7 @@ public:
 	}
 	void SetPenaltyLowerBound(double lb) { mip_val = lb; }
 	void SetScalePenalty(bool use=true) { scale_penalty = use; }
-	mfem::Operator *GetOperator() const override;
+	mfem::BlockOperator *GetOperator() const override;
 
 	friend class ConsistentIPSMMOperator;
 };
@@ -129,7 +129,7 @@ class P1Discretization : public BlockMomentDiscretization {
 public:
 	P1Discretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 		mfem::Coefficient &total, mfem::Coefficient &absorption, int lumping, const BoundaryConditionMap &bc_map);
-	mfem::Operator *GetOperator() const override;
+	mfem::HypreParMatrix *GetOperator() const override;
 
 	friend class ConsistentP1SMMOperator;
 };
