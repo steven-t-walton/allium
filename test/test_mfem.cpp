@@ -46,3 +46,27 @@ TEST(MFEM, PartialSum) {
 		EXPECT_EQ(ex[i], I[i]); 
 	}
 }
+
+TEST(MFEM, BlockVector) {
+	mfem::Array<int> offsets(4);
+	offsets[0] = 0; 
+	offsets[1] = 2; 
+	offsets[2] = 2; 
+	offsets[3] = 4;
+	offsets.PartialSum();
+
+	mfem::Array<int> red_offsets(3);
+	red_offsets[0] = 0;
+	red_offsets[1] = 2;
+	red_offsets[2] = 4;
+	red_offsets.PartialSum();
+	mfem::BlockVector x(offsets);
+	x = 0.0;
+	mfem::BlockVector y(x, offsets[1], red_offsets);
+	y.GetBlock(0) = 1.0;
+	y.GetBlock(1) = 2.0;
+	
+	mfem::Vector ex({0,0,1,1,2,2,2,2});
+	x -= ex;
+	EXPECT_NEAR(x.Norml2(), 0.0, 1e-12);	
+}
