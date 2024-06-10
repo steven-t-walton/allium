@@ -46,37 +46,40 @@ end
 picard = {
 	type = "picard", 
 	nonlinear_solver = {
-		type = "fp", 
+		type = "kinsol", 
 		reltol = 1e-4, 
 		max_iter = 100, 
 		iterative_mode = true, 
-		print_level = 0
+		print_level = 0,
+		kdim = 0
 	}, 
 	energy_balance_solver = {
 		type = "newton", 
-		reltol = 1e-6, 
-		abstol = 1e-6, 
+		reltol = 1e-5, 
+		-- abstol = 0.0, 
 		max_iter = 40, 
 		iterative_mode = true, 
-		print_level = 0
+		print_level = -1
 	}
 }
 
 linearized = {
 	type = "linearized", 
-	nonlinear_solver = {
-		type = "newton", 
-		reltol = 1e-4, 
-		abstol = 1e-4, 
-		max_iter = 1, 
-		iterative_mode = true, 
-		print_level = -1
-	}, 
+	-- more than one newton doesn't converge 
+	-- nonlinear_solver = {
+	-- 	type = "kinsol", 
+	-- 	strategy = "picard", 
+	-- 	reltol = 1e-4, 
+	-- 	abstol = 1e-4, 
+	-- 	max_iter = 2, 
+	-- 	iterative_mode = true, 
+	-- 	print_level = -1
+	-- }, 
 	transport_solver = {
 		type = "gmres", 
 		reltol = 1e-6, 
 		max_iter = 100, 
-		iterative_mode = false, 
+		iterative_mode = true, 
 		kdim = 50,
 		print_level = 0,
 		preconditioner = {
@@ -90,14 +93,6 @@ linearized = {
 			}
 		},
 	},
-	-- rebalance_solver = {
-	-- 	type = "newton", 
-	-- 	reltol = 1e-6, 
-	-- 	abstol = 1e-6, 
-	-- 	max_iter = 40,
-	-- 	iterative_mode = true,
-	-- 	print_level = 0
-	-- },
 }
 
 driver = {
@@ -116,7 +111,7 @@ driver = {
 }
 
 output = {
-	root = "solution", 
+	root = "solution"
 	visualization = {
 		type = "paraview", 
 		frequency = 100

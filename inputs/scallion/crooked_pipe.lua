@@ -65,7 +65,7 @@ function boundary_map(x,y,z)
 end 
 
 mesh = {
-	num_elements = {14,4},
+	num_elements = {140,40},
 	extents = {7,2},
 	serial_refinements = 0,
 	parallel_refinements = 0,
@@ -96,7 +96,7 @@ linearized = {
 		type = "newton", 
 		reltol = 1e-4, 
 		abstol = 1e-4, 
-		max_iter = 1, 
+		max_iter = 30, 
 		iterative_mode = true, 
 		print_level = -1
 	}, 
@@ -118,14 +118,6 @@ linearized = {
 			}
 		},
 	},
-	-- rebalance_solver = {
-	-- 	type = "newton", 
-	-- 	reltol = 1e-10, 
-	-- 	abstol = 1e-10, 
-	-- 	max_iter = 40,
-	-- 	iterative_mode = true,
-	-- 	print_level = 0
-	-- },
 }
 
 driver = {

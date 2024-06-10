@@ -4,7 +4,7 @@ mesh = {
 }
 
 function initial_condition(x,y,z)
-	return 1
+	return 0.025
 end 
 
 materials = {
@@ -46,34 +46,37 @@ end
 picard = {
 	type = "picard", 
 	nonlinear_solver = {
-		type = "fp", 
-		reltol = 1e-4, 
-		max_iter = 100, 
+		type = "kinsol", 
+		reltol = 1e-5,
+		abstol = 1e-5, 
+		max_iter = 500, 
 		iterative_mode = true, 
-		print_level = 0
+		print_level = 0,
+		kdim = 0
 	}, 
 	energy_balance_solver = {
-		type = "newton", 
-		reltol = 1e-6, 
-		abstol = 1e-6, 
-		max_iter = 40, 
-		iterative_mode = true, 
-		print_level = 0
+		type = "local newton", 
+		reltol = 1e-8, 
+		abstol = 1e-2,
+		max_iter = 20, 
+		iterative_mode = true,
+		print_level = -1
 	}
 }
 
 linearized = {
 	type = "linearized", 
+	-- comment for one newton algorithm 
 	nonlinear_solver = {
 		type = "newton", 
 		reltol = 1e-4, 
-		abstol = 1e-4, 
-		max_iter = 10, 
+		max_iter = 30,
 		iterative_mode = true, 
 		print_level = -1
 	}, 
 	transport_solver = {
 		type = "gmres", 
+		abstol = 1e-6, 
 		reltol = 1e-6, 
 		max_iter = 100, 
 		iterative_mode = false, 
@@ -81,6 +84,7 @@ linearized = {
 		print_level = 0,
 		preconditioner = {
 			type = "mip", 
+			kappa = 4,
 			solver = {
 				type = "cg", 
 				reltol = 1e-10, 
@@ -90,14 +94,6 @@ linearized = {
 			}
 		},
 	},
-	-- rebalance_solver = {
-	-- 	type = "newton", 
-	-- 	reltol = 1e-6, 
-	-- 	abstol = 1e-6, 
-	-- 	max_iter = 40,
-	-- 	iterative_mode = true,
-	-- 	print_level = 0
-	-- },
 }
 
 driver = {
@@ -123,7 +119,7 @@ output = {
 	},
 	tracer = {
 		locations = {
-			{0.25}
+			{0.222}
 		},
 	}
 }

@@ -24,17 +24,17 @@ picard = {
 
 linearized = {
 	type = "linearized", 
-	nonlinear_solver = {
-		type = "newton", 
-		reltol = 1e-4, 
-		abstol = 1e-4, 
-		max_iter = 1, 
-		iterative_mode = true, 
-		print_level = -1
-	}, 
+	-- nonlinear_solver = {
+	-- 	type = "newton", 
+	-- 	reltol = 1e-4, 
+	-- 	abstol = 1e-4, 
+	-- 	max_iter = 30, 
+	-- 	iterative_mode = true, 
+	-- 	print_level = -1
+	-- }, 
 	transport_solver = {
 		type = "gmres", 
-		reltol = 1e-8, 
+		reltol = 1e-6, 
 		max_iter = 100, 
 		iterative_mode = false, 
 		kdim = 50,
@@ -50,14 +50,6 @@ linearized = {
 			}
 		},
 	},
-	rebalance_solver = {
-		type = "newton", 
-		reltol = 1e-10, 
-		abstol = 1e-10, 
-		max_iter = 40,
-		iterative_mode = true,
-		print_level = 0
-	},
 }
 
 driver = {
@@ -67,18 +59,16 @@ driver = {
 	basis_type = "lobatto", 
 	solver = linearized, 
 	lump = 7, 
-	sweep_opts = {
-		fixup = {
-			type = "zero and scale", 
-			psi_min = 0, 
-		}
-	}, 
+	fixup = {
+		type = "zero and scale", 
+		psi_min = 0, 
+	},
 	time_step = 1e-10,
 	final_time = 5e-8, 
 }
 
 output = {
-	root = "solution", 
+	root = "solution",
 	visualization = {
 		type = "paraview", 
 		frequency = 25, 
