@@ -9,6 +9,8 @@
 #include "trt_picard.hpp"
 #include "trt_linearized.hpp"
 
+#include "planck.hpp"
+
 TEST(LumpedTRT, Emission1D) {
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0); 
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension(), mfem::BasisType::GaussLobatto); 
@@ -430,4 +432,30 @@ TEST(NewtonTRT, JacobianSolver) {
 	grad_inv.Mult(y, z); 
 	z -= source; 
 	EXPECT_NEAR(z.Norml2(), 0.0, 1e-5); 
+}
+
+TEST(Planck, Spectrum) {
+	mfem::Array<double> bounds(6);
+	bounds[0] = 0.0;
+	bounds[1] = 0.1;
+	bounds[2] = 0.5; 
+	bounds[3] = 3.5;
+	bounds[4] = 20; 
+	bounds[5] = std::numeric_limits<double>::max();
+
+	mfem::Vector planck(bounds.Size()-1);
+	double planck_prev = 0.0;
+	for (int i=0; i<bounds.Size()-1; i++) {
+		double planck_new = IntegrateNormalizedPlanck(bounds[i+1]);  
+		planck(i) = planck_new - planck_prev;
+		planck_prev = planck_new;
+	}
+	mfem::Vector exact({
+		0.00004943070150147316, 
+		0.005243728783692434, 
+		0.494086391272161, 
+		0.5006200269059917, 
+		2.960039689335636e-6});
+	planck -= exact; 
+	EXPECT_NEAR(planck.Normlinf(), 0.0, 1e-5);
 }
