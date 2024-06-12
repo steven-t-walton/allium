@@ -23,6 +23,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_source.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_integrators.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_discretization.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/planck.hpp
 )
 
 LIST(APPEND srcs 
