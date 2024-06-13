@@ -16,11 +16,21 @@ using TransportVectorLayout = Kokkos::layout_right;
 #endif
 
 // index into transport vector with (energy, angle, space) 
+struct TransportIndex {
+	static constexpr int GROUP = 0;
+	static constexpr int ANGLE = 1;
+	static constexpr int SPACE = 2;
+};
 using TransportVectorExtents = Kokkos::dextents<std::size_t,3>; 
 using TransportVectorView = Kokkos::mdspan<double,TransportVectorExtents,TransportVectorLayout>; 
 using ConstTransportVectorView = Kokkos::mdspan<const double,TransportVectorExtents,TransportVectorLayout>; 
 
 // index into moment vector with (energy, moment index, space)
+struct MomentIndex {
+	static constexpr int GROUP = 0;
+	static constexpr int MOMENT = 1; 
+	static constexpr int SPACE = 2;
+};
 using MomentVectorExtents = Kokkos::dextents<std::size_t,3>;
 using MomentVectorView = Kokkos::mdspan<double,MomentVectorExtents,Kokkos::layout_right>;  
 using ConstMomentVectorView = Kokkos::mdspan<const double,MomentVectorExtents,Kokkos::layout_right>;
