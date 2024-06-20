@@ -1,6 +1,7 @@
 #pragma once 
 
 #include <numbers>
+#include <cmath>
 
 namespace constants {
 
