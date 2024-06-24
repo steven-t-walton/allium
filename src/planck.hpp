@@ -23,6 +23,7 @@ constexpr double coef_17 = 1.0/1270312243200;
 constexpr double coef_19 = -3.617/202741834014720;
 constexpr double coef_21 = 43.867/107290978560589824;
 constexpr double coef = 15.0/pow(constants::pi,4);
+constexpr double rosseland_max = pow(std::numeric_limits<double>::max(), 0.25);
 
 inline double PlanckTaylorSeries9(double x) {
 	const double x2 = x*x;
@@ -75,9 +76,7 @@ inline double PlanckTaylorSeries21(double x) {
 	return taylor;
 }
 
-} // end namespace internal 
-
-constexpr int planck_taylor_degree = 9;
+constexpr int planck_taylor_degree = 21;
 inline double PlanckTaylorSeries(double x) {
 	if constexpr (planck_taylor_degree == 9) {
 		return internal::PlanckTaylorSeries9(x);
@@ -93,7 +92,7 @@ inline double PlanckTaylorSeries(double x) {
 	}
 }
 
-constexpr int planck_polylog_degree = 5;
+constexpr int planck_polylog_degree = 9;
 inline double PlanckPolyLogarithmic(double x) {
 	const double x2 = x*x;
 	const double x3 = x2*x;
@@ -113,24 +112,55 @@ inline double PlanckPolyLogarithmic(double x) {
 	return 1.0 + internal::coef * val;
 }
 
+} // end namespace internal 
+
 inline double IntegrateNormalizedPlanck(double x) {
 	if (x > 1e100) return 1.0;
-	const double taylor = PlanckTaylorSeries(x);
-	const double poly = PlanckPolyLogarithmic(x);
+	if (x==0.0) return 0.0;
+	const double taylor = internal::PlanckTaylorSeries(x);
+	const double poly = internal::PlanckPolyLogarithmic(x);
 	const double integral = std::min(taylor, poly);
 	return integral;
 }
 
 inline double IntegrateNormalizedPlanck(double E, double T) {
-	const double x = E/(constants::Boltzmann * T);
+	const double x = E/T;
 	return IntegrateNormalizedPlanck(x);
 }
 
-inline double IntegrateNormalizedRosseland(double x, double planck) {
+inline double PlanckToRosseland(double x, double planck) {
+	if (x > internal::rosseland_max) return planck;
 	return planck - internal::coef/4.0 * pow(x,4) / (std::exp(x) - 1.0);
 }
 
-inline double IntegrateNormalizedRosseland(double E, double T, double planck) {
-	const double x = E/(constants::Boltzmann*T); 
-	return IntegrateNormalizedPlanck(x,planck);
+inline double IntegrateNormalizedRosseland(double x) {
+	const double planck = IntegrateNormalizedPlanck(x);
+	return PlanckToRosseland(x, planck);
 }
+
+inline double IntegrateNormalizedRosseland(double E, double T) {
+	const double x = E/T;
+	return IntegrateNormalizedRosseland(x);
+}
+
+void EvalPlanckSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum);
+void EvalRosselandSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum);
+
+class MultiGroupPlanckCoefficient : public mfem::VectorCoefficient {
+private:
+	const mfem::Array<double> &energy_grid; 
+	mfem::Coefficient &T;
+public:
+	MultiGroupPlanckCoefficient(const mfem::Array<double> &energy_grid, mfem::Coefficient &T);
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+};
+
+class MultiGroupRosselandCoefficient : public mfem::VectorCoefficient {
+private:
+	const mfem::Array<double> &energy_grid; 
+	const mfem::GridFunction *T = nullptr;
+public:
+	MultiGroupRosselandCoefficient(const mfem::Array<double> &energy_grid);
+	void SetTemperature(const mfem::GridFunction &temperature) { T = &temperature; }
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+};
