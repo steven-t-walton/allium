@@ -3,6 +3,7 @@
 #include "config.hpp"
 #include "log.hpp"
 #include "lumping.hpp"
+#include "multigroup.hpp"
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	mfem::GridFunction &_total_data, const BoundaryConditionMap &bc_map, int use_lumping)
@@ -673,8 +674,9 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 {
 	const int G = energy_grid.Size() - 1; 
 	for (int g=0; g<G; g++) {
-		double E = (energy_grid[g+1] + energy_grid[g])/2; 
-		source_coef.SetEnergy(E); inflow_coef.SetEnergy(E); 
+		const auto e_low = energy_grid[g]; const auto e_high = energy_grid[g+1];
+		const auto mid = (e_low + e_high)/2;
+		source_coef.SetEnergy(e_low, e_high, mid); inflow_coef.SetEnergy(e_low, e_high, mid); 
 		for (auto a=0; a<quad.Size(); a++) {
 			const auto &Omega = quad.GetOmega(a); 
 			source_coef.SetAngle(Omega); inflow_coef.SetAngle(Omega); 
@@ -688,6 +690,33 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 				source_view(g,a,i) = bform[i]; 
 			}
 		}		
+	}
+}
+
+void FormTransportSource(mfem::FiniteElementSpace &fes, const AngularQuadrature &quad, 
+	const MultiGroupEnergyGrid &energy_grid, PhaseSpaceCoefficient &source_coef, 
+	PhaseSpaceCoefficient &inflow_coef, mfem::Vector &source)
+{
+	TransportVectorExtents psi_ext(energy_grid.Size(), quad.Size(), fes.GetVSize());
+	auto source_view = TransportVectorView(source.GetData(), psi_ext);
+	for (int g=0; g<energy_grid.Size(); g++) {
+		source_coef.SetEnergy(energy_grid.LowerBound(g), energy_grid.UpperBound(g), 
+			energy_grid.MeanEnergy(g));
+		inflow_coef.SetEnergy(energy_grid.LowerBound(g), energy_grid.UpperBound(g), 
+			energy_grid.MeanEnergy(g));		
+		for (int a=0; a<quad.Size(); a++) {
+			const auto &Omega = quad.GetOmega(a);
+			source_coef.SetAngle(Omega); inflow_coef.SetAngle(Omega);
+
+			mfem::LinearForm bform(&fes); 
+			bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
+			mfem::VectorConstantCoefficient Q(Omega); 
+			bform.AddBdrFaceIntegrator(new mfem::BoundaryFlowIntegrator(inflow_coef, Q, -1.0, -0.5));
+			bform.Assemble(); 
+			for (int i=0; i<bform.Size(); i++) {
+				source_view(g,a,i) = bform[i]; 
+			}
+		}
 	}
 }
 

@@ -107,6 +107,11 @@ public:
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 
 	PhaseSpaceCoefficient &inflow_coef, TransportVectorView source_view); 
+class MultiGroupEnergyGrid; // forward declare 
+void FormTransportSource(
+	mfem::FiniteElementSpace &fes, const AngularQuadrature &quad,const MultiGroupEnergyGrid &energy_grid, 
+	PhaseSpaceCoefficient &inflow_coef, PhaseSpaceCoefficient &source_coef, 
+	mfem::Vector &source);
 
 // assemble face mass matrices using the FaceElementTransformations object 
 // used in sweep by multiplying the face matrices by Omega.normal 
