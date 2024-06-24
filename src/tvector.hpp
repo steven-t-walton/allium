@@ -17,7 +17,7 @@ using TransportVectorLayout = Kokkos::layout_right;
 
 // index into transport vector with (energy, angle, space) 
 struct TransportIndex {
-	static constexpr int GROUP = 0;
+	static constexpr int ENERGY = 0;
 	static constexpr int ANGLE = 1;
 	static constexpr int SPACE = 2;
 };
@@ -27,7 +27,7 @@ using ConstTransportVectorView = Kokkos::mdspan<const double,TransportVectorExte
 
 // index into moment vector with (energy, moment index, space)
 struct MomentIndex {
-	static constexpr int GROUP = 0;
+	static constexpr int ENERGY = 0;
 	static constexpr int MOMENT = 1; 
 	static constexpr int SPACE = 2;
 };
@@ -48,6 +48,11 @@ void ProjectPsi(const mfem::FiniteElementSpace &fes, const AngularQuadrature &qu
 	PhaseSpaceCoefficient &f, TransportVectorView psi); 
 void ProjectPsi(const mfem::FiniteElementSpace &fes, const AngularQuadrature &quad, 
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &f, mfem::Vector &psi); 
+
+// forward declare to avoid circular dependency
+class MultiGroupEnergyGrid;
+void ProjectPsi(const mfem::FiniteElementSpace &fes, const AngularQuadrature &quad, 
+	const MultiGroupEnergyGrid &energy_grid, PhaseSpaceCoefficient &f, mfem::Vector &psi);
 
 class SNTimeMassMatrix : public mfem::Operator
 {
