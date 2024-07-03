@@ -46,24 +46,17 @@ void MultiGroupPlanckCoefficient::Eval(
 }
 
 MultiGroupRosselandCoefficient::MultiGroupRosselandCoefficient(
-	const mfem::Array<double> &grid)
-	: energy_grid(grid), mfem::VectorCoefficient(grid.Size()-1)
+	const mfem::Array<double> &grid, mfem::Coefficient &T)
+	: energy_grid(grid), T(T), mfem::VectorCoefficient(grid.Size()-1)
 {
 }
 
 void MultiGroupRosselandCoefficient::Eval(
 	mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
 {
-	assert(T);
 	v.SetSize(vdim);
-	mfem::GridFunctionCoefficient coef(T);
-	const double temperature = coef.Eval(trans, ip);
+	const double temperature = T.Eval(trans, ip);
 	const double gray = 4.0 * constants::StefanBoltzmann * std::pow(temperature, 3);
-	double ross_prev = 0.0;
-	double ross_new = 0.0;
-	for (int g=0; g<vdim; g++) {
-		ross_new = IntegrateNormalizedRosseland(energy_grid[g+1], temperature);
-		v(g) = (ross_new - ross_prev) * gray;
-		ross_prev = ross_new;
-	}
+	EvalRosselandSpectrum(energy_grid, temperature, v);
+	v *= gray;
 }

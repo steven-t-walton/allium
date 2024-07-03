@@ -158,9 +158,8 @@ public:
 class MultiGroupRosselandCoefficient : public mfem::VectorCoefficient {
 private:
 	const mfem::Array<double> &energy_grid; 
-	const mfem::GridFunction *T = nullptr;
+	mfem::Coefficient &T;
 public:
-	MultiGroupRosselandCoefficient(const mfem::Array<double> &energy_grid);
-	void SetTemperature(const mfem::GridFunction &temperature) { T = &temperature; }
+	MultiGroupRosselandCoefficient(const mfem::Array<double> &energy_grid, mfem::Coefficient &T);
 	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
 };
