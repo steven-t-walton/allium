@@ -216,9 +216,6 @@ void SetIterativeSolverOptions(sol::table &table, mfem::IterativeSolver &solver)
 	solver.SetPrintLevel( (dynamic_cast<mfem::KINSolver*>(&solver) ? 1 : print_level)); 
 	sol::optional<double> abstol = table["abstol"]; 
 	sol::optional<double> reltol = table["reltol"]; 
-	if (!abstol and !reltol) {
-		MFEM_ABORT("must specify one of \"abstol\" or \"reltol\""); 
-	}
 	if (abstol) { solver.SetAbsTol(abstol.value()); }
 	else { table["abstol"] = 0.0; }
 	if (reltol) { solver.SetRelTol(reltol.value()); }
