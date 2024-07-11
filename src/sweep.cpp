@@ -552,8 +552,14 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 void InverseAdvectionOperator::AssembleLocalMatrices() 
 {
 	const auto dim = mesh.Dimension(); 
-	// const auto G = total_data.FESpace()->GetVDim(); 
 	const auto G = total.GetVDim();
+
+	mfem::Array2D<mfem::DenseMatrix*> local_mass_mats(G,G);
+	for (int i=0; i<G; i++) {
+		for (int j=0; j<G; j++) {
+			local_mass_mats(i,j) = new mfem::DenseMatrix;
+		}
+	}
 
 	mass_matrices.SetSize(fes.GetNE()*G);
 	auto mass_mat_view = Kokkos::mdspan(mass_matrices.GetData(), G, fes.GetNE());  
@@ -564,13 +570,11 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 		auto &trans = *mesh.GetElementTransformation(e);
 		LumpedIntegrationRule lumped_ir(trans.GetGeometryType()); 
 
+		MGMassIntegrator mi(total);
+		if (IsMassLumped(lump)) mi.SetIntegrationRule(lumped_ir);
+		mi.AssembleElementMatrices(fe, trans, local_mass_mats);
 		for (int g=0; g<G; g++) {
-			auto *total_g = total.GetGroupCoefficient(g);
-			mfem::MassIntegrator mi(*total_g); 
-			mass_mat_view(g,e) = new mfem::DenseMatrix; 
-			if (IsMassLumped(lump)) mi.SetIntegrationRule(lumped_ir); 
-			mi.AssembleElementMatrix(fe, trans, *mass_mat_view(g,e)); 
-			delete total_g;
+			mass_mat_view(g,e) = new mfem::DenseMatrix(*local_mass_mats(g,g));
 		}
 
 		mfem::Vector Omega(dim); 
@@ -618,6 +622,12 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			elmat.GetSubMatrix(0,dof1,dof1,dof1+dof2, *face_mat_view(f,0,1)); 
 			elmat.GetSubMatrix(dof1,dof1+dof2,0,dof1, *face_mat_view(f,1,0)); 
 			elmat.GetSubMatrix(dof1,dof1+dof2,dof1,dof1+dof2, *face_mat_view(f,1,1)); 			
+		}
+	}
+
+	for (int i=0; i<G; i++) {
+		for (int j=0; j<G; j++) {
+			delete local_mass_mats(i,j);
 		}
 	}
 }
