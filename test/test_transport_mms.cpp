@@ -2,6 +2,7 @@
 #include "sweep.hpp"
 #include "transport_op.hpp"
 #include "lumping.hpp"
+#include "multigroup.hpp"
 
 double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
@@ -43,14 +44,13 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
 	mfem::Array<double> energy_grid(2); 
 	FormTransportSource(fes, quad, energy_grid, qmms_coef, inflow_coef, source_view);
 
-	mfem::GridFunction total_data(&fes); 
-	total_data.ProjectCoefficient(total); 
+	GrayMGCoefficient total_coef(total, 1);
 	BoundaryConditionMap bc_map;
 	const auto &bdr_attr = mesh.bdr_attributes;
 	for (const auto &attr : bdr_attr) {
 		bc_map[attr] = INFLOW;
 	}
-	InverseAdvectionOperator Linv(fes, quad, total_data, bc_map, lump); 
+	InverseAdvectionOperator Linv(fes, quad, total_coef, bc_map, lump); 
 
 	mfem::ParBilinearForm Ms_form(&fes); 
 	if (IsMassLumped(lump))

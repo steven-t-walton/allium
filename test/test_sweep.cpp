@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 #include "sweep.hpp"
+#include "multigroup.hpp"
 
 // test sweeping with inflow, no source, and no collision term 
 // solution is constant and equal to the inflow source 
@@ -19,10 +20,8 @@ bool SweepConstantSolution(mfem::Mesh &smesh, int fe_order, bool lump=false) {
 	energy_grid[1] = 1; 
 	energy_grid[2] = 2; 
 	mfem::Vector zero_data(2); zero_data = 0.0; 
-	mfem::VectorConstantCoefficient zero(zero_data); 
-	mfem::FiniteElementSpace sigma_fes(&mesh, &fec, 2); 
-	mfem::GridFunction sigma(&sigma_fes); 
-	sigma.ProjectCoefficient(zero); 
+	mfem::ConstantCoefficient zero(0.0);
+	GrayMGCoefficient sigma(zero, 2);
 
 	TransportVectorExtents psi_ext(2, quad.Size(), fes.GetVSize()); 
 	const auto psi_size = TotalExtent(psi_ext); 
@@ -123,12 +122,10 @@ double ExponentialSolution(mfem::Mesh &smesh, int fe_order,
 	mfem::ParFiniteElementSpace sigma_fes(&mesh, &fec, 2); 
 	mfem::Array<double> energy_grid(3); 
 	energy_grid[0] = 0; energy_grid[1] = 0.5; energy_grid[2] = 1.0; 
-	mfem::ParGridFunction total(&sigma_fes); 
 	mfem::Vector coef_data(2); 
 	coef_data[0] = 1.0; 
 	coef_data[1] = 0.5; 
-	mfem::VectorConstantCoefficient coef(coef_data); 
-	total.ProjectCoefficient(coef); 
+	ConstantMGCoefficient total(coef_data);
 
 	ConstantPhaseSpaceCoefficient inflow(1.0); 
 	ConstantPhaseSpaceCoefficient zero(0.0); 
@@ -294,12 +291,10 @@ void L_Linv(mfem::Mesh &smesh, bool lump) {
 	mfem::ParFiniteElementSpace sigma_fes(&mesh, &fec, 2); 
 	mfem::Array<double> energy_grid(3); 
 	energy_grid[0] = 0; energy_grid[1] = 0.5; energy_grid[2] = 1.0; 
-	mfem::ParGridFunction total(&sigma_fes); 
 	mfem::Vector coef_data(2); 
 	coef_data[0] = 1.0; 
 	coef_data[1] = 0.5; 
-	mfem::VectorConstantCoefficient coef(coef_data); 
-	total.ProjectCoefficient(coef); 
+	ConstantMGCoefficient total(coef_data);
 
 	TransportVectorExtents psi_ext(2, quad.Size(), fes.GetVSize()); 
 	const auto psi_size = TotalExtent(psi_ext); 

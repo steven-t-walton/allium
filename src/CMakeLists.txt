@@ -26,6 +26,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_discretization.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/planck.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/multigroup.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/mg_form.hpp
 )
 
 LIST(APPEND srcs 
@@ -53,6 +54,7 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_discretization.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/planck.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/multigroup.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/mg_form.cpp
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)

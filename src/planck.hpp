@@ -145,21 +145,3 @@ inline double IntegrateNormalizedRosseland(double E, double T) {
 
 void EvalPlanckSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum);
 void EvalRosselandSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum);
-
-class MultiGroupPlanckCoefficient : public mfem::VectorCoefficient {
-private:
-	const mfem::Array<double> &energy_grid; 
-	mfem::Coefficient &T;
-public:
-	MultiGroupPlanckCoefficient(const mfem::Array<double> &energy_grid, mfem::Coefficient &T);
-	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
-};
-
-class MultiGroupRosselandCoefficient : public mfem::VectorCoefficient {
-private:
-	const mfem::Array<double> &energy_grid; 
-	mfem::Coefficient &T;
-public:
-	MultiGroupRosselandCoefficient(const mfem::Array<double> &energy_grid, mfem::Coefficient &T);
-	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
-};

@@ -8,13 +8,16 @@
 #include "phase_coefficient.hpp"
 #include "fixup.hpp"
 
+class MultiGroupEnergyGrid; // forward declare to prevent compile dependency
+class MultiGroupCoefficient;
 class InverseAdvectionOperator : public mfem::Operator 
 {
 private:
 	mfem::ParMesh &mesh; 
 	mfem::ParFiniteElementSpace &fes; 
 	const AngularQuadrature &quad; 
-	mfem::GridFunction &total_data; 
+	// mfem::GridFunction &total_data; 
+	MultiGroupCoefficient &total;
 
 	// multi index extents for angular flux and the "ghost" 
 	// buffer psi_fnbr
@@ -72,7 +75,7 @@ private:
 	NegativeFluxFixupOperator *fixup_op = nullptr; 
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-		mfem::GridFunction &_total_data, const BoundaryConditionMap &bc_map, int lump=0); 
+		MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int lump=0); 
 	~InverseAdvectionOperator(); 
 
 	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
@@ -107,7 +110,6 @@ public:
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 
 	PhaseSpaceCoefficient &inflow_coef, TransportVectorView source_view); 
-class MultiGroupEnergyGrid; // forward declare 
 void FormTransportSource(
 	mfem::FiniteElementSpace &fes, const AngularQuadrature &quad,const MultiGroupEnergyGrid &energy_grid, 
 	PhaseSpaceCoefficient &inflow_coef, PhaseSpaceCoefficient &source_coef, 

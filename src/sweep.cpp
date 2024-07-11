@@ -6,8 +6,8 @@
 #include "multigroup.hpp"
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-	mfem::GridFunction &_total_data, const BoundaryConditionMap &bc_map, int use_lumping)
-	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total_data(_total_data), lump(use_lumping)
+	MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int use_lumping)
+	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total(total), lump(use_lumping)
 {
 	if (lump) {
 		const auto *fec = fes.FEColl(); 
@@ -20,7 +20,8 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	const auto Ne = mesh.GetNE(); // processor-local number of elements 
 	const auto Ndof = fes.GetVSize(); // local degrees of freedom 
 	const auto Nomega = quad.Size(); // number of angles 
-	const auto G = total_data.FESpace()->GetVDim(); // number of energy groups 
+	// const auto G = total_data.FESpace()->GetVDim(); // number of energy groups 
+	const auto G = total.GetVDim();
 	psi_ext = TransportVectorExtents(G, Nomega, Ndof); // multi index based on energy, angle, space 
 	// set operator sizes to size of psi 
 	height = width = TotalExtent(psi_ext);
@@ -551,7 +552,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 void InverseAdvectionOperator::AssembleLocalMatrices() 
 {
 	const auto dim = mesh.Dimension(); 
-	const auto G = total_data.FESpace()->GetVDim(); 
+	// const auto G = total_data.FESpace()->GetVDim(); 
+	const auto G = total.GetVDim();
 
 	mass_matrices.SetSize(fes.GetNE()*G);
 	auto mass_mat_view = Kokkos::mdspan(mass_matrices.GetData(), G, fes.GetNE());  
@@ -563,11 +565,12 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 		LumpedIntegrationRule lumped_ir(trans.GetGeometryType()); 
 
 		for (int g=0; g<G; g++) {
-			mfem::GridFunctionCoefficient total(&total_data, g+1); // component is 1-based :( 
-			mfem::MassIntegrator mi(total); 
+			auto *total_g = total.GetGroupCoefficient(g);
+			mfem::MassIntegrator mi(*total_g); 
 			mass_mat_view(g,e) = new mfem::DenseMatrix; 
 			if (IsMassLumped(lump)) mi.SetIntegrationRule(lumped_ir); 
 			mi.AssembleElementMatrix(fe, trans, *mass_mat_view(g,e)); 
+			delete total_g;
 		}
 
 		mfem::Vector Omega(dim); 

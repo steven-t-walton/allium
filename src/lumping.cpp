@@ -92,3 +92,11 @@ void QuadratureLumpedLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElem
 	lfi->SetIntRule(&rule);
 	lfi->AssembleRHSElementVect(el1, el2, Tr, elvect);
 }
+
+void QuadratureLumpedMGIntegrator::AssembleElementMatrices(
+	const mfem::FiniteElement &fe, mfem::ElementTransformation &trans, const mfem::Array2D<mfem::DenseMatrix*> &elmats)
+{
+	LumpedIntegrationRule rule(trans.GetGeometryType());
+	bfi->SetIntegrationRule(rule);
+	bfi->AssembleElementMatrices(fe, trans, elmats);
+}

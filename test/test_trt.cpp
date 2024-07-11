@@ -397,12 +397,13 @@ TEST(NewtonTRT, JacobianSolver) {
 
 	mfem::GridFunction total_data(&fes); 
 	total_data.ProjectCoefficient(total); 
+	GridFunctionMGCoefficient total_coef(total_data);
 	BoundaryConditionMap bc_map;
 	const auto &bdr_attr = mesh.bdr_attributes;
 	for (const auto &attr : bdr_attr) {
 		bc_map[attr] = INFLOW;
 	}
-	InverseAdvectionOperator Linv(fes, quad, total_data, bc_map); 
+	InverseAdvectionOperator Linv(fes, quad, total_coef, bc_map); 
 
 	mfem::Array<int> offsets(3); 
 	offsets[0] = 0; 
@@ -556,7 +557,7 @@ TEST(Planck, Coefficient) {
 	T = temp;
 
 	mfem::GridFunctionCoefficient Tcoef(&T);
-	MultiGroupPlanckCoefficient B(bounds, Tcoef);
+	PlanckSpectrumMGCoefficient B(bounds, Tcoef);
 	mfem::Vector planck;
 	auto &trans = *mesh.GetElementTransformation(0);
 	const auto &ip = mfem::Geometries.GetCenter(trans.GetGeometryType());
@@ -568,7 +569,6 @@ TEST(Planck, Coefficient) {
 		4.053698254743982e-7, 
 		0.9999995924322917
 	});
-	exact *= constants::StefanBoltzmann * pow(temp,4);
 	for (int i=0; i<exact.Size(); i++) {
 		const double diff = std::fabs(exact(i) - planck(i));
 		if (exact(i) > 0.0) {
@@ -596,8 +596,8 @@ TEST(Planck, RosselandCoefficient) {
 	mfem::GridFunction T(&fes);
 	T = temp;
 
-	MultiGroupRosselandCoefficient R(bounds);
-	R.SetTemperature(T);
+	mfem::GridFunctionCoefficient Tcoef(&T);
+	RosselandSpectrumMGCoefficient R(bounds, Tcoef);
 	mfem::Vector ross;
 	auto &trans = *mesh.GetElementTransformation(0);
 	const auto &ip = mfem::Geometries.GetCenter(trans.GetGeometryType());
@@ -609,7 +609,6 @@ TEST(Planck, RosselandCoefficient) {
 		1.0210757723025419e-7, 
 		0.9999998973422306
 	});
-	exact *= 4 * constants::StefanBoltzmann * pow(temp,3);
 	for (int i=0; i<exact.Size(); i++) {
 		const double diff = std::fabs(exact(i) - ross(i));
 		if (exact(i) > 0.0) {
@@ -672,3 +671,20 @@ TEST(Planck, EmissionNFI) {
 	double inf = ex.Normlinf();
 	EXPECT_NEAR(inf, 0.0, 1e-12);
 }
+
+// TEST(Planck, RosselandOperator) {
+// 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0);
+// 	auto fec = mfem::L2_FECollection(1, 1);
+// 	auto fes = mfem::FiniteElementSpace(&mesh, &fec);
+
+// 	auto grid = MultiGroupEnergyGrid::MakeLogSpaced(1e-2, 1e6, 4, true);
+// 	MomentVectorExtents phi_ext(grid.Size(), 1, fes.GetVSize());
+// 	mfem::ConstantCoefficient temperature(1000.0);
+// 	MultiGroupRosselandCoefficient rosseland(grid.Bounds(), temperature);
+// 	WeightedGroupCollapseOperator collapse(fes, phi_ext, rosseland);
+
+// 	mfem::Vector mg(TotalExtent(phi_ext)), gray(fes.GetVSize());
+// 	mg = 1.0;
+// 	collapse.Mult(mg, gray);
+// 	gray.Print();
+// }

@@ -2,6 +2,7 @@
 #include "linalg.hpp"
 #include "transport_op.hpp"
 #include "sweep.hpp"
+#include "multigroup.hpp"
 
 TEST(Linalg, BlockInverse) {
 	mfem::Mesh smesh = mfem::Mesh::MakeCartesian2D(10,10,mfem::Element::QUADRILATERAL); 
@@ -86,14 +87,13 @@ TEST(Linal, BlockLDUInverse) {
 	Ms_form.Assemble(); 
 	Ms_form.Finalize(); 
 
-	mfem::GridFunction total_data(&fes); 
-	total_data.ProjectCoefficient(total); 
+	GrayMGCoefficient total_coef(total, 1);
 	BoundaryConditionMap bc_map;
 	const auto &bdr_attr = mesh.bdr_attributes;
 	for (const auto &attr : bdr_attr) {
 		bc_map[attr] = INFLOW;
 	}
-	InverseAdvectionOperator Linv(fes, quad, total_data, bc_map); 
+	InverseAdvectionOperator Linv(fes, quad, total_coef, bc_map); 
 
 	TransportOperator T(D, Linv, Ms_form, x.GetBlock(1)); 
 	mfem::GMRESSolver Sinv; 
