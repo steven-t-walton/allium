@@ -169,14 +169,14 @@ JacobianSolver::SetOperator(const mfem::Operator &op)
 		meb_grad_inv, 
 		block_op->GetBlock(1,0)); 
 	schur_op.reset(ptr); 
-	if (dsa_solver) {
-		const auto &dB = dynamic_cast<const F12Operator*>(&block_op->GetBlock(0,1))->GetEmissionGradient(); 
-		dsa_Ms.reset(new mfem::TripleProductOperator(&dB, &meb_grad_inv, &block_op->GetBlock(1,0), false, false, false)); 
-		dsa_op.reset(dsa_disc->GetOperator());
-		dsa_solver->SetOperator(*dsa_op);
-		dsa_prec.reset(new DiffusionSyntheticAccelerationOperator(*dsa_solver, *dsa_Ms)); 
-		schur_solver.SetPreconditioner(*dsa_prec); 
-	}
+	// if (dsa_solver) {
+	// 	const auto &dB = dynamic_cast<const F12Operator*>(&block_op->GetBlock(0,1))->GetEmissionGradient(); 
+	// 	dsa_Ms.reset(new mfem::TripleProductOperator(&dB, &meb_grad_inv, &block_op->GetBlock(1,0), false, false, false)); 
+	// 	dsa_op.reset(dsa_disc->GetOperator());
+	// 	dsa_solver->SetOperator(*dsa_op);
+	// 	dsa_prec.reset(new DiffusionSyntheticAccelerationOperator(*dsa_solver, *dsa_Ms)); 
+	// 	schur_solver.SetPreconditioner(*dsa_prec); 
+	// }
 	schur_solver.SetOperator(*schur_op); 
 }
 

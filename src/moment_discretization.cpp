@@ -4,9 +4,8 @@
 #include "moment_integrators.hpp"
 
 MomentDiscretization::MomentDiscretization(
-	mfem::ParFiniteElementSpace &fes, mfem::Coefficient &total, 
-	mfem::Coefficient &absorption, int lumping, const BoundaryConditionMap &bc_map)
-	: fes(fes), total(total), absorption(absorption), lumping(lumping), bc_map(bc_map)
+	mfem::ParFiniteElementSpace &fes, const BoundaryConditionMap &bc_map, int lumping)
+	: fes(fes), bc_map(bc_map), lumping(lumping)
 {
 	marshak_bdr_attrs = CreateBdrAttributeMarker<INFLOW>(bc_map);
 	reflect_bdr_attrs = CreateBdrAttributeMarker<REFLECTIVE>(bc_map);
@@ -29,14 +28,14 @@ void MomentDiscretization::SetTimeAbsorption(double sigma)
 }
 
 InteriorPenaltyDiscretization::InteriorPenaltyDiscretization(
-	mfem::ParFiniteElementSpace &fes, mfem::Coefficient &total, mfem::Coefficient &absorption, 
-	int lumping, const BoundaryConditionMap &bc_map)
-	: MomentDiscretization(fes, total, absorption, lumping, bc_map)
+	mfem::ParFiniteElementSpace &fes, const BoundaryConditionMap &bc_map, int lumping)
+	: MomentDiscretization(fes, bc_map, lumping)
 {
 	SetKappa(kappa);
 }
 
-mfem::HypreParMatrix *InteriorPenaltyDiscretization::GetOperator() const
+mfem::HypreParMatrix *InteriorPenaltyDiscretization::GetOperator(
+	mfem::Coefficient &total, mfem::Coefficient &absorption) const 
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -66,9 +65,8 @@ mfem::HypreParMatrix *InteriorPenaltyDiscretization::GetOperator() const
 }
 
 LDGDiscretization::LDGDiscretization(
-	mfem::ParFiniteElementSpace &fes, mfem::Coefficient &total, mfem::Coefficient &absorption, 
-	int lumping, const BoundaryConditionMap &bc_map)
-	: MomentDiscretization(fes, total, absorption, lumping, bc_map)
+	mfem::ParFiniteElementSpace &fes, const BoundaryConditionMap &bc_map, int lumping)
+	: MomentDiscretization(fes, bc_map, lumping)
 {
 	auto *mesh = fes.GetParMesh();
 	const auto dim = mesh->Dimension();
@@ -77,7 +75,8 @@ LDGDiscretization::LDGDiscretization(
 	beta = 1.0;
 }
 
-mfem::HypreParMatrix *LDGDiscretization::GetOperator() const
+mfem::HypreParMatrix *LDGDiscretization::GetOperator(
+	mfem::Coefficient &total, mfem::Coefficient &absorption) const 
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -133,18 +132,20 @@ BlockMomentDiscretization::BlockMomentDiscretization(
 	mfem::ParFiniteElementSpace &fes, 
 	mfem::ParFiniteElementSpace &vfes, mfem::Coefficient &total, mfem::Coefficient &absorption, 
 	int lumping, const BoundaryConditionMap &bc_map)
-	: MomentDiscretization(fes, total, absorption, lumping, bc_map), vfes(vfes)
+	: fes(fes), vfes(vfes), total(total), absorption(absorption), lumping(lumping), bc_map(bc_map)
 {
 	offsets.SetSize(3);
 	offsets[0] = 0; 
 	offsets[1] = vfes.GetVSize(); 
 	offsets[2] = fes.GetVSize(); 
 	offsets.PartialSum();
+
+	marshak_bdr_attrs = CreateBdrAttributeMarker<INFLOW>(bc_map);
+	reflect_bdr_attrs = CreateBdrAttributeMarker<REFLECTIVE>(bc_map);
 }
 
 void BlockMomentDiscretization::SetTimeAbsorption(double scalar, double vector)
 {
-	MomentDiscretization::SetTimeAbsorption(scalar);
 	if (!Mtime_v and vector > 0.0) {
 		const bool lump_mass = IsMassLumped(lumping);
 		mfem::ParBilinearForm form(&vfes);
@@ -156,6 +157,19 @@ void BlockMomentDiscretization::SetTimeAbsorption(double scalar, double vector)
 		form.Finalize(); 
 		Mtime_v.reset(form.ParallelAssemble());
 	}
+
+	if (!Mtime_s and scalar > 0.0) {
+		const bool lump_mass = IsMassLumped(lumping);
+		mfem::ParBilinearForm form(&fes);
+		if (lump_mass)
+			form.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator));
+		else
+			form.AddDomainIntegrator(new mfem::MassIntegrator);
+		form.Assemble(); 
+		form.Finalize(); 
+		Mtime_s.reset(form.ParallelAssemble());
+	}
+	time_absorption_s = scalar;
 	time_absorption_v = vector;
 }
 
@@ -262,7 +276,7 @@ mfem::BlockOperator *BlockLDGDiscretization::GetOperator() const
 	Maform.Assemble(); 
 	Maform.Finalize(); 
 	auto *Ma = Maform.ParallelAssemble();
-	if (Mtime) Ma->Add(time_absorption, *Mtime);
+	if (Mtime_s) Ma->Add(time_absorption_s, *Mtime_s);
 
 	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
 	mfem::ConstantCoefficient neg_one(-1.0); 
@@ -327,7 +341,7 @@ mfem::BlockOperator *BlockIPDiscretization::GetOperator() const
 	Maform.Assemble(); 
 	Maform.Finalize(); 
 	auto *Ma = Maform.ParallelAssemble();
-	if (Mtime) Ma->Add(time_absorption, *Mtime);
+	if (Mtime_s) Ma->Add(time_absorption_s, *Mtime_s);
 
 	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
 	mfem::ConstantCoefficient neg_one(-1.0); 
@@ -402,7 +416,7 @@ mfem::HypreParMatrix *P1Discretization::GetOperator() const
 	Maform.Assemble(); 
 	Maform.Finalize(); 
 	mfem::HypreParMatrix *Ma = Maform.ParallelAssemble();
-	if (Mtime) Ma->Add(time_absorption, *Mtime);
+	if (Mtime_s) Ma->Add(time_absorption_s, *Mtime_s);
 
 	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
 	mfem::ConstantCoefficient neg_one(-1.0); 
