@@ -1,6 +1,9 @@
 #include "trt_linearized.hpp"
 #include "transport_op.hpp"
+#include "constants.hpp"
 #include "log.hpp"
+#include "moment_discretization.hpp"
+#include "planck.hpp"
 
 NewtonTRTOperator::NewtonTRTOperator(
 	const mfem::Array<int> &offsets, 
@@ -11,11 +14,10 @@ NewtonTRTOperator::NewtonTRTOperator(
 	const mfem::Operator &sigma, 
 	mfem::IterativeSolver &nonlinear_solver,
 	mfem::IterativeSolver &schur_solver, 
-	mfem::Solver &meb_grad_inv, 
-	const mfem::Solver *dsa_solver)
+	mfem::Solver &meb_grad_inv)
 	: offsets(offsets), Linv(Linv), D(D), B(B), Bt(Bt), sigma(sigma), 
 	  nonlinear_solver(nonlinear_solver), schur_solver(schur_solver), 
-	  meb_grad_inv(meb_grad_inv), dsa_solver(dsa_solver)
+	  meb_grad_inv(meb_grad_inv)
 {
 	height = width = offsets.Last(); 
 
@@ -48,7 +50,7 @@ void NewtonTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 
 	NonlinearOperator op(reduced_offsets, Linv, D, B, Bt, sigma, psi); 
 	op.SetSource(*reduced_b); 
-	JacobianSolver grad_inv(reduced_offsets, schur_solver, meb_grad_inv, dsa_solver); 
+	JacobianSolver grad_inv(reduced_offsets, schur_solver, meb_grad_inv, dsa_disc, dsa_solver); 
 	nonlinear_solver.SetOperator(op); 
 	nonlinear_solver.SetPreconditioner(grad_inv);
 	auto *kinsol = dynamic_cast<mfem::KINSolver*>(&nonlinear_solver); 
@@ -81,12 +83,12 @@ void NewtonTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	Linv.Mult(psi, psi); 
 
 	// if (rebalance_solver and (use_fixup or !nonlinear_solver.GetConverged())) {
-	if (rebalance_solver) {
-		D.Mult(psi, reduced_x->GetBlock(0)); 
-		sigma.Mult(reduced_x->GetBlock(0), reduced_b->GetBlock(0)); 
-		add(source_T, 1.0, reduced_b->GetBlock(0), reduced_b->GetBlock(0)); 
-		rebalance_solver->Mult(reduced_b->GetBlock(0), T); 
-	}
+	// if (rebalance_solver) {
+	// 	D.Mult(psi, reduced_x->GetBlock(0)); 
+	// 	sigma.Mult(reduced_x->GetBlock(0), reduced_b->GetBlock(0)); 
+	// 	add(source_T, 1.0, reduced_b->GetBlock(0), reduced_b->GetBlock(0)); 
+	// 	rebalance_solver->Mult(reduced_b->GetBlock(0), T); 
+	// }
 }
 
 NewtonTRTOperator::
@@ -146,8 +148,9 @@ NonlinearOperator::GetGradient(const mfem::Vector &x) const
 NewtonTRTOperator::
 JacobianSolver::JacobianSolver(
 	const mfem::Array<int> &offsets, mfem::IterativeSolver &schur_solver, 
-	mfem::Solver &meb_grad_inv, const mfem::Solver *dsa_solver)
-	: offsets(offsets), schur_solver(schur_solver), meb_grad_inv(meb_grad_inv), dsa_solver(dsa_solver)
+	mfem::Solver &meb_grad_inv, const MomentDiscretization *dsa_disc, mfem::Solver *dsa_solver)
+	: offsets(offsets), schur_solver(schur_solver), meb_grad_inv(meb_grad_inv), 
+	  dsa_disc(dsa_disc), dsa_solver(dsa_solver)
 {
 	height = width = offsets.Last(); 
 	tmp_phi.SetSize(offsets[1] - offsets[0]); 
@@ -169,8 +172,10 @@ JacobianSolver::SetOperator(const mfem::Operator &op)
 	if (dsa_solver) {
 		const auto &dB = dynamic_cast<const F12Operator*>(&block_op->GetBlock(0,1))->GetEmissionGradient(); 
 		dsa_Ms.reset(new mfem::TripleProductOperator(&dB, &meb_grad_inv, &block_op->GetBlock(1,0), false, false, false)); 
-		dsa_op.reset(new DiffusionSyntheticAccelerationOperator(*dsa_solver, *dsa_Ms)); 
-		schur_solver.SetPreconditioner(*dsa_op); 
+		dsa_op.reset(dsa_disc->GetOperator());
+		dsa_solver->SetOperator(*dsa_op);
+		dsa_prec.reset(new DiffusionSyntheticAccelerationOperator(*dsa_solver, *dsa_Ms)); 
+		schur_solver.SetPreconditioner(*dsa_prec); 
 	}
 	schur_solver.SetOperator(*schur_op); 
 }
@@ -213,6 +218,7 @@ LinearizedTRTOperator::LinearizedTRTOperator(
 	dT.SetSize(Bt.Height()); 
 	em_source.SetSize(D.Height()); 
 	phi_source.SetSize(D.Height()); 
+	abs_source.SetSize(sigma.Height());
 	phi.SetSize(D.Height()); 
 	t1.SetSize(Bt.Height()); 
 }
@@ -275,13 +281,13 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	// solve for temperature update 
 	if (rebalance_solver) {
 		D.Mult(psi, phi); 
-		sigma.Mult(phi, phi_source); 
-		phi_source += source_T; 
-		rebalance_solver->Mult(phi_source, T); 
+		sigma.Mult(phi, abs_source); 
+		abs_source += source_T; 
+		rebalance_solver->Mult(abs_source, T); 
 	} else {
-		sigma.Mult(phi, phi_source); 
-		phi_source += temp_resid; 
-		meb_grad_inv.Mult(phi_source, dT); 
+		sigma.Mult(phi, abs_source); 
+		abs_source += temp_resid; 
+		meb_grad_inv.Mult(abs_source, dT); 
 		for (int i=0; i<T.Size(); i++) {
 			double Tnew = T(i) + dT(i); 
 			if (Tnew < 0.0) {
@@ -292,4 +298,14 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 			}
 		}
 	}
+}
+
+double LinearizedPseudoAbsorptionCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) 
+{
+	const auto temperature = T.Eval(trans, ip);
+	const auto heat_capacity = Cvdt.Eval(trans, ip);
+	const auto opacity = sigma.Eval(trans, ip);
+	const double dB = 4.0 * opacity * constants::StefanBoltzmann * pow(temperature,3);
+	const double nu = dB / (heat_capacity + dB);
+	return opacity * (1.0 - nu);
 }

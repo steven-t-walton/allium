@@ -2,6 +2,9 @@
 
 #include "mfem.hpp" 
 #include "sweep.hpp"
+#include "moment_discretization.hpp"
+
+// class MomentDiscretization;
 
 // solves transport and energy balance with Newton 
 // psi is linearly eliminated to avoid computing 
@@ -27,7 +30,9 @@ private:
 	const mfem::Operator &D, &B, &Bt, &sigma;
 	mfem::IterativeSolver &nonlinear_solver, &schur_solver; 
 	mfem::Solver &meb_grad_inv; 
-	const mfem::Solver *dsa_solver = nullptr; 
+
+	const MomentDiscretization *dsa_disc = nullptr;
+	mfem::Solver *dsa_solver = nullptr; 
 
 	mfem::Array<int> reduced_offsets; // size of [ phi, T ] for Newton operator 
 	mutable std::unique_ptr<mfem::BlockVector> reduced_x, reduced_b; 
@@ -42,9 +47,12 @@ public:
 		const mfem::Operator &sigma, // M_sigma 
 		mfem::IterativeSolver &nonlinear_solver, // solves reduces [T, phi] system 
 		mfem::IterativeSolver &schur_solver, // solves linear transport problem 
-		mfem::Solver &meb_grad_inv, // inverts Bt 
-		const mfem::Solver *dsa_solver=nullptr // inverts diffusion system for DSA 
+		mfem::Solver &meb_grad_inv // inverts Bt 
 		); 
+	void SetDSAPreconditioner(const MomentDiscretization &disc, mfem::Solver &solver) {
+		dsa_disc = &disc;
+		dsa_solver = &solver;
+	}
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
 
 	// if set, solves local temperature equation in case Newton did not converge 
@@ -89,16 +97,18 @@ public:
 		const mfem::Array<int> &offsets; 
 		mfem::IterativeSolver &schur_solver;
 		mfem::Solver &meb_grad_inv; 
-		const mfem::Solver *dsa_solver = nullptr;
+		const MomentDiscretization *dsa_disc = nullptr;
+		mfem::Solver *dsa_solver = nullptr;
 
 		const mfem::BlockOperator *block_op = nullptr; 
 		std::unique_ptr<mfem::Operator> schur_op, dsa_Ms; 
-		std::unique_ptr<mfem::Solver> dsa_op; 
+		std::unique_ptr<mfem::Operator> dsa_op; 
+		std::unique_ptr<mfem::Solver> dsa_prec;
 		mutable mfem::Vector tmp_phi, tmp_T; 
 	public:
 		JacobianSolver(const mfem::Array<int> &offsets, 
 			mfem::IterativeSolver &schur_solver, mfem::Solver &meb_grad_inv, 
-			const mfem::Solver *dsa_solver=nullptr);
+			const MomentDiscretization *dsa_disc = nullptr, mfem::Solver *dsa_solver=nullptr);
 		void SetOperator(const mfem::Operator &op) override; 
 		void Mult(const mfem::Vector &b, mfem::Vector &x) const override; 
 	};
@@ -166,7 +176,7 @@ private:
 	mfem::Solver &meb_grad_inv; 
 	const mfem::Solver *dsa_solver = nullptr; 
 
-	mutable mfem::Vector temp_resid, dT, em_source, phi_source, phi, t1; 
+	mutable mfem::Vector temp_resid, dT, em_source, phi_source, abs_source, phi, t1; 
 	mfem::Solver *rebalance_solver = nullptr; 
 public:
 	LinearizedTRTOperator(
@@ -185,4 +195,15 @@ public:
 	// if set, solves local temperature equation in case Newton did not converge 
 	// or a fix up is used 
 	void SetRebalanceSolver(mfem::Solver &op) { rebalance_solver = &op; }
+};
+
+class LinearizedPseudoAbsorptionCoefficient : public mfem::Coefficient 
+{
+private:
+	mfem::Coefficient &T, &Cvdt, &sigma; 
+public:
+	LinearizedPseudoAbsorptionCoefficient(mfem::Coefficient &T, mfem::Coefficient &Cvdt, mfem::Coefficient &sigma)
+		: T(T), Cvdt(Cvdt), sigma(sigma)
+	{ }
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
 };
