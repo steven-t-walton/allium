@@ -25,8 +25,10 @@ mfem::HypreParMatrix *ElementByElementBlockInverse(const mfem::ParFiniteElementS
 mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop) 
 {
 	mfem::Array2D<mfem::HypreParMatrix*> blocks(bop.NumRowBlocks(), bop.NumColBlocks()); 
+	blocks = nullptr;
 	for (auto row=0; row<blocks.NumRows(); row++) {
 		for (auto col=0; col<blocks.NumCols(); col++) {
+			if (bop.IsZeroBlock(row,col)) continue;
 			const mfem::Operator *op = &bop.GetBlock(row,col); 
 			const auto *hypre_op = dynamic_cast<const mfem::HypreParMatrix*>(op); 
 			if (!hypre_op) MFEM_ABORT("blocks must be HypreParMatrix"); 
@@ -168,4 +170,67 @@ void BlockLDUInverseOperator::Mult(const mfem::Vector &b, mfem::Vector &x) const
 	C.Mult(block_x.GetBlock(0), block_x.GetBlock(1)); // C x_1 -> x_2 
 	add(block_b.GetBlock(1), -1.0, block_x.GetBlock(1), tmp.GetBlock(1)); // b_2 - C x_1 -> tmp_2 
 	Dinv.Mult(tmp.GetBlock(1), block_x.GetBlock(1)); // D^{-1} (b_2 - C x_1) 
+}
+
+void SuperLUSolver::SetOperator(const mfem::Operator &op)
+{
+	height = op.Height(); 
+	width = op.Width();
+	const auto *hypre = dynamic_cast<const mfem::HypreParMatrix*>(&op);
+	const auto *block = dynamic_cast<const mfem::BlockOperator*>(&op);
+	if (hypre)
+		slu_op.reset(new mfem::SuperLURowLocMatrix(op));
+	else if (block) {
+		auto *monolithic = BlockOperatorToMonolithic(*block);
+		slu_op.reset(new mfem::SuperLURowLocMatrix(*monolithic));
+		delete monolithic;
+	}
+	else MFEM_ABORT("operator type not supported");
+	slu.SetOperator(*slu_op);
+}
+
+BlockDiagonalPreconditioner::BlockDiagonalPreconditioner(int nBlocks)
+	: nBlocks(nBlocks), solvers(nBlocks)
+{
+	solvers = nullptr;
+}
+
+BlockDiagonalPreconditioner::~BlockDiagonalPreconditioner()
+{
+	if (owns_blocks > 0) {
+		for (int b=0; b<nBlocks; b++) {
+			delete solvers[b];
+		}
+	}
+}
+
+void BlockDiagonalPreconditioner::SetOperator(const mfem::Operator &op) 
+{
+	const auto *block_op = dynamic_cast<const mfem::BlockOperator*>(&op);
+	if (!block_op) MFEM_ABORT("operator must be a block operator");
+	for (int b=0; b<nBlocks; b++) {
+		solvers[b]->SetOperator(block_op->GetBlock(b,b));
+	}
+	offsets = block_op->RowOffsets();
+	height = width = op.Height();
+}
+
+void BlockDiagonalPreconditioner::Mult(const mfem::Vector &b, mfem::Vector &x) const 
+{
+	bBlock.Update(const_cast<mfem::Vector&>(b), offsets);
+	xBlock.Update(x, offsets);
+
+	for (int b=0; b<nBlocks; b++) {
+		if (solvers[b])
+			solvers[b]->Mult(bBlock.GetBlock(b), xBlock.GetBlock(b));
+		// default to identity if null
+		else
+			xBlock.GetBlock(b) = bBlock.GetBlock(b);
+	}
+}
+
+void BlockDiagonalPreconditioner::SetDiagonalBlock(int iBlock, mfem::Solver &solver)
+{
+	assert(iBlock >= 0 and iBlock < nBlocks);
+	solvers[iBlock] = &solver;
 }
