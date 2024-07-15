@@ -20,6 +20,7 @@
 #include "mg_form.hpp"
 #include "phase_form.hpp"
 #include "planck.hpp"
+#include "restart.hpp"
 
 // running maximum with index into map 
 template<typename T, typename U>
@@ -527,9 +528,13 @@ int main(int argc, char *argv[]) {
 	// temporal parameters 
 	const double final_time = driver["final_time"]; 
 
+	// allocate time step control parameters 
+	double time_step; 
+	double time = 0.0;
+	int cycle = 0;
+
 	sol::optional<sol::function> time_step_func_avail = driver["time_step"]; 
 	sol::optional<double> time_step_value_avail = driver["time_step"]; 
-	double time_step; 
 	if (time_step_func_avail) {
 		time_step = time_step_func_avail.value()(0.0); 
 	} else if (time_step_value_avail) {
@@ -584,6 +589,7 @@ int main(int argc, char *argv[]) {
 	mfem::Vector psi(x.GetBlock(SolutionIndex::PSI), 0, psi_size); 
 	mfem::Vector psi0(x0.GetBlock(SolutionIndex::PSI), 0, psi_size); 
 	mfem::ParGridFunction T(&fes, x.GetBlock(SolutionIndex::TEMP), 0); 
+	mfem::GridFunctionCoefficient Tcoef(&T); 
 	mfem::ParGridFunction T0(&fes, x0.GetBlock(SolutionIndex::TEMP), 0); 
 	mfem::ParGridFunction E(&fes); // gray energy density 
 	mfem::Vector Enu(TotalExtent(phi_ext));
@@ -591,34 +597,57 @@ int main(int argc, char *argv[]) {
 	// piecewise constant temperature 
 	mfem::ParGridFunction Tpw(&fes0); 
 
-	// project initial condition 
-	sol::function ic_lua = lua["initial_condition"]; 
-	if (!ic_lua.valid()) { MFEM_ABORT("must supply initial condition function"); }
-	auto ic_func = [&ic_lua](const mfem::Vector &x) {
-		double pos[3]; 
-		for (int d=0; d<x.Size(); d++) { pos[d] = x(d); }
-		return ic_lua(pos[0], pos[1], pos[2]); 
-	};
-	mfem::FunctionCoefficient ic_coef(ic_func);
-	T.ProjectCoefficient(ic_coef);  
-	T0 = T; 
-	Tpw.ProjectGridFunction(T); 
+	// --- load initial conditions ---
+	// two options are supported
+	// 1) load from a restart file from a previous simulation 
+	// 2) equilibrium between radiation and material temperature function 
+	// input from lua 
+	sol::optional<sol::table> restart_table_avail = driver["restart"];
+	if (restart_table_avail) {
+		sol::table restart_table = restart_table_avail.value();
+		const std::string restart_file = restart_table["path"];
+		const int id = restart_table["id"].get_or(0);
+		LoadFromRestart(MPI_COMM_WORLD, restart_file, id, x, cycle, time, time_step);
+		x0 = x;
+		// account for cycle != 0 in max cycles 
+		if (max_cycles < std::numeric_limits<int>::max() - cycle)
+			max_cycles += cycle;
+
+		out << YAML::Key << "restart" << YAML::Value << YAML::BeginMap;
+			out << YAML::Key << "path" << YAML::Value << restart_file;
+			out << YAML::Key << "id" << YAML::Value << id;
+		out << YAML::EndMap;
+	} 
+
+	else {
+		// project initial condition 
+		sol::function ic_lua = lua["initial_condition"]; 
+		if (!ic_lua.valid()) { MFEM_ABORT("must supply initial condition function"); }
+		auto ic_func = [&ic_lua](const mfem::Vector &x) {
+			double pos[3]; 
+			for (int d=0; d<x.Size(); d++) { pos[d] = x(d); }
+			return ic_lua(pos[0], pos[1], pos[2]); 
+		};
+		mfem::FunctionCoefficient ic_coef(ic_func);
+		T.ProjectCoefficient(ic_coef);  
+		T0 = T; 
+		Tpw.ProjectGridFunction(T); 
+
+		// radiation initial condition
+		// assume radiation and material in equilibrium 
+		// => psi_g = 1/4pi B_g(T0)
+		PlanckEmissionPSCoefficient planck_coef(Tcoef);
+		ProjectPsi(fes, *quad, energy_grid, planck_coef, psi0);
+		psi = psi0;
+	}
 
 	// initial opacity 
-	mfem::GridFunctionCoefficient Tcoef(&T); 
 	total_coef.SetTemperature(Tcoef); 
 	total_coef.SetDensity(density); 
 	total_gf.ProjectCoefficient(total_coef); 
 	total_gf.ExchangeFaceNbrData(); 
 	GridFunctionMGCoefficient total(total_gf);
 	mfem::GridFunctionCoefficient gray_total(&gray_total_gf);
-
-	// radiation initial condition
-	// assume radiation and material in equilibrium 
-	// => psi_g = 1/4pi B_g(T0)
-	PlanckEmissionPSCoefficient planck_coef(Tcoef);
-	ProjectPsi(fes, *quad, energy_grid, planck_coef, psi0);
-	psi = psi0;
 
 	// kinetic to continuum operators 
 	DiscreteToMoment D(*quad, psi_ext, phi_ext); 
@@ -886,7 +915,8 @@ int main(int argc, char *argv[]) {
 	sol::optional<sol::table> output_avail = lua["output"]; 
 	std::unique_ptr<mfem::DataCollection> dc; 
 	std::unique_ptr<TracerDataCollection> tracer_dc; 
-	int output_freq; 
+	std::unique_ptr<RestartWriter> restart_dc;
+	int output_freq, restart_freq;
 	if (output_avail) {
 		out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
 		sol::table output = output_avail.value(); 
@@ -900,6 +930,7 @@ int main(int argc, char *argv[]) {
 			dc.reset(io::CreateDataCollection(type, output_root, mesh, root));
 			output_freq = viz["frequency"].get_or(std::numeric_limits<int>::max()); 
 			const int precision = viz["precision"].get_or(6); 
+			const bool restart_mode = viz["restart_mode"].get_or(false);
 			dc->SetPrecision(precision); 
 			dc->RegisterField("E", &E); 
 			dc->RegisterField("T", &T); 
@@ -908,13 +939,27 @@ int main(int argc, char *argv[]) {
 			dc->RegisterField("cv", &cvgf); 
 			dc->RegisterField("density", &density_gf); 
 			dc->RegisterField("partition", &partition); 
-			dc->SetCycle(0); dc->SetTime(0.0); dc->SetTimeStep(time_step); 
-			dc->Save(); 
+			// paraview has a "restart mode" 
+			// that allows continuing the same output after a restart 
+			if (restart_mode and restart_table_avail) {
+				auto *paraview = dynamic_cast<mfem::ParaViewDataCollection*>(dc.get());
+				if (paraview)
+					paraview->UseRestartMode(true);
+				else
+					if (root) MFEM_ABORT("restart mode supported for paraview only");
+			}
+
+			// only save initial condition if restart mode is off 
+			else {
+				dc->SetCycle(cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
+				dc->Save(); 
+			}
 
 			out << YAML::Key << "visualization" << YAML::Value << YAML::BeginMap; 
 				out << YAML::Key << "type" << YAML::Value << type; 
 				out << YAML::Key << "frequency" << YAML::Value << output_freq; 
 				out << YAML::Key << "precision" << YAML::Value << precision; 
+				out << YAML::Key << "restart mode" << YAML::Value << (restart_mode and restart_table_avail);
 			out << YAML::EndMap; 
 		} 
 
@@ -957,15 +1002,29 @@ int main(int argc, char *argv[]) {
 				out << YAML::EndSeq; 
 			out << YAML::EndMap; 
 		}
+
+		sol::optional<sol::table> restart_avail = output["restart"]; 
+		if (restart_avail) {
+			sol::table restart = restart_avail.value(); 
+			auto restart_keep = restart["num_restarts"].get_or(2);
+			restart_freq = restart["frequency"].get_or(std::numeric_limits<int>::max());
+			std::string restart_root = restart["prefix"].get_or(std::string("restart"));
+			restart_dc = std::make_unique<RestartWriter>(MPI_COMM_WORLD, output_root + "/" + restart_root);
+			restart_dc->SetNumRestartFiles(restart_keep);
+
+			out << YAML::Key << "restart" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "prefix" << YAML::Value << restart_root;
+				out << YAML::Key << "num restarts" << YAML::Value << restart_keep;
+				out << YAML::Key << "frequency" << YAML::Value << restart_freq;
+			out << YAML::EndMap;
+		}
 		out << YAML::EndMap; // end output map
 	}
 
 	mfem::StopWatch cycle_timer; 
-	double time = 0.0; 
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
 	std::map<std::string,int> log; 
 	std::map<std::string,double> timing_log;
-	int cycle = 0; 
 	while (true) {
 		cycle_timer.Restart(); 
 
@@ -1000,17 +1059,24 @@ int main(int argc, char *argv[]) {
 		cycle++; 
 
 		// --- output to file --- 
-		bool done = time >= final_time - 1e-14 or cycle == max_cycles; 
+		// write data collection to file 
+		bool done = time >= final_time - 1e-14 or cycle >= max_cycles; 
 		if (dc and (cycle % output_freq == 0 or done)) {
-			dc->SetCycle(cycle); 
-			dc->SetTime(time); 
-			dc->SetTimeStep(time_step); 
+			dc->SetCycle(cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
 			dc->Save(); 			
 		}
 
+		// write tracer to file 
+		// output every time step 
 		if (tracer_dc) {
 			tracer_dc->SetCycle(cycle); tracer_dc->SetTime(time); tracer_dc->SetTimeStep(time_step); 
 			tracer_dc->Save(); 
+		}
+
+		// write restart to file 
+		if (restart_dc and (cycle % restart_freq == 0 or done)) {
+			restart_dc->SetCycle(cycle); restart_dc->SetTime(time); restart_dc->SetTimeStep(time_step);
+			restart_dc->Write(x);
 		}
 
 		// check for new time step size 
