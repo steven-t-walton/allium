@@ -495,6 +495,7 @@ int main(int argc, char *argv[]) {
 	mfem::PWConstCoefficient heat_capacity(cv_list); 
 	mfem::PWConstCoefficient density(density_list); 
 
+	// volumetric source 
 	PWPhaseSpaceCoefficient source(attrs, source_list); 
 	mfem::Array<int> battrs(nbattr); 
 	for (int i=0; i<nbattr; i++) { battrs[i] = i+1; }
@@ -517,10 +518,12 @@ int main(int argc, char *argv[]) {
 	}
 	const auto Nomega = quad->Size(); 
 
+	// size of psi 
 	TransportVectorExtents psi_ext(G, Nomega, fes.GetVSize());
 	const auto psi_size = TotalExtent(psi_ext); 
 	const auto psi_size_global = mesh.ReduceInt(psi_size); 
 
+	// size of phi 
 	MomentVectorExtents phi_ext(G, 1, fes.GetVSize()); 
 	const auto phi_size = TotalExtent(phi_ext); 
 	const auto phi_size_global = mesh.ReduceInt(phi_size); 
@@ -533,6 +536,8 @@ int main(int argc, char *argv[]) {
 	double time = 0.0;
 	int cycle = 0;
 
+	// get initial time step
+	// either as fixed value or from a function 
 	sol::optional<sol::function> time_step_func_avail = driver["time_step"]; 
 	sol::optional<double> time_step_value_avail = driver["time_step"]; 
 	if (time_step_func_avail) {
@@ -546,7 +551,6 @@ int main(int argc, char *argv[]) {
 	int max_cycles = driver["max_cycles"].get_or(std::numeric_limits<int>::max()); 
 	if (max_cycles_override>0) max_cycles = max_cycles_override; 
 	const int lump = driver["lump"].get_or(0); 
-	sol::optional<sol::table> sweep_opts_avail = driver["sweep_opts"]; 
 
 	// --- output algorithmic options used --- 
 	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
@@ -567,7 +571,9 @@ int main(int argc, char *argv[]) {
 			out << YAML::EndMap; 
 		out << YAML::EndMap; 
 
+	// time mass matrix for psi 
 	SNTimeMassMatrix Mpsi(fes, psi_ext, IsMassLumped(lump)); 
+	// cv/dt matrix for temperature 
 	mfem::BilinearForm Mcv(&fes); 
 	if (lump)
 		Mcv.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(heat_capacity))); 
@@ -576,6 +582,7 @@ int main(int argc, char *argv[]) {
 	Mcv.Assemble(); 
 	Mcv.Finalize(); 
 
+	// --- allocate solution vectors ---
 	enum SolutionIndex {
 		PSI = 0, 
 		TEMP = 1
@@ -607,6 +614,7 @@ int main(int argc, char *argv[]) {
 		sol::table restart_table = restart_table_avail.value();
 		const std::string restart_file = restart_table["path"];
 		const int id = restart_table["id"].get_or(0);
+		// loads data, grabs cycle, time, time_step from restart file 
 		LoadFromRestart(MPI_COMM_WORLD, restart_file, id, x, cycle, time, time_step);
 		x0 = x;
 		// account for cycle != 0 in max cycles 
@@ -645,7 +653,7 @@ int main(int argc, char *argv[]) {
 	total_coef.SetTemperature(Tcoef); 
 	total_coef.SetDensity(density); 
 	total_gf.ProjectCoefficient(total_coef); 
-	total_gf.ExchangeFaceNbrData(); 
+	// build coefficients out of sigma grid function data 
 	GridFunctionMGCoefficient total(total_gf);
 	mfem::GridFunctionCoefficient gray_total(&gray_total_gf);
 
@@ -657,14 +665,16 @@ int main(int argc, char *argv[]) {
 	E *= 1.0/constants::SpeedOfLight;
 
 	// opacity weighting operators 
+	// energy density weighted 
 	MomentVectorMultiGroupCoefficient Enu_coef(fes, phi_ext, Enu);
 	OpacityGroupCollapseOperator sigmaE_op(sigma_fes, energy_grid.Bounds(), &Enu_coef);
 
+	// rosseland weighted 
 	RosselandSpectrumMGCoefficient rosseland_coef(energy_grid.Bounds(), Tcoef);
 	OpacityGroupCollapseOperator ross_opacity_op(sigma_fes, energy_grid.Bounds(), &rosseland_coef);
 	WeightedGroupCollapseOperator to_gray_ross_op(fes, phi_ext, rosseland_coef);
 	ross_opacity_op.Mult(total_gf, gray_total_gf);
-	gray_total_gf.ExchangeFaceNbrData();
+	gray_total_gf.ExchangeFaceNbrData(); // <-- gray can need exchange for diffusion operator 
 
 	// form fixed source term 
 	mfem::Vector source_vec(psi_size); 
@@ -672,6 +682,7 @@ int main(int argc, char *argv[]) {
 
 	// build sweep operator 
 	InverseAdvectionOperator Linv(fes, *quad, total, bc_map, lump); 
+	sol::optional<sol::table> sweep_opts_avail = driver["sweep_opts"]; 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -718,6 +729,8 @@ int main(int argc, char *argv[]) {
 	}
 	Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight); 
 
+	// energy balance nonlinear form 
+	// cv/dt + sigma B(T)
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	BlockDiagonalByElementNonlinearForm meb_form(&fes);
 	if (IsMassLumped(lump)) {
@@ -729,9 +742,12 @@ int main(int argc, char *argv[]) {
 		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}
 
+	// emission nonlinear form 
+	// sigma_g B_g(T) 
 	PlanckEmissionNFI planck_int(energy_grid.Bounds(), total_gf);
 	PlanckEmissionNonlinearForm emission_form(fes, phi_ext, planck_int, IsMassLumped(lump));
 
+	// absorption mass matrix for multigroup energy density 
 	MultiGroupBilinearForm Mtot(fes, G);
 	if (IsMassLumped(lump))
 		Mtot.AddDomainIntegrator(new QuadratureLumpedMGIntegrator(new MGMassIntegrator(total)));
@@ -874,6 +890,8 @@ int main(int argc, char *argv[]) {
 				dsa_monitor = std::make_unique<InnerIterativeSolverMonitor>(*it_solver); 
 				linear_solver->SetMonitor(*dsa_monitor);
 			}
+			// LMFG restricts to gray, solves diffusion, prolongs back to multigroup 
+			// rosseland spectrum is used for both restriction and prolongation
 			lmfg_solver = std::make_unique<PARSolver>(to_gray_ross_op, *dsa_solver, to_gray_ross_op);
 		}
 		out << YAML::Key << "transport solver" << YAML::Value << transport_solve_table; 
