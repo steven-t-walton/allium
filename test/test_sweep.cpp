@@ -152,7 +152,12 @@ double ExponentialSolution(mfem::Mesh &smesh, int fe_order,
 			return exsol(val, x,Omega); 
 		};
 		mfem::FunctionCoefficient exact_c(exsol_per_angle); 
-		mfem::ParGridFunction sol(&fes, psi, fes.GetVSize()*g); 
+		mfem::ParGridFunction sol(&fes);
+		TransportVectorView psi_view(psi.GetData(), psi_ext);
+		for (int i=0; i<fes.GetVSize(); i++) {
+			sol(i) = psi_view(g, 0, i);
+		}
+
 		err += sol.ComputeL2Error(exact_c); 
 	}
 
