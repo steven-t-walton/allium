@@ -47,6 +47,13 @@ void PrintGitString(YAML::Emitter &out)
 #endif
 }
 
+std::string FormatScientific(double val, int precision)
+{
+	std::stringstream ss; 
+	ss << std::scientific << std::setprecision(precision) << val; 
+	return ss.str();
+}
+
 void PrintSolTable(YAML::Emitter &out, sol::table &table) 
 {
 	out << YAML::BeginMap; 

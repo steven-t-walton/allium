@@ -15,11 +15,30 @@ using LuaPhaseFunction = std::function<double(double,double,double,double,double
 std::string FormatTimeString(double time); 
 // print git commit, branch, tag information 
 void PrintGitString(YAML::Emitter &out); 
+std::string FormatScientific(double val, int precision=3);
 
 // iterate over table and print to yaml map 
 // tables in Lua do not have an order => this function 
 // kind of annoyingly prints values in random order :( 
 void PrintSolTable(YAML::Emitter &out, sol::table &table); 
+template<typename T>
+void PrintMap(YAML::Emitter &out, const T &map)
+{
+	out << YAML::BeginMap;
+	for (const auto &it : map) {
+		out << YAML::Key << it.first << YAML::Value << it.second;
+	}
+	out << YAML::EndMap;
+}
+template<typename T>
+void PrintTimingMap(YAML::Emitter &out, const T &map)
+{
+	out << YAML::BeginMap;
+	for (const auto &it : map) {
+		out << YAML::Key << it.first << YAML::Value << FormatTimeString(it.second);
+	}
+	out << YAML::EndMap;
+}
 
 mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 
 	mfem::Mesh &mesh, bool root);
@@ -120,5 +139,14 @@ std::string ResolveRelativePath(std::string path);
 } // end namespace io 
 
 // convenience function to print sol::table's into YAML maps 
-// calls parse::PrintSolTable 
+// calls io::PrintSolTable 
 YAML::Emitter &operator<<(YAML::Emitter &out, sol::table &table); 
+
+// print std::map-type objects to YAML map
+// calls io::PrintMap
+template<typename T>
+YAML::Emitter &operator<<(YAML::Emitter &out, const T &map)
+{
+	io::PrintMap(out, map);
+	return out;
+}
