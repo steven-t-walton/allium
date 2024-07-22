@@ -127,13 +127,6 @@ void KinsolCallbackFunction(const char *module, const char *function, char *msg,
 	}
 }
 
-// verify group structure produces integral of 
-// normalized planck = 1.0 for max/min temperatures 
-// in the domain
-// outputs warning if not 
-void CheckPlanckSpectrumCovered(const MultiGroupEnergyGrid &grid, const mfem::Vector &temperature, 
-	double tol, bool root);
-
 int main(int argc, char *argv[]) {
 	mfem::StopWatch wall_timer; 
 	wall_timer.Start(); 
@@ -459,6 +452,7 @@ int main(int argc, char *argv[]) {
 	sol::table driver = lua["driver"]; 
 	const int fe_order = driver["fe_order"]; 
 	const int sigma_fe_order = driver["sigma_fe_order"].get_or(fe_order); 
+	const int gray_sigma_fe_order = driver["gray_sigma_fe_order"].get_or(sigma_fe_order);
 	std::string basis_type_str = io::GetAndValidateOption(driver, "basis_type", 
 		{"lobatto", "legendre", "positive"}, "lobatto", root); 
 
@@ -482,7 +476,8 @@ int main(int argc, char *argv[]) {
 	// piecewise constant used for plotting and storing cross section data 
 	mfem::L2_FECollection sigma_fec(sigma_fe_order, dim, mfem::BasisType::Positive); 
 	mfem::ParFiniteElementSpace sigma_fes(&mesh, &sigma_fec, G); // G copies 
-	mfem::ParFiniteElementSpace gray_sigma_fes(&mesh, &sigma_fec);
+	mfem::L2_FECollection gray_sigma_fec(gray_sigma_fe_order, dim, mfem::BasisType::Positive);
+	mfem::ParFiniteElementSpace gray_sigma_fes(&mesh, &gray_sigma_fec);
 
 	// --- create coefficients for input material data ---
 	// list of attributes in order of total_list 
@@ -666,14 +661,13 @@ int main(int argc, char *argv[]) {
 
 	// opacity weighting operators 
 	// energy density weighted 
-	MomentVectorMultiGroupCoefficient Enu_coef(fes, phi_ext, Enu);
-	OpacityGroupCollapseOperator sigmaE_op(sigma_fes, energy_grid.Bounds(), &Enu_coef);
+	ZerothMomentCoefficient Enu_coef(fes, phi_ext, Enu);
 
 	// rosseland weighted 
 	RosselandSpectrumMGCoefficient rosseland_coef(energy_grid.Bounds(), Tcoef);
-	OpacityGroupCollapseOperator ross_opacity_op(sigma_fes, energy_grid.Bounds(), &rosseland_coef);
+	OpacityGroupCollapseCoefficient totalR(total, rosseland_coef);
 	WeightedGroupCollapseOperator to_gray_ross_op(fes, phi_ext, rosseland_coef);
-	ross_opacity_op.Mult(total_gf, gray_total_gf);
+	gray_total_gf.ProjectCoefficient(totalR);
 	gray_total_gf.ExchangeFaceNbrData(); // <-- gray can need exchange for diffusion operator 
 
 	// form fixed source term 
@@ -1113,7 +1107,7 @@ int main(int argc, char *argv[]) {
 			assembly_timer.Start();
 			// recompute opacities 
 			total_gf.ProjectCoefficient(total_coef); 
-			ross_opacity_op.Mult(total_gf, gray_total_gf);
+			gray_total_gf.ProjectCoefficient(totalR);
 
 			// recompute sweep data 
 			Linv.AssembleLocalMatrices(); 
@@ -1148,7 +1142,8 @@ int main(int argc, char *argv[]) {
 		// warn if temperature is such that the 
 		// energy group structure can't fully integrate
 		// the planck spectrum 
-		CheckPlanckSpectrumCovered(energy_grid, T, 1e-10, root);
+		CheckPlanckSpectrumCovered(MPI_COMM_WORLD, energy_grid.MinEnergy(), 
+			energy_grid.MaxEnergy(), T, 1e-10);
 
 		// --- output progress to terminal --- 
 		const double radE_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, E, E)); 
@@ -1226,22 +1221,4 @@ int main(int argc, char *argv[]) {
 
 	// --- end yaml output --- 
 	out << YAML::EndMap << YAML::Newline; 
-}
-
-void CheckPlanckSpectrumCovered(const MultiGroupEnergyGrid &grid, const mfem::Vector &temperature, 
-	double tol, bool root) {
-	const auto max = temperature.Max(); 
-	const auto min = temperature.Min(); 
-	bool warn = false;
-	if (root and (IntegrateNormalizedPlanck(grid.MaxEnergy(), min) < 1.0 - tol
-		or IntegrateNormalizedPlanck(grid.MaxEnergy(), max) < 1.0 - tol))
-	{
-		MFEM_WARNING("max group bound not high enough to integrate planck to within " << tol);
-	}
-
-	if (root and (IntegrateNormalizedPlanck(grid.MinEnergy(), min) > tol
-		or IntegrateNormalizedPlanck(grid.MinEnergy(), max) > tol))
-	{
-		MFEM_WARNING("min group bound not low enough to integrate planck to within " << tol);
-	}
 }

@@ -134,7 +134,9 @@ target_include_directories(allium PUBLIC ${MFEM_INCLUDE_DIRS} ${CMAKE_BINARY_DIR
 LIST(APPEND EXE
 	exe/chive.cpp
 	exe/scallion.cpp
+	exe/scallion_mg.cpp
 	exe/green.cpp
+	exe/green_mg.cpp
 )
 
 foreach(exe ${EXE})

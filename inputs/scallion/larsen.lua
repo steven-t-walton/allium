@@ -8,8 +8,8 @@ energy = {
 	max = 1e6, 
 	spacing = "log", 
 	num_groups = 20,
-	extend_to_zero = true, 
-	print_bounds = true
+	extend_to_zero = true, -- add uniform spaced group from [0,min]
+	print_bounds = true -- print group structure to YAML 
 }
 
 function initial_condition(x,y,z)
@@ -23,7 +23,7 @@ materials = {
 			type = "analytic", 
 			coef = 1e9, 
 			nrho = -1, 
-			nT = -3.0
+			nT = -3		
 		}, 
 		heat_capacity = cv, 
 		source = 0, 
@@ -34,7 +34,7 @@ materials = {
 			type = "analytic", 
 			coef = 1e12, 
 			nrho = -1, 
-			nT = -3.0
+			nT = -3		
 		}, 
 		heat_capacity = cv, 
 		source = 0, 
@@ -93,14 +93,6 @@ picard = {
 
 linearized = {
 	type = "linearized", 
-	-- nonlinear_solver = {
-	-- 	type = "newton", 
-	-- 	reltol = 1e-4, 
-	-- 	max_iter = 30,
-	-- 	kdim = 0,
-	-- 	iterative_mode = true, 
-	-- 	print_level = -1
-	-- }, 
 	transport_solver = {
 		type = "gmres", 
 		abstol = 1e-6,
@@ -127,14 +119,15 @@ linearized = {
 driver = {
 	fe_order = 1, 
 	sigma_fe_order = 0, 
+	gray_sigma_fe_order = 1,
 	sn_order = 6, 
 	basis_type = "lobatto", 
 	solver = linearized,
 	lump = 7, 
-	fixup = {
-		type = "zero and scale", 
-		psi_min = 0.0
-	},
+	-- fixup = {
+	-- 	type = "zero and scale", 
+	-- 	psi_min = 0.0
+	-- },
 	time_step = 1e-11,
 	final_time = 1e-8, 
 	-- load initial conditions from a restart file 
@@ -145,13 +138,13 @@ driver = {
 }
 
 output = {
-	root = "larsen", 
+	root = "solution", 
 	visualization = {
 		type = "paraview", 
 		frequency = 10, 
 		-- have paraview continue previous run 
 		-- when restart is used 
-		-- restart_mode = true, 
+		-- restart_mode = true, 	
 	},
 	tracer = {
 		locations = {
@@ -161,7 +154,7 @@ output = {
 	}, 
 	restart = {
 		prefix = "restart", 
-		frequency = 10,
-		num_restarts = 2
+		frequency = 1, -- output a restart every time step 
+		num_restarts = 2 -- store 2 previous restarts 
 	}
 }
