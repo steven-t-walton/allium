@@ -5,16 +5,6 @@
 #include "mfem.hpp"
 #include "phase_coefficient.hpp"
 
-#ifdef TRANSPORT_VECTOR_LAYOUT_LEFT
-using TransportVectorLayout = Kokkos::layout_left; 
-#else 
-#ifdef TRANSPORT_VECTOR_LAYOUT_RIGHT 
-using TransportVectorLayout = Kokkos::layout_right; 
-#else 
-#error "transport vector layout not defined"
-#endif
-#endif
-
 // arbitrary flattening of 3D index into 1D 
 // for index operator(i,j,k)
 // I controls the stride ordering of the first index
@@ -54,6 +44,15 @@ struct TransportIndex {
 	static constexpr int ANGLE = 1;
 	static constexpr int SPACE = 2;
 };
+#ifdef TRANSPORT_VECTOR_LAYOUT_LEFT
+using TransportVectorLayout = IndexMap<TransportIndex::ENERGY,TransportIndex::ANGLE,TransportIndex::SPACE>;
+#else 
+#ifdef TRANSPORT_VECTOR_LAYOUT_RIGHT 
+using TransportVectorLayout = IndexMap<TransportIndex::SPACE,TransportIndex::ANGLE,TransportIndex::ENERGY>;
+#else 
+#error "transport vector layout not defined"
+#endif
+#endif
 using TransportVectorExtents = Kokkos::dextents<std::size_t,3>; 
 using TransportVectorView = Kokkos::mdspan<double,TransportVectorExtents,TransportVectorLayout>; 
 using ConstTransportVectorView = Kokkos::mdspan<const double,TransportVectorExtents,TransportVectorLayout>; 
