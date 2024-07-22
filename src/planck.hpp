@@ -25,50 +25,6 @@ constexpr double coef_21 = 43.867/107290978560589824;
 constexpr double coef = 15.0/pow(constants::pi,4);
 constexpr double rosseland_max = pow(std::numeric_limits<double>::max(), 0.25);
 
-constexpr std::array<double,9> inv_int1 = {
-	1.0/2, 
-	1.0/3, 
-	1.0/4, 
-	1.0/5, 
-	1.0/6, 
-	1.0/7, 
-	1.0/8, 
-	1.0/9
-};
-
-constexpr std::array<double,9> inv_int2 = {
-	1.0/4, 
-	1.0/9, 
-	1.0/16, 
-	1.0/25, 
-	1.0/36, 
-	1.0/49, 
-	1.0/64, 
-	1.0/81
-};
-
-constexpr std::array<double,9> inv_int3 = {
-	1.0/8, 
-	1.0/27, 
-	1.0/64, 
-	1.0/125, 
-	1.0/216, 
-	1.0/343, 
-	1.0/512, 
-	1.0/749
-};
-
-constexpr std::array<double,9> inv_int4 = {
-	1.0/16, 
-	1.0/81, 
-	1.0/256, 
-	1.0/625, 
-	1.0/1296, 
-	1.0/2401, 
-	1.0/4096, 
-	1.0/6561
-};
-
 inline double PlanckTaylorSeries9(double x) {
 	const double x2 = x*x;
 	double taylor = x2 * coef_9 + coef_7;
@@ -136,22 +92,63 @@ inline double PlanckTaylorSeries(double x) {
 	}
 }
 
+// precompute coefficients used in polylogarithm calculations
+// divisions done at compile time => only need multiplications at runtime 
+constexpr std::array<double,9> inv_int = {
+	1.0/2, 
+	1.0/3, 
+	1.0/4, 
+	1.0/5, 
+	1.0/6, 
+	1.0/7, 
+	1.0/8, 
+	1.0/9
+};
+
 constexpr int planck_polylog_degree = 9;
+// computes polylogarithm approximation to normalized 
+// planck integral from [0,x]
+// approximation is a combination of the first 4 
+// polylogarithms evaluated using the series 
+// L_a(x) = sum_{l=1}^{L} e^{-l*x}/l^a 
 inline double PlanckPolyLogarithmic(double x) {
+	static_assert(planck_polylog_degree <= inv_int.size());
 	const double eix = std::exp(-x);
+
+	// evaluate l=1 case 
 	double eixp = eix;
 	double li1 = eix;
 	double li2 = eix;
 	double li3 = eix; 
 	double li4 = eix;
 
+	// l >= 2 
 	for (int l=2; l<=planck_polylog_degree; l++) {
-		eixp *= eix;
-		li1 += eixp * inv_int1[l-2];
-		li2 += eixp * inv_int2[l-2];
-		li3 += eixp * inv_int3[l-2]; 
-		li4 += eixp * inv_int4[l-2];
+		double inv = inv_int[l-2]; // 1.0/l 
+		// e^{-l*x} in numerator
+		// evaluate using product to avoid 
+		// more expensive std::exp evals 
+		eixp *= eix; 
+		// use inv_int array to avoid divisions 
+		double t = eixp * inv; // e^{-l*x}/l 
+
+		// Li1 
+		li1 += t; 
+
+		// Li2 
+		t *= inv; // e^{-l*x}/l^2 
+		li2 += t; 
+
+		// Li3 
+		t *= inv; // e^{-l*x}/l^3 
+		li3 += t; 
+
+		// Li4 
+		t *= inv; // e^{-l*x}/l^4 
+		li4 += t;
 	}
+	// combine Li's into polylog approximation of b(x) 
+	// use Horner-type evaluation to avoid pow calls 
 	return 1.0 - internal::coef * (6.0*li4 + x * (6.0*li3 + x*(3.0*li2 + x*li1)));
 }
 
@@ -186,5 +183,13 @@ inline double IntegrateNormalizedRosseland(double E, double T) {
 	return IntegrateNormalizedRosseland(x);
 }
 
+// evaluate planck spectrum in all groups
 void EvalPlanckSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum);
+// evaluate rosseland spectrum in all groups
 void EvalRosselandSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum);
+// verify group structure produces integral of 
+// normalized planck from Emin to Emax = 1.0 
+// for max/min temperatures in the domain
+// outputs warning if not 
+void CheckPlanckSpectrumCovered(MPI_Comm comm, double Emin, double Emax, 
+	const mfem::Vector &temperature, double tol);
