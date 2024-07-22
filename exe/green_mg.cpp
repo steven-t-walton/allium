@@ -1220,12 +1220,12 @@ int main(int argc, char *argv[]) {
 
 				// stopping criterion 
 				const auto norm = prev.ComputeL2Error(Tcoef);
-				if (norm < 1e-6) break;
+				if (norm < 1e-6 or inner >= 30) break;
 				inner++;
 			}
 			inner_sum += inner;	// count total inner iterations 
 			const double norm = Estar.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Estar, Estar));
-			if (norm < 1e-5) break;
+			if (norm < 1e-5 or outer >= 50) break;
 			outer++;
 		}
 
