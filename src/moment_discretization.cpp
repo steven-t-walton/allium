@@ -129,10 +129,9 @@ mfem::HypreParMatrix *LDGDiscretization::GetOperator(
 }
 
 BlockMomentDiscretization::BlockMomentDiscretization(
-	mfem::ParFiniteElementSpace &fes, 
-	mfem::ParFiniteElementSpace &vfes, mfem::Coefficient &total, mfem::Coefficient &absorption, 
-	int lumping, const BoundaryConditionMap &bc_map)
-	: fes(fes), vfes(vfes), total(total), absorption(absorption), lumping(lumping), bc_map(bc_map)
+	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	const BoundaryConditionMap &bc_map, int lumping)
+	: fes(fes), vfes(vfes), bc_map(bc_map), lumping(lumping)
 {
 	offsets.SetSize(3);
 	offsets[0] = 0; 
@@ -144,33 +143,16 @@ BlockMomentDiscretization::BlockMomentDiscretization(
 	reflect_bdr_attrs = CreateBdrAttributeMarker<REFLECTIVE>(bc_map);
 }
 
-void BlockMomentDiscretization::SetTimeAbsorption(double scalar, double vector)
+void BlockMomentDiscretization::SetScalarTimeAbsorption(double sigma, const mfem::HypreParMatrix &M)
 {
-	if (!Mtime_v and vector > 0.0) {
-		const bool lump_mass = IsMassLumped(lumping);
-		mfem::ParBilinearForm form(&vfes);
-		if (lump_mass) 
-			form.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::VectorMassIntegrator));
-		else
-			form.AddDomainIntegrator(new mfem::VectorMassIntegrator);
-		form.Assemble(); 
-		form.Finalize(); 
-		Mtime_v.reset(form.ParallelAssemble());
-	}
+	time_absorption_s = sigma; 
+	Mtime_s = &M;
+}
 
-	if (!Mtime_s and scalar > 0.0) {
-		const bool lump_mass = IsMassLumped(lumping);
-		mfem::ParBilinearForm form(&fes);
-		if (lump_mass)
-			form.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator));
-		else
-			form.AddDomainIntegrator(new mfem::MassIntegrator);
-		form.Assemble(); 
-		form.Finalize(); 
-		Mtime_s.reset(form.ParallelAssemble());
-	}
-	time_absorption_s = scalar;
-	time_absorption_v = vector;
+void BlockMomentDiscretization::SetVectorTimeAbsorption(double sigma, const mfem::HypreParMatrix &M)
+{
+	time_absorption_v = sigma; 
+	Mtime_v = &M;
 }
 
 void BlockMomentDiscretization::
@@ -236,16 +218,15 @@ mfem::HypreParMatrix *BlockMomentDiscretization::FormSchurComplement(const mfem:
 
 BlockLDGDiscretization::BlockLDGDiscretization(
 	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	mfem::Coefficient &total, mfem::Coefficient &absorption, 
-	int lumping, const BoundaryConditionMap &bc_map)
-	: BlockMomentDiscretization(fes, vfes, total, absorption, lumping, bc_map)
+	const BoundaryConditionMap &bc_map, int lumping)
+	: BlockMomentDiscretization(fes, vfes, bc_map, lumping)
 {
 	const auto &mesh = *fes.GetMesh();
 	beta.SetSize(mesh.Dimension());
 	beta.Randomize(12345);
 }
 
-mfem::BlockOperator *BlockLDGDiscretization::GetOperator() const
+mfem::BlockOperator *BlockLDGDiscretization::GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -260,7 +241,7 @@ mfem::BlockOperator *BlockLDGDiscretization::GetOperator() const
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	auto *Mt = Mtform.ParallelAssemble(); 
-	if (Mtime_v) Mt->Add(time_absorption_v, *Mtime_v);
+	if (Mtime_v) Mt->Add(3.0*time_absorption_v, *Mtime_v);
 
 	mfem::ParBilinearForm Maform(&fes); 
 	mfem::ConstantCoefficient alpha_c(alpha); 
@@ -301,14 +282,15 @@ mfem::BlockOperator *BlockLDGDiscretization::GetOperator() const
 	return op;
 }
 
-BlockIPDiscretization::BlockIPDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	mfem::Coefficient &total, mfem::Coefficient &absorption, int lumping, const BoundaryConditionMap &bc_map)
-	: BlockMomentDiscretization(fes, vfes, total, absorption, lumping, bc_map)
+BlockIPDiscretization::BlockIPDiscretization(
+	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	const BoundaryConditionMap &bc_map, int lumping)
+	: BlockMomentDiscretization(fes, vfes, bc_map, lumping)
 {
 	SetKappa(kappa);
 }
 
-mfem::BlockOperator *BlockIPDiscretization::GetOperator() const
+mfem::BlockOperator *BlockIPDiscretization::GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -366,13 +348,14 @@ mfem::BlockOperator *BlockIPDiscretization::GetOperator() const
 	return op;
 }
 
-P1Discretization::P1Discretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-	mfem::Coefficient &total, mfem::Coefficient &absorption, int lumping, const BoundaryConditionMap &bc_map)
-	: BlockMomentDiscretization(fes, vfes, total, absorption, lumping, bc_map)
+P1Discretization::P1Discretization(
+	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	const BoundaryConditionMap &bc_map, int lumping)
+	: BlockMomentDiscretization(fes, vfes, bc_map, lumping)
 {
 }
 
-mfem::HypreParMatrix *P1Discretization::GetOperator() const
+mfem::HypreParMatrix *P1Discretization::GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);

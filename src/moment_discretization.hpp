@@ -59,7 +59,6 @@ public:
 class BlockMomentDiscretization {
 protected:
 	mfem::ParFiniteElementSpace &fes, &vfes; 
-	mfem::Coefficient &total, &absorption;
 	const BoundaryConditionMap &bc_map; 
 	int lumping; 
 
@@ -69,14 +68,15 @@ protected:
 	double time_absorption_s = -1.0, time_absorption_v = -1.0;
 
 	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>;
-	HypreParMatrixPtr Mtime_s, Mtime_v;
+	const mfem::HypreParMatrix *Mtime_s = nullptr, *Mtime_v = nullptr;	
 public:
-	BlockMomentDiscretization(mfem::ParFiniteElementSpace &fes, 
-		mfem::ParFiniteElementSpace &vfes, mfem::Coefficient &total, mfem::Coefficient &absorption, 
-		int lumping, const BoundaryConditionMap &bc_map);
+	BlockMomentDiscretization(
+		mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		const BoundaryConditionMap &bc_map, int lumping);
 	const mfem::Array<int> &GetOffsets() const { return offsets; }
-	virtual mfem::Operator *GetOperator() const =0;
-	void SetTimeAbsorption(double scalar, double vector); 
+	virtual mfem::Operator *GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const =0;
+	void SetScalarTimeAbsorption(double sigma, const mfem::HypreParMatrix &M);
+	void SetVectorTimeAbsorption(double sigma, const mfem::HypreParMatrix &M);
 	void SetAlpha(double a) { alpha = a; }
 
 	class Solver : public mfem::Solver {
@@ -103,11 +103,11 @@ class BlockLDGDiscretization : public BlockMomentDiscretization {
 private:
 	mfem::Vector beta;
 public:
-	BlockLDGDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, 
-		int lumping, const BoundaryConditionMap &bc_map);
+	BlockLDGDiscretization(
+		mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		const BoundaryConditionMap &bc_map, int lumping);
 	void SetBeta(const mfem::Vector &b) { beta = b; }
-	mfem::BlockOperator *GetOperator() const override;
+	mfem::BlockOperator *GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const override;
 
 	friend class ConsistentLDGSMMOperator;
 };
@@ -117,8 +117,9 @@ private:
 	double kappa = -1.0, mip_val = 0.0;
 	bool scale_penalty = false;
 public:
-	BlockIPDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, int lumping, const BoundaryConditionMap &bc_map);
+	BlockIPDiscretization(
+		mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		const BoundaryConditionMap &bc_map, int lumping);
 	void SetKappa(double k) {
 		if (k < 0.0) {
 			const int p = fes.GetMaxElementOrder();
@@ -129,16 +130,17 @@ public:
 	}
 	void SetPenaltyLowerBound(double lb) { mip_val = lb; }
 	void SetScalePenalty(bool use=true) { scale_penalty = use; }
-	mfem::BlockOperator *GetOperator() const override;
+	mfem::BlockOperator *GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const override;
 
 	friend class ConsistentIPSMMOperator;
 };
 
 class P1Discretization : public BlockMomentDiscretization {
 public:
-	P1Discretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
-		mfem::Coefficient &total, mfem::Coefficient &absorption, int lumping, const BoundaryConditionMap &bc_map);
-	mfem::HypreParMatrix *GetOperator() const override;
+	P1Discretization(
+		mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		const BoundaryConditionMap &bc_map, int lumping);
+	mfem::HypreParMatrix *GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const override;
 
 	friend class ConsistentP1SMMOperator;
 };

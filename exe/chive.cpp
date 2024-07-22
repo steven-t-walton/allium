@@ -15,6 +15,7 @@
 #include "lumping.hpp"
 #include "moment_discretization.hpp"
 #include "smm_source.hpp"
+#include "multigroup.hpp"
 #include <kinsol/kinsol.h>
 
 class TransportIterationMonitor : public mfem::IterativeSolverMonitor
@@ -410,7 +411,11 @@ int main(int argc, char *argv[]) {
 	mfem::ParGridFunction total_gf(&fes0); 
 	total_gf.ProjectCoefficient(total_attr); 
 	total_gf.ExchangeFaceNbrData(); 
-	mfem::GridFunctionCoefficient total(&total_gf); 
+	// sweep requires multigroup coefficient 
+	GridFunctionMGCoefficient total_mg(total_gf); 
+	// rest of the code relies on scalar coefficient 
+	auto total_ptr = std::unique_ptr<mfem::Coefficient>(total_mg.GetGroupCoefficient(0));
+	auto &total = *total_ptr;
 
 	// scattering 
 	mfem::PWConstCoefficient scattering_attr(scattering_list); 
@@ -547,7 +552,7 @@ int main(int argc, char *argv[]) {
 	FormTransportSource(fes, *quad, energy_grid, source, inflow, source_vec_view); 
 
 	// build sweep operator 
-	InverseAdvectionOperator Linv(fes, *quad, total_gf, bc_map, lumping); 
+	InverseAdvectionOperator Linv(fes, *quad, total_mg, bc_map, lumping); 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -583,8 +588,8 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "type" << YAML::Value << type; 
 			if (type == "p1sa") {
 				if (inner_it_solver) { MFEM_ABORT("only direct available for P1"); }
-				P1Discretization p1(fes, vfes, total, absorption, lumping, bc_map);
-				dsa_op.reset(p1.GetOperator());
+				P1Discretization p1(fes, vfes, bc_map, lumping);
+				dsa_op.reset(p1.GetOperator(total, absorption));
 				inner_solver->SetOperator(*dsa_op);
 				auto *ceo = new ComponentExtractionOperator(p1.GetOffsets(), 1); 
 				auto *ceo_t = new mfem::TransposeOperator(*ceo); 
@@ -594,9 +599,9 @@ int main(int argc, char *argv[]) {
 				prec = std::make_unique<DiffusionSyntheticAccelerationOperator>(*dsa_op_extract, Ms_form);
 			} 
 			else if (type == "ldgsa") {
-				BlockLDGDiscretization disc(fes, vfes, total, absorption, lumping, bc_map);
+				BlockLDGDiscretization disc(fes, vfes, bc_map, lumping);
 				disc.SetAlpha(alpha);
-				auto *block_op = disc.GetOperator();
+				auto *block_op = disc.GetOperator(total, absorption);
 				dsa_op.reset(disc.FormSchurComplement(*block_op));
 				delete block_op;
 
@@ -613,13 +618,13 @@ int main(int argc, char *argv[]) {
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
 				bool lower_bound = prec_table["bound_stabilization_below"].get_or(true); 
 				// const auto bc_type = io::GetDiffusionBCType(bc_str); 
-				BlockIPDiscretization disc(fes, vfes, total, absorption, lumping, bc_map);
+				BlockIPDiscretization disc(fes, vfes, bc_map, lumping);
 				disc.SetAlpha(alpha);
 				disc.SetKappa(kappa);
 				disc.SetScalePenalty(scale_stabilization);
 				if (lower_bound)
 					disc.SetPenaltyLowerBound(alpha/2);
-				auto *block_op = disc.GetOperator();
+				auto *block_op = disc.GetOperator(total, absorption);
 				dsa_op.reset(disc.FormSchurComplement(*block_op));
 				delete block_op;
 
@@ -639,11 +644,11 @@ int main(int argc, char *argv[]) {
 			else if (type == "scalar mip") {
 				double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
 				double sigma = prec_table["sigma"].get_or(-1.0); 
-				InteriorPenaltyDiscretization ipdisc(fes, total, absorption, lumping, bc_map);
+				InteriorPenaltyDiscretization ipdisc(fes, bc_map, lumping);
 				ipdisc.SetKappa(kappa);
 				ipdisc.SetSigma(sigma);
 				ipdisc.SetPenaltyLowerBound(alpha/2);
-				dsa_op.reset(ipdisc.GetOperator());
+				dsa_op.reset(ipdisc.GetOperator(total, absorption));
 
 				if (inner_it_solver) {
 					amg = std::make_unique<mfem::HypreBoomerAMG>();
@@ -735,9 +740,9 @@ int main(int argc, char *argv[]) {
 		if (type == "LDGSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
 			bool scale_stabilization = accel["scale_stabilization"].get_or(false); 
-			BlockLDGDiscretization disc(fes, vfes, total, absorption, lumping, bc_map);
+			BlockLDGDiscretization disc(fes, vfes, bc_map, lumping);
 			disc.SetAlpha(alpha);
-			lo_op.reset(disc.GetOperator());
+			lo_op.reset(disc.GetOperator(total, absorption));
 
 			// iterative solve
 			if (inner_it_solver) {
@@ -778,12 +783,12 @@ int main(int argc, char *argv[]) {
 			// use kappa = alpha/2 if regular kappa goes below alpha/2 
 			bool stab_bound = accel["bound_stabilization_below"].get_or(true); 
 
-			BlockIPDiscretization disc(fes, vfes, total, absorption, lumping, bc_map);
+			BlockIPDiscretization disc(fes, vfes, bc_map, lumping);
 			disc.SetAlpha(alpha);
 			if (stab_bound)
 				disc.SetPenaltyLowerBound(alpha/2);
 			disc.SetScalePenalty(scale_stabilization);
-			lo_op.reset(disc.GetOperator());
+			lo_op.reset(disc.GetOperator(total, absorption));
 
 			// iterative solve
 			if (inner_it_solver) {
@@ -796,7 +801,7 @@ int main(int argc, char *argv[]) {
 
 			mfem::Operator *source_op;
 			if (consistent) 
-				source_op = new ConsistentIPSMMOperator(disc, *quad, psi_ext, source_vec);
+				source_op = new ConsistentIPSMMOperator(disc, total, *quad, psi_ext, source_vec);
 			else {
 				const int source_lumping = accel["source_lumping"].get_or(0);
 				source_op = new IndependentSMMOperator(fes, vfes, *quad, psi_ext, source, inflow, 
@@ -823,8 +828,8 @@ int main(int argc, char *argv[]) {
 			const bool consistent = accel["consistent"].get_or(true);
 			if (!consistent) MFEM_ABORT("only consistent supported for P1");
 
-			P1Discretization p1(fes, vfes, total, absorption, lumping, bc_map);
-			lo_op.reset(p1.GetOperator());
+			P1Discretization p1(fes, vfes, bc_map, lumping);
+			lo_op.reset(p1.GetOperator(total, absorption));
 			inner_solver->SetOperator(*lo_op);
 			auto *source_op = new ConsistentP1SMMOperator(p1, *quad, psi_ext, source_vec);
 			offsets = p1.GetOffsets();

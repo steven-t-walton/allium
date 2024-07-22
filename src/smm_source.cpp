@@ -333,10 +333,10 @@ void ConsistentLDGSMMOperator::Mult(const mfem::Vector &psi, mfem::Vector &sourc
 	Ma->Mult(1.0, phi, 1.0, source_phi); 
 }
 
-ConsistentIPSMMOperator::ConsistentIPSMMOperator(const BlockIPDiscretization &disc, 
+ConsistentIPSMMOperator::ConsistentIPSMMOperator(const BlockIPDiscretization &disc, mfem::Coefficient &total, 
 	const AngularQuadrature &quad, const TransportVectorExtents &psi_ext, const mfem::Vector &source_vec)
 	: ConsistentSMMOperatorBase(disc.fes, disc.vfes, quad, psi_ext, disc.bc_map, source_vec, disc.alpha, disc.lumping), 
-	  total(disc.total), kappa(disc.kappa), mip_val(disc.mip_val), scale_penalty(disc.scale_penalty)
+	  total(total), kappa(disc.kappa), mip_val(disc.mip_val), scale_penalty(disc.scale_penalty)
 {
 	moments.SetSize(TotalExtent(phi_ext));
 
