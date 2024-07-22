@@ -1,6 +1,61 @@
 #include "tvector.hpp"
 #include "multigroup.hpp"
 
+ZerothMomentCoefficient::ZerothMomentCoefficient(
+	const mfem::FiniteElementSpace &fes, const MomentVectorExtents &phi_ext, const mfem::Vector &data)
+	: fes(fes), phi_ext(phi_ext), data(data), mfem::VectorCoefficient(phi_ext.extent(MomentIndex::ENERGY))
+{
+}
+
+void ZerothMomentCoefficient::Eval(
+	mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
+{
+	auto view = MomentVectorView(data.GetData(), phi_ext);
+	v.SetSize(vdim);
+	mfem::Array<int> dofs;
+	const auto *fe = fes.GetFE(trans.ElementNo);
+	const auto dof = fe->GetDof();
+	shape.SetSize(dof);
+	local_data.SetSize(dof);
+	fe->CalcShape(ip, shape);
+	fes.GetElementDofs(trans.ElementNo, dofs);
+	for (int g=0; g<vdim; g++) {
+		for (int i=0; i<dof; i++) {
+			local_data(i) = view(g,moment_id,dofs[i]);
+		}
+		v(g) = shape * local_data;
+	}
+}
+
+FirstMomentCoefficient::FirstMomentCoefficient(
+	const mfem::FiniteElementSpace &fes, const MomentVectorExtents &ext, const mfem::Vector &data)
+	: fes(fes), ext(ext), data(data), 
+	  mfem::MatrixCoefficient(ext.extent(MomentIndex::ENERGY), fes.GetMesh()->Dimension())
+{
+	if (ext.extent(MomentIndex::MOMENT) < width+1)
+		MFEM_ABORT("not enough data");
+}
+
+void FirstMomentCoefficient::Eval(mfem::DenseMatrix &K, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
+{
+	auto view = ConstMomentVectorView(data.GetData(), ext);
+	K.SetSize(height, width);
+	K = 0.0;
+	mfem::Array<int> dofs; 
+	const auto &fe = *fes.GetFE(trans.ElementNo);
+	const auto dof = fe.GetDof();
+	shape.SetSize(dof);
+	fe.CalcShape(ip, shape);
+	fes.GetElementDofs(trans.ElementNo, dofs);
+	for (int g=0; g<height; g++) {
+		for (int d=0; d<width; d++) {
+			for (int i=0; i<dof; i++) {
+				K(g,d) += view(g,d+1,dofs[i]) * shape(i);
+			}
+		}
+	}
+}
+
 SNTimeMassMatrix::SNTimeMassMatrix(const mfem::FiniteElementSpace &fes, 
 	const TransportVectorExtents &ext, bool lump)
 	: fes(fes), psi_ext(ext) 

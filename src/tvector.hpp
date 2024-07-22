@@ -15,6 +15,39 @@ using TransportVectorLayout = Kokkos::layout_right;
 #endif
 #endif
 
+// arbitrary flattening of 3D index into 1D 
+// for index operator(i,j,k)
+// I controls the stride ordering of the first index
+// J the second, and K the third 
+// IndexMap<1,0,2>: strides fastest in argument 1 (j), 
+// then argument 0 (i), then argument 2 (k) 
+template<std::size_t I,std::size_t J, std::size_t K>
+struct IndexMap
+{
+	static_assert(I >= 0 and I <= 2); static_assert(J >= 0 and J <= 2); static_assert(K >= 0 and K <= 2);
+	static_assert(I+J+K == 3);
+	template <class Extents>
+	class mapping
+	{
+	private:
+		using index_type = typename Extents::index_type;
+		Extents ext;
+	public:
+		mapping(const Extents &ext) : ext(ext) {
+			static_assert(ext.rank()==3);
+		}
+		template<class... Indices>
+		constexpr index_type operator()(Indices... idxs) const noexcept {
+			std::array<std::common_type_t<Indices...>,sizeof...(idxs)> idx{idxs...};
+			return idx[I] + ext.extent(I)*(idx[J] + ext.extent(J)*idx[K]);
+		}
+		constexpr const Extents& extents() const noexcept
+		{
+			return ext;
+		}
+	};	
+};
+
 // index into transport vector with (energy, angle, space) 
 struct TransportIndex {
 	static constexpr int ENERGY = 0;
@@ -32,8 +65,38 @@ struct MomentIndex {
 	static constexpr int SPACE = 2;
 };
 using MomentVectorExtents = Kokkos::dextents<std::size_t,3>;
-using MomentVectorView = Kokkos::mdspan<double,MomentVectorExtents,Kokkos::layout_right>;  
-using ConstMomentVectorView = Kokkos::mdspan<const double,MomentVectorExtents,Kokkos::layout_right>;
+// strides fastest in space, then energy, then moment id
+using MomentVectorLayout = IndexMap<MomentIndex::SPACE,MomentIndex::ENERGY,MomentIndex::MOMENT>; 
+using MomentVectorView = Kokkos::mdspan<double,MomentVectorExtents,MomentVectorLayout>;  
+using ConstMomentVectorView = Kokkos::mdspan<const double,MomentVectorExtents,MomentVectorLayout>;
+
+// evaluate group-wise dependence of the zeroth moment 
+class ZerothMomentCoefficient : public mfem::VectorCoefficient {
+private:
+	const mfem::FiniteElementSpace &fes;
+	const MomentVectorExtents &phi_ext;
+	const mfem::Vector &data;
+	const int moment_id = 0;
+	mfem::Vector shape, local_data;
+public:
+	ZerothMomentCoefficient(
+		const mfem::FiniteElementSpace &fes, const MomentVectorExtents &phi_ext, const mfem::Vector &data);
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+};
+
+// evaluate group-wise dependence of the first moment
+// return matrix is (num groups) x (dim components of F)
+class FirstMomentCoefficient : public mfem::MatrixCoefficient {
+private:
+	const mfem::FiniteElementSpace &fes; 
+	const MomentVectorExtents &ext;
+	const mfem::Vector &data; 
+	mfem::Vector shape; 
+public:
+	FirstMomentCoefficient(const mfem::FiniteElementSpace &fes, const MomentVectorExtents &ext, 
+		const mfem::Vector &data);
+	void Eval(mfem::DenseMatrix &K, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+};
 
 template<typename T, std::size_t... Extents>
 T TotalExtent(const Kokkos::extents<T,Extents...> &ext) {
