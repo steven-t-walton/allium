@@ -112,3 +112,25 @@ TEST(Linal, BlockLDUInverse) {
 	double err = phi.ComputeL2Error(exact_c); 
 	EXPECT_LT(err, 0.01); 
 }
+
+TEST(IndexMap, LayoutLeft) {
+	TransportVectorExtents ext(2,4,8);
+	auto custom = IndexMap<0,1,2>::mapping(ext);
+	auto kokkos = Kokkos::layout_left::mapping(ext);
+	EXPECT_EQ(custom(1,2,3), kokkos(1,2,3));
+	EXPECT_EQ(custom(0,1,6), kokkos(0,1,6));
+}
+
+TEST(IndexMap, LayoutRight) {
+	TransportVectorExtents ext(2,4,8);
+	auto custom = IndexMap<2,1,0>::mapping(ext);
+	auto kokkos = Kokkos::layout_right::mapping(ext);
+	EXPECT_EQ(custom(1,2,3), kokkos(1,2,3));
+	EXPECT_EQ(custom(0,1,6), kokkos(0,1,6));
+}
+
+TEST(IndexMap, MomentLayout) {
+	TransportVectorExtents ext(2,4,8);
+	auto custom = IndexMap<2,0,1>::mapping(ext);
+	EXPECT_EQ(custom(1,2,3), 3 + 8*(1 + 2*2));
+}
