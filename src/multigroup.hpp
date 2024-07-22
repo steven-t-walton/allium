@@ -5,6 +5,7 @@
 
 // data structure class that stores information about 
 // energy discretization 
+// provides access to group bins, midpoints, and bin widths 
 class MultiGroupEnergyGrid {
 private:
 	mfem::Array<double> bounds; // G+1, defines energy grid 
@@ -46,34 +47,81 @@ public:
 	static MultiGroupEnergyGrid MakeEqualSpaced(double Emin, double Emax, int G, bool extend_to_zero=true);
 };
 
-class OpacityGroupCollapseOperator : public mfem::Operator {
+// coefficient that evaluates a gray opacity value 
+// by collapsing the multigroup opacity with a provided 
+// vector coefficient 
+class OpacityGroupCollapseCoefficient : public mfem::Coefficient
+{
 private:
-	mfem::FiniteElementSpace &fes; 
-	const mfem::Array<double> &energy_grid; 
-	mfem::VectorCoefficient *f; 
+	mfem::VectorCoefficient &sigma, &weight;
+	mfem::Vector sigma_eval, weight_eval;
 public:
-	OpacityGroupCollapseOperator(mfem::FiniteElementSpace &sigma_space, const mfem::Array<double> &grid, 
-		mfem::VectorCoefficient *weight_func=nullptr) 
-	: fes(sigma_space), energy_grid(grid), f(weight_func) 
+	OpacityGroupCollapseCoefficient(mfem::VectorCoefficient &sigma, mfem::VectorCoefficient &weight)
+		: sigma(sigma), weight(weight)
 	{
-		width = fes.GetVSize(); // G x space dofs 
-		height = fes.GetNDofs(); // 1 x space dofs 
-		assert(grid.Size() - 1 == fes.GetVDim()); 
+		sigma_eval.SetSize(sigma.GetVDim());
+		weight_eval.SetSize(weight.GetVDim());
 	}
-
-	void Mult(const mfem::Vector &sigma_mf, mfem::Vector &sigma_gray) const; 
+	inline double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
+	{
+		sigma.Eval(sigma_eval, trans, ip);
+		weight.Eval(weight_eval, trans, ip);
+		return (sigma_eval*weight_eval) / weight_eval.Sum(); 
+	}
 };
 
+// sums over the energy index to produce a gray vector 
+// the template parameter controls the assumed layout 
+// of the input and output 
+// T could be MomentVectorLayout or TransportVectorLayout 
+// to create a gray moment vector or intensity 
+template<class T=MomentVectorLayout>
 class GroupCollapseOperator : public mfem::Operator {
 private:
-	const MomentVectorExtents &mg_ext;
+	const MomentVectorExtents &mg_ext; 
 	MomentVectorExtents gr_ext;
 public:
-	GroupCollapseOperator(const MomentVectorExtents &mg_ext);
-	void Mult(const mfem::Vector &mg, mfem::Vector &gray) const override; 
-	void MultTranspose(const mfem::Vector &gray, mfem::Vector &mg) const override;
+	GroupCollapseOperator(const MomentVectorExtents &mg_ext)
+		: mg_ext(mg_ext), gr_ext(1, mg_ext.extent(1), mg_ext.extent(2))
+	{
+		width = TotalExtent(mg_ext);
+		height = TotalExtent(gr_ext);
+	}
+	void Mult(const mfem::Vector &mg, mfem::Vector &gr) const override 
+	{
+		assert(mg.Size() == width);
+		assert(gray.Size() == height);
+		gr = 0.0;
+
+		auto mg_view = Kokkos::mdspan<const double,MomentVectorExtents,T>(mg.GetData(), mg_ext);
+		auto gr_view = Kokkos::mdspan<double,MomentVectorExtents,T>(gr.GetData(), gr_ext);
+		for (int g=0; g<mg_ext.extent(MomentIndex::ENERGY); g++) {
+			for (int m=0; m<mg_ext.extent(MomentIndex::MOMENT); m++) {
+				for (int s=0; s<mg_ext.extent(MomentIndex::SPACE); s++) {
+					gr_view(0,m,s) += mg_view(g,m,s);
+				}
+			}
+		}
+	}
+	void MultTranspose(const mfem::Vector &gr, mfem::Vector &mg) const override
+	{
+		assert(mg.Size() == width);
+		assert(gray.Size() == height);
+
+		auto mg_view = Kokkos::mdspan<double,MomentVectorExtents,T>(mg.GetData(), mg_ext);
+		auto gr_view = Kokkos::mdspan<const double,MomentVectorExtents,T>(gr.GetData(), gr_ext);
+		for (int g=0; g<mg_ext.extent(MomentIndex::ENERGY); g++) {
+			for (int m=0; m<mg_ext.extent(MomentIndex::MOMENT); m++) {
+				for (int s=0; s<mg_ext.extent(MomentIndex::SPACE); s++) {
+					mg_view(g,m,s) = gr_view(0,m,s);
+				}
+			}
+		}	
+	}
 };
 
+// group collapse with a weighting function 
+// implementation assumes MomentVectorLayout is used 
 class WeightedGroupCollapseOperator : public mfem::Operator {
 private:
 	const mfem::FiniteElementSpace &fes;
@@ -88,22 +136,6 @@ public:
 		mfem::VectorCoefficient &f);
 	void Mult(const mfem::Vector &mg, mfem::Vector &gray) const override;
 	void MultTranspose(const mfem::Vector &gray, mfem::Vector &mg) const override;
-};
-
-// makes a moment vector look like a multigroup vector coefficient 
-// for use in OpacityGroupCollapseOperator 
-class MomentVectorMultiGroupCoefficient : public mfem::VectorCoefficient {
-private:
-	const mfem::FiniteElementSpace &fes;
-	const MomentVectorExtents &phi_ext;
-	const mfem::Vector &data;
-
-	int moment_id = 0;
-	mfem::Vector shape, local_data;
-public:
-	MomentVectorMultiGroupCoefficient(
-		const mfem::FiniteElementSpace &fes, const MomentVectorExtents &phi_ext, const mfem::Vector &data);
-	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
 };
 
 // a coefficient type intended for multigroup data such as opacities 
@@ -160,6 +192,9 @@ public:
 	}
 };
 
+// extension of mfem::VectorGridFunctionCoefficient 
+// that allows getting a scalar GridFunctionCoefficient for
+// a given group 
 class GridFunctionMGCoefficient : public MultiGroupCoefficient
 {
 private:
@@ -180,6 +215,10 @@ public:
 	const mfem::GridFunction &GetGridFunction() const { return gf; }
 };
 
+// evaluates normalized planck spectrum 
+// in the MultiGroupCoefficient format 
+// vector eval is optimized to reduce number of calls 
+// to IntegrateNormalizedPlanck
 class PlanckSpectrumMGCoefficient : public MultiGroupCoefficient {
 private:
 	const mfem::Array<double> &energy_grid; 
@@ -193,6 +232,10 @@ public:
 	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
 };
 
+// evaluates normalized rosseland spectrum 
+// in the MultiGroupCoefficient format 
+// vector eval is optimized to reduce number of calls 
+// to IntegrateNormalizedPlanck
 class RosselandSpectrumMGCoefficient : public MultiGroupCoefficient {
 private:
 	const mfem::Array<double> &energy_grid; 
@@ -206,6 +249,7 @@ public:
 	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
 };
 
+// MG coefficient that is independent of energy 
 class GrayMGCoefficient : public MultiGroupCoefficient {
 private:
 	mfem::Coefficient &coef;
@@ -225,6 +269,7 @@ public:
 	}
 };
 
+// coefficient with energy dependence but constant in space 
 class ConstantMGCoefficient : public MultiGroupCoefficient {
 private:
 	const mfem::Vector &constants; 
@@ -239,5 +284,24 @@ public:
 	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override
 	{
 		v = constants;
+	}
+};
+
+// energy and space independent coefficient 
+class ConstantGrayMGCoefficient : public MultiGroupCoefficient {
+private:
+	const double constant;
+public:
+	ConstantGrayMGCoefficient(double constant, int G)
+		: constant(constant), MultiGroupCoefficient(G)
+	{ }
+	double Eval(int g, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override
+	{
+		return constant;
+	}
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override
+	{
+		v.SetSize(vdim);
+		v = constant;
 	}
 };

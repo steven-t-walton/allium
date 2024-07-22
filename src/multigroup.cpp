@@ -85,77 +85,6 @@ MultiGroupEnergyGrid MultiGroupEnergyGrid::MakeEqualSpaced(double Emin, double E
 	return MultiGroupEnergyGrid(bounds, midpoints);
 }
 
-void OpacityGroupCollapseOperator::Mult(const mfem::Vector &sigma_mf, mfem::Vector &sigma_gray) const 
-{
-	const int G = fes.GetVDim(); 
-	const auto ordering = fes.GetOrdering(); 
-	assert(ordering == mfem::Ordering::Type::byNODES); 
-	assert(sigma_gray.Size() == height); 
-	sigma_gray = 0.0; 
-	mfem::Vector F(G); 
-	for (int g=0; g<G; g++) {
-		F(g) = energy_grid[g+1] - energy_grid[g];
-	}
-	mfem::Array<int> dof; 
-	for (int e=0; e<fes.GetNE(); e++) {
-		fes.GetElementDofs(e, dof); 
-		auto &trans = *fes.GetMesh()->GetElementTransformation(e); 
-		const auto &fe = *fes.GetFE(e); 
-		const auto &ir = fe.GetNodes(); 
-		for (int n=0; n<ir.Size(); n++) {
-			if (f) 
-				f->Eval(F, trans, ir.IntPoint(n)); 
-			double denom = 0.0; 
-			for (int g=0; g<G; g++) {
-				double dE = energy_grid[g+1] - energy_grid[g]; 
-				sigma_gray(dof[n]) += F(g) * sigma_mf(dof[n] + g*height); 
-				denom += F(g); 
-			}
-			sigma_gray(dof[n]) /= denom; 
-		}
-	}
-}
-
-GroupCollapseOperator::GroupCollapseOperator(const MomentVectorExtents &mg_ext)
-	: mg_ext(mg_ext), gr_ext(1, mg_ext.extent(MomentIndex::MOMENT), mg_ext.extent(MomentIndex::SPACE))
-{
-	// maps multigroup to single group
-	width = TotalExtent(mg_ext);
-	height = TotalExtent(gr_ext);
-}
-
-void GroupCollapseOperator::Mult(const mfem::Vector &mg, mfem::Vector &gray) const
-{
-	assert(mg.Size() == width);
-	assert(gray.Size() == height);
-	gray = 0.0;
-
-	auto mg_view = MomentVectorView(mg.GetData(), mg_ext);
-	auto gr_view = MomentVectorView(gray.GetData(), gr_ext);
-	for (int g=0; g<mg_ext.extent(MomentIndex::ENERGY); g++) {
-		for (int m=0; m<mg_ext.extent(MomentIndex::MOMENT); m++) {
-			for (int s=0; s<mg_ext.extent(MomentIndex::SPACE); s++) {
-				gr_view(0,m,s) += mg_view(g,m,s);
-			}
-		}
-	}
-}
-
-void GroupCollapseOperator::MultTranspose(const mfem::Vector &gray, mfem::Vector &mg) const
-{
-	assert(mg.Size() == width);
-	assert(gray.Size() == height);
-	auto mg_view = MomentVectorView(mg.GetData(), mg_ext);
-	auto gr_view = MomentVectorView(gray.GetData(), gr_ext);
-	for (int g=0; g<mg_ext.extent(MomentIndex::ENERGY); g++) {
-		for (int m=0; m<mg_ext.extent(MomentIndex::MOMENT); m++) {
-			for (int s=0; s<mg_ext.extent(MomentIndex::SPACE); s++) {
-				mg_view(g,m,s) = gr_view(0,m,s);
-			}
-		}
-	}	
-}
-
 WeightedGroupCollapseOperator::WeightedGroupCollapseOperator(
 	const mfem::FiniteElementSpace &fes, 
 	const MomentVectorExtents &phi_ext,
@@ -212,32 +141,6 @@ void WeightedGroupCollapseOperator::MultTranspose(const mfem::Vector &gray, mfem
 				mg_view(g,0,dofs[n]) = spectrum(g) * gray(dofs[n]);
 			}
 		}
-	}
-}
-
-MomentVectorMultiGroupCoefficient::MomentVectorMultiGroupCoefficient(
-	const mfem::FiniteElementSpace &fes, const MomentVectorExtents &phi_ext, const mfem::Vector &data)
-	: fes(fes), phi_ext(phi_ext), data(data), mfem::VectorCoefficient(phi_ext.extent(MomentIndex::ENERGY))
-{
-}
-
-void MomentVectorMultiGroupCoefficient::Eval(
-	mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
-{
-	auto view = MomentVectorView(data.GetData(), phi_ext);
-	v.SetSize(vdim);
-	mfem::Array<int> dofs;
-	const auto *fe = fes.GetFE(trans.ElementNo);
-	const auto dof = fe->GetDof();
-	shape.SetSize(dof);
-	local_data.SetSize(dof);
-	fe->CalcShape(ip, shape);
-	fes.GetElementDofs(trans.ElementNo, dofs);
-	for (int g=0; g<vdim; g++) {
-		for (int i=0; i<dof; i++) {
-			local_data(i) = view(g,moment_id,dofs[i]);
-		}
-		v(g) = shape * local_data;
 	}
 }
 
