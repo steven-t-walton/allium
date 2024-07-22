@@ -25,6 +25,50 @@ constexpr double coef_21 = 43.867/107290978560589824;
 constexpr double coef = 15.0/pow(constants::pi,4);
 constexpr double rosseland_max = pow(std::numeric_limits<double>::max(), 0.25);
 
+constexpr std::array<double,9> inv_int1 = {
+	1.0/2, 
+	1.0/3, 
+	1.0/4, 
+	1.0/5, 
+	1.0/6, 
+	1.0/7, 
+	1.0/8, 
+	1.0/9
+};
+
+constexpr std::array<double,9> inv_int2 = {
+	1.0/4, 
+	1.0/9, 
+	1.0/16, 
+	1.0/25, 
+	1.0/36, 
+	1.0/49, 
+	1.0/64, 
+	1.0/81
+};
+
+constexpr std::array<double,9> inv_int3 = {
+	1.0/8, 
+	1.0/27, 
+	1.0/64, 
+	1.0/125, 
+	1.0/216, 
+	1.0/343, 
+	1.0/512, 
+	1.0/749
+};
+
+constexpr std::array<double,9> inv_int4 = {
+	1.0/16, 
+	1.0/81, 
+	1.0/256, 
+	1.0/625, 
+	1.0/1296, 
+	1.0/2401, 
+	1.0/4096, 
+	1.0/6561
+};
+
 inline double PlanckTaylorSeries9(double x) {
 	const double x2 = x*x;
 	double taylor = x2 * coef_9 + coef_7;
@@ -94,22 +138,21 @@ inline double PlanckTaylorSeries(double x) {
 
 constexpr int planck_polylog_degree = 9;
 inline double PlanckPolyLogarithmic(double x) {
-	const double x2 = x*x;
-	const double x3 = x2*x;
-	const double d = -6.0;
-	const double c = -6.0 * x; 
-	const double b = -3 * x2;
-	const double a = -x3;
+	const double eix = std::exp(-x);
+	double eixp = eix;
+	double li1 = eix;
+	double li2 = eix;
+	double li3 = eix; 
+	double li4 = eix;
 
-	double val = 0.0;
-	for (int l=1; l<=planck_polylog_degree; l++) {
-		const double exp = std::exp(-x*l);
-		const int l2 = l*l;
-		const int l3 = l2*l;
-		const int l4 = l3*l;
-		val += (a/l + b/l2 + c/l3 + d/l4) * exp;
+	for (int l=2; l<=planck_polylog_degree; l++) {
+		eixp *= eix;
+		li1 += eixp * inv_int1[l-2];
+		li2 += eixp * inv_int2[l-2];
+		li3 += eixp * inv_int3[l-2]; 
+		li4 += eixp * inv_int4[l-2];
 	}
-	return 1.0 + internal::coef * val;
+	return 1.0 - internal::coef * (6.0*li4 + x * (6.0*li3 + x*(3.0*li2 + x*li1)));
 }
 
 } // end namespace internal 
