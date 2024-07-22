@@ -17,6 +17,7 @@
 #include "block_diag_op.hpp"
 #include "moment_discretization.hpp"
 #include "smm_source.hpp"
+#include "multigroup.hpp"
 
 class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
 {
@@ -495,21 +496,23 @@ int main(int argc, char *argv[]) {
 	Mcv.Assemble(); 
 	Mcv.Finalize(); 
 
-	mfem::BilinearForm Mtime(&fes);
+	mfem::ParBilinearForm Mtime_form_s(&fes);
 	if (IsMassLumped(lump)) 
-		Mtime.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator));
+		Mtime_form_s.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator));
 	else
-		Mtime.AddDomainIntegrator(new mfem::MassIntegrator);
-	Mtime.Assemble(); 
-	Mtime.Finalize();
+		Mtime_form_s.AddDomainIntegrator(new mfem::MassIntegrator);
+	Mtime_form_s.Assemble(); 
+	Mtime_form_s.Finalize();
+	auto Mtime_s = std::unique_ptr<mfem::HypreParMatrix>(Mtime_form_s.ParallelAssemble());
 
-	mfem::BilinearForm Mtime_v(&vfes);
+	mfem::ParBilinearForm Mtime_form_v(&vfes);
 	if (IsMassLumped(lump)) 
-		Mtime_v.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::VectorMassIntegrator));
+		Mtime_form_v.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::VectorMassIntegrator));
 	else
-		Mtime_v.AddDomainIntegrator(new mfem::MassIntegrator);
-	Mtime_v.Assemble(); 
-	Mtime_v.Finalize();
+		Mtime_form_v.AddDomainIntegrator(new mfem::MassIntegrator);
+	Mtime_form_v.Assemble(); 
+	Mtime_form_v.Finalize();
+	auto Mtime_v = std::unique_ptr<mfem::HypreParMatrix>(Mtime_form_v.ParallelAssemble());
 
 	// NOTE: RADE variable currently represents the zeroth moment of psi 
 	// not 1/c \int psi dOmega
@@ -557,7 +560,9 @@ int main(int argc, char *argv[]) {
 	total_coef.SetDensity(density); 
 	total_gf.ProjectCoefficient(total_coef); 
 	total_gf.ExchangeFaceNbrData(); 
-	mfem::GridFunctionCoefficient total(&total_gf); 
+	GridFunctionMGCoefficient total_mg(total_gf);
+	auto total_ptr = std::unique_ptr<mfem::Coefficient>(total_mg.GetGroupCoefficient(0));
+	auto &total = *total_ptr;
 
 	for (int i=0; i<fes.GetVSize(); i++) {
 		E0(i) = constants::StefanBoltzmann * pow(T(i), 4); // ac T^4 
@@ -573,7 +578,7 @@ int main(int argc, char *argv[]) {
 
 	// build sweep operator 
 	// total_gf += 1.0/time_step; // <-- hack, needs better design 
-	InverseAdvectionOperator Linv(fes, *quad, total_gf, bc_map, lump); 
+	InverseAdvectionOperator Linv(fes, *quad, total_mg, bc_map, lump); 
 	if (sweep_opts_avail) {
 		sol::table sweep_opts = sweep_opts_avail.value(); 
 		bool write_graph = sweep_opts["write_graph"].get_or(false); 
@@ -670,10 +675,11 @@ int main(int argc, char *argv[]) {
 
 	// --- setup low order discretization --- 
 	// defined in src/moment_discretization.hpp, src/smm_source.hpp
-	BlockLDGDiscretization lo_disc(fes, vfes, total, total, lump, bc_map);
+	BlockLDGDiscretization lo_disc(fes, vfes, bc_map, lump);
 	const auto &lo_offsets = lo_disc.GetOffsets(); // size of [F, E]
 	// set time absorption for scalar and vector variable 
-	lo_disc.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight, 1.0/time_step/constants::SpeedOfLight);
+	lo_disc.SetScalarTimeAbsorption(1.0/time_step/constants::SpeedOfLight, *Mtime_s);
+	lo_disc.SetVectorTimeAbsorption(1.0/time_step/constants::SpeedOfLight, *Mtime_v);
 	ConsistentLDGSMMOperator source_op(lo_disc, *quad, psi_ext, source_vec);
 	// reference to moment vector part of x and x0 
 	// does not copy/allocate data 
@@ -803,10 +809,10 @@ int main(int argc, char *argv[]) {
 		Mcv.Mult(T, T0); // assume T = T0 to get Mcv T0 -> T0 
 		T0 *= 1.0/time_step; 
 
-		Mtime.Mult(E, E0);
+		Mtime_s->Mult(E, E0);
 		E0 *= 1.0/time_step/constants::SpeedOfLight;
-		Mtime_v.Mult(F, F0);
-		F0 *= 1.0/time_step/constants::SpeedOfLight;
+		Mtime_v->Mult(F, F0);
+		F0 *= 3.0/time_step/constants::SpeedOfLight;
 
 		// --- get new time step solution --- 
 		int outer;
@@ -834,7 +840,7 @@ int main(int argc, char *argv[]) {
 				meb_solver.Mult(abs_source, T);
 
 				// form schur complement of jacobian 
-				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc.GetOperator()); // <-- does some redundant assembly
+				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc.GetOperator(total, total)); // <-- does some redundant assembly
 				const auto &dB = emission_form.GetGradient(T); // gradient of emission
 				auto &dBt_inv = meb_form.GetGradient(T); // gradient of energy balance equation
 				dBt_inv.Invert(); // <-- for lumping >0, this is diagonal, could save work with a diagonal inverse
