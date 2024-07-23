@@ -48,19 +48,26 @@ void TracerDataCollection::Save()
 				auto &out = outs[count++]; 
 				std::stringstream fname_ss; 
 				fname_ss << prefix_path << name << "." << n << ".csv"; 
-				out.open(fname_ss.str()); 
-				out << "cycle,time,time step,x,y,z";
-				for (auto &field : field_map) {
-					if (field.second->VectorDim()>1) {
-						out << "," << field.first << "_x,"
-							<< field.first << "_y," 
-							<< field.first << "_z"; 
-					}
-					else {
-						out << "," << field.first; 						
-					}
-				} 
-				out << std::endl; 
+				if (restart_mode) {
+					// open in append mode
+					out.open(fname_ss.str(), std::ios::app);
+				} else {
+					// open a new file 
+					// write header 
+					out.open(fname_ss.str(), std::ios::out); 
+					out << "cycle,time,time step,x,y,z";
+					for (auto &field : field_map) {
+						if (field.second->VectorDim()>1) {
+							out << "," << field.first << "_x,"
+								<< field.first << "_y," 
+								<< field.first << "_z"; 
+						}
+						else {
+							out << "," << field.first; 						
+						}
+					} 
+					out << std::endl; 					
+				}
 			}
 		}
 		first = false; 

@@ -588,7 +588,7 @@ int main(int argc, char *argv[]) {
 	// allocate time step control parameters 
 	double time_step; 
 	double time = 0.0;
-	int cycle = 0;
+	int cycle = 0, output_cycle = 0;
 
 	// get initial time step
 	// either as fixed value or from a function 
@@ -713,7 +713,7 @@ int main(int argc, char *argv[]) {
 		const std::string restart_file = restart_table["path"];
 		const int id = restart_table["id"].get_or(0);
 		// loads data, grabs cycle, time, time_step from restart file 
-		LoadFromRestart(MPI_COMM_WORLD, restart_file, id, x, cycle, time, time_step);
+		LoadFromRestart(MPI_COMM_WORLD, restart_file, id, x, output_cycle, cycle, time, time_step);
 		x0 = x;
 		// account for cycle != 0 in max cycles 
 		if (max_cycles < std::numeric_limits<int>::max() - cycle)
@@ -915,7 +915,7 @@ int main(int argc, char *argv[]) {
 			dc.reset(io::CreateDataCollection(type, output_root, mesh, root));
 			output_freq = viz["frequency"].get_or(std::numeric_limits<int>::max()); 
 			const int precision = viz["precision"].get_or(6); 
-			const bool restart_mode = viz["restart_mode"].get_or(false);
+			const bool restart_mode = viz["restart_mode"].get_or(false) and restart_table_avail;
 			dc->SetPrecision(precision); 
 			dc->RegisterField("E", &E); 
 			dc->RegisterField("F", &F);
@@ -929,7 +929,7 @@ int main(int argc, char *argv[]) {
 			dc->RegisterField("partition", &partition); 
 			// paraview has a "restart mode" 
 			// that allows continuing the same output after a restart 
-			if (restart_mode and restart_table_avail) {
+			if (restart_mode) {
 				auto *paraview = dynamic_cast<mfem::ParaViewDataCollection*>(dc.get());
 				if (paraview)
 					paraview->UseRestartMode(true);
@@ -939,7 +939,7 @@ int main(int argc, char *argv[]) {
 
 			// only save initial condition if restart mode is off 
 			else {
-				dc->SetCycle(cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
+				dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
 				dc->Save(); 
 			}
 
@@ -947,7 +947,7 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "type" << YAML::Value << type; 
 				out << YAML::Key << "frequency" << YAML::Value << output_freq; 
 				out << YAML::Key << "precision" << YAML::Value << precision; 
-				out << YAML::Key << "restart mode" << YAML::Value << (restart_mode and restart_table_avail);
+				out << YAML::Key << "restart mode" << YAML::Value << restart_mode;
 			out << YAML::EndMap; 
 		} 
 
@@ -965,6 +965,7 @@ int main(int argc, char *argv[]) {
 			}
 			const auto prefix = tracer["prefix"].get_or(std::string("tracer")); 
 			const int precision = tracer["precision"].get_or(10); 
+			const bool restart_mode = tracer["restart_mode"].get_or(false) and restart_table_avail;
 			tracer_dc = std::make_unique<TracerDataCollection>(prefix, mesh, pts); 
 			tracer_dc->SetPrefixPath(output_root); 
 			tracer_dc->SetPrecision(precision); 
@@ -975,12 +976,17 @@ int main(int argc, char *argv[]) {
 			tracer_dc->RegisterField("sigmaR", &totalR_gf); 
 			tracer_dc->RegisterField("sigmaE", &totalE_gf);
 			tracer_dc->RegisterField("sigmaP", &totalP_gf);
-			tracer_dc->SetCycle(0); tracer_dc->SetTime(0.0); tracer_dc->SetTimeStep(time_step); 
-			tracer_dc->Save(); 
+			if (restart_mode)
+				tracer_dc->UseRestartMode(true);
+			else {
+				tracer_dc->SetCycle(cycle); tracer_dc->SetTime(time); tracer_dc->SetTimeStep(time_step); 
+				tracer_dc->Save(); 
+			}
 
 			out << YAML::Key << "tracer" << YAML::Value << YAML::BeginMap; 
 				out << YAML::Key << "prefix" << YAML::Value << prefix; 
 				out << YAML::Key << "precision" << YAML::Value << precision; 
+				out << YAML::Key << "restart mode" << YAML::Value << restart_mode;
 				out << YAML::Key << "locations" << YAML::Value << YAML::BeginSeq; 
 				for (int i=0; i<ntracers; i++) {
 					sol::table tracer_pts = locations[i+1]; 
@@ -1248,8 +1254,9 @@ int main(int argc, char *argv[]) {
 		// write data collection to file 
 		bool done = time >= final_time - 1e-14 or cycle >= max_cycles; 
 		if (dc and (cycle % output_freq == 0 or done)) {
-			dc->SetCycle(cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
-			dc->Save(); 			
+			output_cycle++;
+			dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
+			dc->Save();
 		}
 
 		// write tracer to file 
@@ -1261,7 +1268,8 @@ int main(int argc, char *argv[]) {
 
 		// write restart to file 
 		if (restart_dc and (cycle % restart_freq == 0 or done)) {
-			restart_dc->SetCycle(cycle); restart_dc->SetTime(time); restart_dc->SetTimeStep(time_step);
+			restart_dc->SetOutputCycle(output_cycle); restart_dc->SetSimulationCycle(cycle);
+			restart_dc->SetTime(time); restart_dc->SetTimeStep(time_step);
 			restart_dc->Write(x);
 		}
 

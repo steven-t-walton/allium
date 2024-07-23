@@ -23,13 +23,14 @@ private:
 	int num_procs=1, rank=0;
 
 	int keep = 2;
-	int cycle = 0;
+	int output_cycle = 0, simulation_cycle = 0;
 	double time = 0.0; 
 	double time_step = 0.0;
 public:
 	RestartWriter(MPI_Comm comm, std::string root);
 	void SetNumRestartFiles(int k) { keep = k; }
-	void SetCycle(int c) { cycle = c; }
+	void SetOutputCycle(int c) { output_cycle = c; }
+	void SetSimulationCycle(int c) { simulation_cycle = c; }
 	void SetTime(double t) { time = t; }
 	void SetTimeStep(double step) { time_step = step; }
 	void Write(const mfem::Vector &x) const;
@@ -40,4 +41,4 @@ private:
 // load the vector x, cycle number, time, and time step size 
 // from the provided restart directory and restart number 
 void LoadFromRestart(MPI_Comm comm, const std::string root, int restart_num,
-	mfem::Vector &x, int &cycle, double &time, double &time_step);
+	mfem::Vector &x, int &output_cycle, int &simulation_cycle, double &time, double &time_step);
