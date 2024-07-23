@@ -2,6 +2,7 @@
 #include "linalg.hpp"
 #include <algorithm>
 #include <regex>
+#include <filesystem>
 
 namespace io 
 {
@@ -78,14 +79,21 @@ mfem::DataCollection *CreateDataCollection(std::string type, std::string output_
 	mfem::Mesh &mesh, bool root)
 {
 	ValidateOption<std::string>("data collection type", type, {"paraview", "visit", "glvis"}, root);
+	// clear trailing '/'
+	if (output_root.back() == '/')
+		output_root.pop_back();		
 	if (type == "paraview") {
 		return new mfem::ParaViewDataCollection(output_root, &mesh);
 	} else if (type == "visit") {
-		const std::string collection_name = output_root + "/" + output_root; 
-		return new mfem::VisItDataCollection(collection_name, &mesh); 
+		auto path = std::filesystem::path(output_root);
+		if (!path.has_filename()) MFEM_ABORT("visit path must have a filename component");
+		path.append(path.filename().string());
+		return new mfem::VisItDataCollection(path.string(), &mesh); 
 	} else if (type == "glvis") {
-		const std::string collection_name = output_root + "/" + output_root; 
-		return new mfem::DataCollection(collection_name, &mesh); 
+		auto path = std::filesystem::path(output_root);
+		if (!path.has_filename()) MFEM_ABORT("visit path must have a filename component");
+		path.append(path.filename().string());
+		return new mfem::DataCollection(path.string(), &mesh); 
 	}
 	return nullptr;
 }
