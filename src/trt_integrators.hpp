@@ -23,13 +23,13 @@ class PlanckEmissionNFI : public mfem::NonlinearFormIntegrator
 {
 private:
 	const mfem::Array<double> &group_bnds;
-	mfem::VectorGridFunctionCoefficient sigma_coef;
+	mfem::VectorCoefficient &sigma_coef;
 	mfem::Vector shape, bg_shape, spectrum, sigma_g; 
 	mfem::DenseMatrix elmat_g;
 	int oa, ob;
 public:
-	PlanckEmissionNFI(const mfem::Array<double> &group_bnds, const mfem::GridFunction &sigma_data, int a=2, int b=1)
-		: group_bnds(group_bnds), oa(a), ob(b), sigma_coef(&sigma_data)
+	PlanckEmissionNFI(const mfem::Array<double> &group_bnds, mfem::VectorCoefficient &sigma_coef, int a=2, int b=1)
+		: group_bnds(group_bnds), oa(a), ob(b), sigma_coef(sigma_coef)
 	{
 		spectrum.SetSize(group_bnds.Size()-1);
 		sigma_g.SetSize(group_bnds.Size()-1);
@@ -46,12 +46,12 @@ class GrayPlanckEmissionNFI : public mfem::NonlinearFormIntegrator
 {
 private:
 	const mfem::Array<double> &group_bnds; 
-	mfem::VectorGridFunctionCoefficient sigma_coef;
+	mfem::VectorCoefficient &sigma_coef;
 	mfem::Vector shape, bg_shape, spectrum, sigma_g; 
 	int oa, ob; 
 public:
-	GrayPlanckEmissionNFI(const mfem::Array<double> &group_bnds, const mfem::GridFunction &sigma_data, int a=2, int b=1)
-		: group_bnds(group_bnds), oa(a), ob(b), sigma_coef(&sigma_data)
+	GrayPlanckEmissionNFI(const mfem::Array<double> &group_bnds, mfem::VectorCoefficient &sigma_coef, int a=2, int b=1)
+		: group_bnds(group_bnds), oa(a), ob(b), sigma_coef(sigma_coef)
 	{
 		spectrum.SetSize(group_bnds.Size()-1);
 		sigma_g.SetSize(group_bnds.Size()-1);

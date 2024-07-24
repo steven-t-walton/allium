@@ -18,7 +18,6 @@
 #include "moment_discretization.hpp"
 #include "multigroup.hpp"
 #include "mg_form.hpp"
-#include "phase_form.hpp"
 #include "planck.hpp"
 #include "restart.hpp"
 #include "smm_source.hpp"
@@ -842,17 +841,17 @@ int main(int argc, char *argv[]) {
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	BlockDiagonalByElementNonlinearForm meb_form(&fes);
 	if (IsMassLumped(lump)) {
-		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total_gf))); 
+		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total))); 
 		meb_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
 	}
 	else {
-		meb_form.AddDomainIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total_gf, 2, 2 + sigma_fe_order)); 
+		meb_form.AddDomainIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total, 2, 2 + sigma_fe_order)); 
 		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}
 
 	// emission nonlinear form 
 	// sigma_g B_g(T) 
-	PlanckEmissionNFI planck_int(energy_grid.Bounds(), total_gf);
+	PlanckEmissionNFI planck_int(energy_grid.Bounds(), total);
 	PlanckEmissionNonlinearForm emission_form(fes, phi_ext, planck_int, IsMassLumped(lump));
 
 	// gray version of emission_form 
@@ -860,11 +859,11 @@ int main(int argc, char *argv[]) {
 	BlockDiagonalByElementNonlinearForm gr_emission_form(&fes);
 	if (IsMassLumped(lump)) {
 		gr_emission_form.AddDomainIntegrator(
-			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total_gf))); 
+			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total))); 
 	}
 	else {
 		gr_emission_form.AddDomainIntegrator(
-			new GrayPlanckEmissionNFI(energy_grid.Bounds(), total_gf, 2, 2 + sigma_fe_order)); 
+			new GrayPlanckEmissionNFI(energy_grid.Bounds(), total, 2, 2 + sigma_fe_order)); 
 	}
 
 	// sigmaE absorption mass matrix 
@@ -1042,11 +1041,11 @@ int main(int argc, char *argv[]) {
 	BlockLDGDiscretization lo_disc(fes, vfes, bc_map, lump);
 	lo_disc.SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
 	lo_disc.SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
+	lo_disc.SetAlpha(alpha);
 
 	// SMM source term 
 	// create operator that sums over group then  
 	// creates the one-group SMM source term 
-
 	TransportVectorExtents psi_ext_gr(1, quad->Size(), fes.GetVSize());
 	mfem::Vector source_vec_gr(TotalExtent(psi_ext_gr));
 	to_gray_op_psi.Mult(source_vec, source_vec_gr);
@@ -1063,7 +1062,7 @@ int main(int argc, char *argv[]) {
 
 	// solver for low order system 
 	mfem::CGSolver cg_solver(MPI_COMM_WORLD);
-	cg_solver.SetRelTol(1e-6);
+	cg_solver.SetRelTol(1e-10);
 	cg_solver.iterative_mode = true;
 	mfem::HypreBoomerAMG amg;
 	amg.SetPrintLevel(0);
@@ -1076,7 +1075,7 @@ int main(int argc, char *argv[]) {
 	// local_meb_solver is applied on each element independently 
 	// by meb_solver 
 	EnergyBalanceNewtonSolver local_meb_solver;
-	local_meb_solver.SetRelTol(1e-5);
+	local_meb_solver.SetRelTol(1e-8);
 	local_meb_solver.SetMaxIter(40);
 	local_meb_solver.SetPreconditioner(*local_mat_inv);
 	local_meb_solver.iterative_mode = true;
@@ -1111,10 +1110,7 @@ int main(int argc, char *argv[]) {
 	// assumed to be data that does not require parallel 
 	// reduction 
 	std::map<std::string,int> log; 
-	// store data associated with timing parts of the driver 
-	// the data is synchronized in parallel as the 
-	// maximum time across all processors 
-	ParMap<double,MAX> timing_log(MPI_COMM_WORLD);
+	// use the global log TimingLog to track timings
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
 	while (true) {
 		cycle_timer.Restart(); 
@@ -1141,7 +1137,7 @@ int main(int argc, char *argv[]) {
 			psi += psi0; // add in time, fixed source 
 			mfem::tic();
 			Linv.Mult(psi, psi); // sweep, in place to avoid extra memory
-			timing_log["sweep"] += mfem::toc();
+			TimingLog["sweep"] += mfem::toc();
 
 			// compute gray moments of psi 
 			Dlin.Mult(psi, moments_nu);
@@ -1150,7 +1146,7 @@ int main(int argc, char *argv[]) {
 			// compute E_HO-weighted opacity 
 			mfem::tic(); 
 			totalE_gf.ProjectCoefficient(sigmaE);
-			timing_log["sigmaE"] += mfem::toc();
+			TimingLog["sigmaE"] += mfem::toc();
 			// re-assemble mass matrix 
 			Mtot_gray = 0.0; // set all entries to zero 
 			// assemble into existing sparsity pattern 
@@ -1173,13 +1169,13 @@ int main(int argc, char *argv[]) {
 				// used in moment solve 
 				mfem::tic();
 				totalR_gf.ProjectCoefficient(sigmaR);
-				timing_log["sigmaR"] += mfem::toc();
+				TimingLog["sigmaR"] += mfem::toc();
 
 				// compute rosseland opacity-dependent 
 				// term in opacity correction 
 				mfem::tic();
 				gr_Fsigma.Assemble();
-				timing_log["opac correction"] += mfem::toc();
+				TimingLog["opac correction"] += mfem::toc();
 
 				// form schur complement of jacobian 
 				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc.GetOperator(totalR, totalE));
@@ -1212,7 +1208,7 @@ int main(int argc, char *argv[]) {
 				mfem::tic();
 				lo_solver.SetOperator(*K); // <-- requires AMG setup 
 				lo_solver.Mult(lo_source, moments); // uses preconditioned CG to invert Schur complement 
-				timing_log["solve"] += mfem::toc();
+				TimingLog["solve"] += mfem::toc();
 
 				// nonlinearly eliminate temperature 
 				// compute sigma c E term 
@@ -1222,16 +1218,16 @@ int main(int argc, char *argv[]) {
 				// nonlinearly solve for T given E 
 				mfem::tic();
 				meb_solver.Mult(abs_source, T);
-				timing_log["meb solve"] += mfem::toc();
+				TimingLog["meb solve"] += mfem::toc();
 
 				// stopping criterion 
 				const auto norm = prev.ComputeL2Error(Tcoef);
-				if (norm < 1e-6 or inner >= 30) break;
+				if (norm < 1e-8 or inner >= 10) break;
 				inner++;
 			}
 			inner_sum += inner;	// count total inner iterations 
 			const double norm = Estar.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Estar, Estar));
-			if (norm < 1e-5 or outer >= 50) break;
+			if (norm < 1e-6 or outer >= 20) break;
 			outer++;
 		}
 
@@ -1296,7 +1292,7 @@ int main(int argc, char *argv[]) {
 			Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 
 			assembly_timer.Stop(); 
-			timing_log["assembly time"] += assembly_timer.RealTime();
+			TimingLog["assembly time"] += assembly_timer.RealTime();
 		}
 
 		// store time step 
@@ -1355,10 +1351,10 @@ int main(int argc, char *argv[]) {
 	}
 
 	// print the timing log to YAML map 
-	timing_log.Synchronize();
-	if (timing_log.size()) {
+	TimingLog.Synchronize(); // <-- get times in parallel 
+	if (TimingLog.size()) {
 		out << YAML::Key << "timing log" << YAML::Value;
-		io::PrintTimingMap(out, timing_log);
+		io::PrintTimingMap(out, TimingLog);
 	}
 
 	// --- clean up hanging pointers --- 

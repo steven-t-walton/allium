@@ -18,7 +18,6 @@
 #include "moment_discretization.hpp"
 #include "multigroup.hpp"
 #include "mg_form.hpp"
-#include "phase_form.hpp"
 #include "planck.hpp"
 #include "restart.hpp"
 
@@ -728,17 +727,17 @@ int main(int argc, char *argv[]) {
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	BlockDiagonalByElementNonlinearForm meb_form(&fes);
 	if (IsMassLumped(lump)) {
-		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total_gf))); 
+		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total))); 
 		meb_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
 	}
 	else {
-		meb_form.AddDomainIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total_gf, 2, 2 + sigma_fe_order)); 
+		meb_form.AddDomainIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total, 2, 2 + sigma_fe_order)); 
 		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}
 
 	// emission nonlinear form 
 	// sigma_g B_g(T) 
-	PlanckEmissionNFI planck_int(energy_grid.Bounds(), total_gf);
+	PlanckEmissionNFI planck_int(energy_grid.Bounds(), total);
 	PlanckEmissionNonlinearForm emission_form(fes, phi_ext, planck_int, IsMassLumped(lump));
 
 	// absorption mass matrix for multigroup energy density 

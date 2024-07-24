@@ -10,7 +10,6 @@
 #include "trt_linearized.hpp"
 
 #include "planck.hpp"
-#include "phase_form.hpp"
 
 TEST(LumpedTRT, Emission1D) {
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0); 
@@ -476,7 +475,6 @@ TEST(Planck, NormalizedPlanckRoomTemp) {
 	}
 
 	mfem::Vector planck(bounds.Size()-1);
-	mfem::Vector draco(bounds.Size()-1);
 	double planck_prev = 0.0;
 	for (int i=0; i<bounds.Size()-1; i++) {
 		double planck_new = IntegrateNormalizedPlanck(bounds[i+1]);  
@@ -551,12 +549,7 @@ TEST(Planck, Coefficient) {
 	bounds[5] = std::numeric_limits<double>::max();
 
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 0.5);
-	auto fec = mfem::L2_FECollection(1, mesh.Dimension());
-	auto fes = mfem::FiniteElementSpace(&mesh, &fec);
-	mfem::GridFunction T(&fes);
-	T = temp;
-
-	mfem::GridFunctionCoefficient Tcoef(&T);
+	mfem::ConstantCoefficient Tcoef(temp);
 	PlanckSpectrumMGCoefficient B(bounds, Tcoef);
 	mfem::Vector planck;
 	auto &trans = *mesh.GetElementTransformation(0);
@@ -591,12 +584,7 @@ TEST(Planck, RosselandCoefficient) {
 	bounds[5] = std::numeric_limits<double>::max();
 
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 0.5);
-	auto fec = mfem::L2_FECollection(1, mesh.Dimension());
-	auto fes = mfem::FiniteElementSpace(&mesh, &fec);
-	mfem::GridFunction T(&fes);
-	T = temp;
-
-	mfem::GridFunctionCoefficient Tcoef(&T);
+	mfem::ConstantCoefficient Tcoef(temp);
 	RosselandSpectrumMGCoefficient R(bounds, Tcoef);
 	mfem::Vector ross;
 	auto &trans = *mesh.GetElementTransformation(0);
@@ -628,23 +616,17 @@ TEST(Planck, EmissionNFI) {
 	bounds[2] = 0.5; 
 	bounds[3] = 3.5;
 	bounds[4] = 20; 
-	// bounds[5] = std::numeric_limits<double>::max();
 	bounds[5] = 1e6;
 	const auto G = bounds.Size() - 1;
 
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 0.5);
 	auto fec = mfem::L2_FECollection(1, mesh.Dimension());
 	auto fes = mfem::FiniteElementSpace(&mesh, &fec);
-
-	auto fec0 = mfem::L2_FECollection(0, mesh.Dimension());
-	auto sigma_fes = mfem::FiniteElementSpace(&mesh, &fec0, G);
-	mfem::GridFunction sigma_data(&sigma_fes);
-	sigma_data = 1.0;
-
 	MomentVectorExtents phi_ext(G, 1, fes.GetVSize());
 
-	MomentVectorNonlinearForm form(&fes, phi_ext);
-	form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new PlanckEmissionNFI(bounds, sigma_data)));
+	ConstantGrayMGCoefficient total(1.0, G); 
+	PlanckEmissionNFI planck_int(bounds, total);
+	PlanckEmissionNonlinearForm form(fes, phi_ext, planck_int, true);
 
 	mfem::GridFunction T(&fes);
 	T = temp;
@@ -671,20 +653,3 @@ TEST(Planck, EmissionNFI) {
 	double inf = ex.Normlinf();
 	EXPECT_NEAR(inf, 0.0, 1e-12);
 }
-
-// TEST(Planck, RosselandOperator) {
-// 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0);
-// 	auto fec = mfem::L2_FECollection(1, 1);
-// 	auto fes = mfem::FiniteElementSpace(&mesh, &fec);
-
-// 	auto grid = MultiGroupEnergyGrid::MakeLogSpaced(1e-2, 1e6, 4, true);
-// 	MomentVectorExtents phi_ext(grid.Size(), 1, fes.GetVSize());
-// 	mfem::ConstantCoefficient temperature(1000.0);
-// 	MultiGroupRosselandCoefficient rosseland(grid.Bounds(), temperature);
-// 	WeightedGroupCollapseOperator collapse(fes, phi_ext, rosseland);
-
-// 	mfem::Vector mg(TotalExtent(phi_ext)), gray(fes.GetVSize());
-// 	mg = 1.0;
-// 	collapse.Mult(mg, gray);
-// 	gray.Print();
-// }
