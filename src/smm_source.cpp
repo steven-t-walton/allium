@@ -4,6 +4,7 @@
 #include "moment_integrators.hpp"
 #include "dg_trace_coll.hpp"
 #include "smm_integrators.hpp"
+#include "smm_coef.hpp"
 
 MomentFaceClosuresOperator::MomentFaceClosuresOperator(
 	mfem::ParFiniteElementSpace &fes,
@@ -433,7 +434,59 @@ IndependentSMMOperator::IndependentSMMOperator(mfem::ParFiniteElementSpace &fes,
 		Q1.Add(quad.GetWeight(a), gform); 
 	}
 
-	InflowPartialCurrentCoefficient Jin(inflow_coef, quad); 
+	GrayInflowPartialCurrentCoefficient Jin(inflow_coef, quad); 
+	mfem::ProductCoefficient Jin2(2.0, Jin); 
+	mfem::LinearForm fform(&fes); 
+	if (IsFaceLumped(lumping))
+		fform.AddBdrFaceIntegrator(
+			new QuadratureLumpedLFIntegrator(new ProjectedCoefBoundaryLFIntegrator(Jin2, *fes.FEColl(), 2, 1))); 
+	else		
+		fform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryLFIntegrator(Jin2, *fes.FEColl(), 2, 1)); 
+	fform.Assemble(); 
+	Q0.Add(-1.0, fform); 
+	Q1 *= 3.0; 		
+}
+
+IndependentSMMOperator::IndependentSMMOperator(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	const AngularQuadrature &quad, const MultiGroupEnergyGrid &energy, const TransportVectorExtents &psi_ext, 
+	PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
+	double alpha, const BoundaryConditionMap &bc_map, int lumping)
+	: fes(fes), vfes(vfes), quad(quad), psi_ext(psi_ext), source_coef(source_coef), inflow_coef(inflow_coef), 
+	  alpha(alpha), bc_map(bc_map), lumping(lumping)
+{ 
+	width = TotalExtent(psi_ext);
+	height = fes.GetVSize() + vfes.GetVSize();
+
+	marshak_bdr_attrs = CreateBdrAttributeMarker<INFLOW>(bc_map);
+	reflect_bdr_attrs = CreateBdrAttributeMarker<REFLECTIVE>(bc_map);
+
+	Q0.SetSize(fes.GetVSize()); 
+	Q0 = 0.0; 
+	Q1.SetSize(vfes.GetVSize()); 
+	Q1 = 0.0; 
+
+	for (auto g=0; g<energy.Size(); g++) {
+		source_coef.SetEnergy(energy.LowerBound(g), energy.UpperBound(g), energy.MeanEnergy(g));
+		for (auto a=0; a<quad.Size(); a++) {
+			const auto &Omega = quad.GetOmega(a); 
+			source_coef.SetAngle(Omega); 
+			mfem::LinearForm fform(&fes); 
+			fform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
+			fform.Assemble(); 
+
+			mfem::VectorConstantCoefficient Omega_coef(Omega); 
+			mfem::ScalarVectorProductCoefficient Omega_source(source_coef, Omega_coef);
+			mfem::LinearForm gform(&vfes); 
+			gform.AddDomainIntegrator(new mfem::VectorDomainLFIntegrator(Omega_source)); 
+			gform.Assemble();  
+
+			Q0.Add(quad.GetWeight(a), fform); 
+			Q1.Add(quad.GetWeight(a), gform); 
+		}		
+	}
+
+	InflowPartialCurrentCoefficient Jin_mg(inflow_coef, quad, energy); 
+	VectorComponentSumCoefficient Jin(Jin_mg);
 	mfem::ProductCoefficient Jin2(2.0, Jin); 
 	mfem::LinearForm fform(&fes); 
 	if (IsFaceLumped(lumping))

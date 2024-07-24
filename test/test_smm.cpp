@@ -6,6 +6,7 @@
 #include "sweep.hpp"
 #include "transport_op.hpp"
 #include "dg_trace_coll.hpp"
+#include "smm_coef.hpp"
 
 TEST(SMM, CorrectionTensorIsotropic) {
 	mfem::Mesh smesh = mfem::Mesh::MakeCartesian2D(5,5,mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
@@ -151,4 +152,45 @@ TEST(DGTraceColl, Tri) {
 	EXPECT_TRUE(fe); 
 	EXPECT_EQ(fe->GetDof(), 2); 
 	EXPECT_EQ(fes.GetVSize(), fes.GetNE() * 6); 
+}
+
+TEST(PhaseCoef, InflowCurrentIsotropic) {
+	mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D(1,1, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	LevelSymmetricQuadrature quad1(8, dim), quad2(12, dim); 
+	auto psi_in = [](const mfem::Vector &x, const mfem::Vector &Omega) {
+		return 1./4/M_PI; 
+	}; 
+	FunctionGrayCoefficient coef(psi_in); 
+	GrayInflowPartialCurrentCoefficient Jin1(coef, quad1), Jin2(coef, quad2); 
+	// test all faces 
+	for (auto f=0; f<mesh.GetNBE(); f++) {
+		auto &trans = *mesh.GetBdrFaceTransformations(f); 
+		const auto &ip = mfem::Geometries.GetCenter(trans.GetGeometryType()); 
+		double val1 = Jin1.Eval(trans, ip); 
+		double val2 = Jin2.Eval(trans, ip); 
+		double E1 = std::fabs(val1 + 0.25); 
+		double E2 = std::fabs(val2 + 0.25); 
+		double ooa = log(E1/E2) / log(quad2.Size() / quad1.Size()); 
+		EXPECT_NEAR(ooa, 1.0, 0.2); 
+	}
+}
+
+TEST(PhaseCoef, InflowCurrentQuadratic) {
+	mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D(1,1, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	const auto dim = mesh.Dimension(); 
+	LevelSymmetricQuadrature quad1(8, dim), quad2(12, dim); 
+	auto psi_in = [](const mfem::Vector &x, const mfem::Vector &Omega) {
+		return Omega*Omega/4/M_PI; 
+	}; 
+	FunctionGrayCoefficient coef(psi_in); 
+	GrayInflowPartialCurrentCoefficient Jin1(coef, quad1), Jin2(coef, quad2); 
+	auto &trans = *mesh.GetBdrFaceTransformations(0); 
+	const auto &ip = mfem::Geometries.GetCenter(trans.GetGeometryType()); 
+	double val1 = Jin1.Eval(trans, ip); 
+	double val2 = Jin2.Eval(trans, ip); 
+	double E1 = std::fabs(val1 + 0.1875); 
+	double E2 = std::fabs(val2 + 0.1875); 
+	double ooa = log(E1/E2) / log(quad2.Size() / quad1.Size()); 
+	EXPECT_NEAR(ooa, 1.0, 0.25); 
 }

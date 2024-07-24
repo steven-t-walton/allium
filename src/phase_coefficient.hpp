@@ -85,19 +85,3 @@ public:
 	{ }
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
 };
-
-class InflowPartialCurrentCoefficient : public mfem::Coefficient 
-{
-private:
-	PhaseSpaceCoefficient &phase_coef; 
-	const AngularQuadrature &quad; 
-	double scale; 
-
-	mfem::Vector nor; 
-public:
-	InflowPartialCurrentCoefficient(PhaseSpaceCoefficient &pc, const AngularQuadrature &q, double s=1.0) 
-		: phase_coef(pc), quad(q), scale(s)
-	{ }
-
-	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override; 
-};
