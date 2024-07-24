@@ -305,7 +305,7 @@ mfem::BlockOperator *BlockIPDiscretization::GetOperator(mfem::Coefficient &total
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	auto *Mt = Mtform.ParallelAssemble(); 
-	if (Mtime_v) Mt->Add(time_absorption_v, *Mtime_v);
+	if (Mtime_v) Mt->Add(3.0*time_absorption_v, *Mtime_v);
 
 	mfem::ParBilinearForm Maform(&fes); 
 	mfem::ConstantCoefficient alpha_c(alpha); 
