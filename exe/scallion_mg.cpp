@@ -371,10 +371,12 @@ int main(int argc, char *argv[]) {
 			bc_map[i+1] = BoundaryCondition::INFLOW;
 		} else if (type == "reflective") {
 			inflow_list[i] = nullptr; 
+			inflow_base_list[i] = nullptr; 
 			bc_map[i+1] = BoundaryCondition::REFLECTIVE;
 		} 
 		else if (type == "vacuum") {
 			inflow_list[i] = nullptr; 
+			inflow_base_list[i] = nullptr; 
 			bc_map[i+1] = BoundaryCondition::INFLOW;
 		}
 

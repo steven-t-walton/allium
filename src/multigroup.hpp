@@ -90,7 +90,7 @@ public:
 	void Mult(const mfem::Vector &mg, mfem::Vector &gr) const override 
 	{
 		assert(mg.Size() == width);
-		assert(gray.Size() == height);
+		assert(gr.Size() == height);
 		gr = 0.0;
 
 		auto mg_view = Kokkos::mdspan<const double,MomentVectorExtents,T>(mg.GetData(), mg_ext);
@@ -106,7 +106,7 @@ public:
 	void MultTranspose(const mfem::Vector &gr, mfem::Vector &mg) const override
 	{
 		assert(mg.Size() == width);
-		assert(gray.Size() == height);
+		assert(gr.Size() == height);
 
 		auto mg_view = Kokkos::mdspan<double,MomentVectorExtents,T>(mg.GetData(), mg_ext);
 		auto gr_view = Kokkos::mdspan<const double,MomentVectorExtents,T>(gr.GetData(), gr_ext);
