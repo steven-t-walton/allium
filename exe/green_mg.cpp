@@ -1084,6 +1084,15 @@ int main(int argc, char *argv[]) {
 	BlockDiagonalByElementNonlinearSolver meb_solver(local_meb_solver);
 	meb_solver.SetOperator(meb_form); // solves meb_form = (cv/dt + B(.))T 
 
+	mfem::LinearForm opac_corr_form(&vfes);
+	OpacityCorrectionCoefficient opac_corr_coef(sigmaR, total, Fnu_coef);
+	if (IsMassLumped(lump))
+		opac_corr_form.AddDomainIntegrator(
+			new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef)));
+	else
+		opac_corr_form.AddDomainIntegrator(
+			new mfem::VectorDomainLFIntegrator(opac_corr_coef));
+
 	// LO system uses sigmaR in first moment equation
 	// this differs from moments of HO system 
 	// => create an additive correction term 
@@ -1154,18 +1163,22 @@ int main(int argc, char *argv[]) {
 			// assemble into existing sparsity pattern 
 			Mtot_gray.Assemble(); 
 
-			// assemble \sum_g sigma_g F_g 
-			// used in opacity correction term 
-			mg_Fsigma.Assemble(); 
-
 			// compute SMM closure 
 			source_op.Mult(psi, smm_source);
 			smm_source += moments0; // time source 
-			// add in iteratively fixed part of opacity correction term 
-			add(smm_source.GetBlock(0), -3.0, mg_Fsigma, smm_source.GetBlock(0));
 			int inner = 1;
 			while (true) {
-				mfem::ParGridFunction prev(T); // previous temperature for stopping criterion 
+				mfem::ParGridFunction prev(E); // previous temperature for stopping criterion 
+
+				// nonlinearly eliminate temperature 
+				// compute sigma c E term 
+				Mtot_gray.Mult(E, abs_source); 
+				// add cv/dt T0 
+				add(abs_source, 1.0, T0, abs_source); // abs_source + 1.0 * T0 -> abs_source 
+				// nonlinearly solve for T given E 
+				mfem::tic();
+				meb_solver.Mult(abs_source, T);
+				TimingLog["meb solve"] += mfem::toc();
 
 				// compute rosseland-weighted opacity 
 				// used in moment solve 
@@ -1176,7 +1189,7 @@ int main(int argc, char *argv[]) {
 				// compute rosseland opacity-dependent 
 				// term in opacity correction 
 				mfem::tic();
-				gr_Fsigma.Assemble();
+				opac_corr_form.Assemble();
 				TimingLog["opac correction"] += mfem::toc();
 
 				// form schur complement of jacobian 
@@ -1204,7 +1217,8 @@ int main(int argc, char *argv[]) {
 				add(T0, -1.0, em_source, em_source);
 				product.AddMult(em_source, lo_source.GetBlock(1));
 				// add in opacity correction and SMM source
-				add(smm_source.GetBlock(0), 3.0, gr_Fsigma, lo_source.GetBlock(0));
+				// add(smm_source.GetBlock(0), 3.0, gr_Fsigma, lo_source.GetBlock(0));
+				add(smm_source.GetBlock(0), 3.0, opac_corr_form, lo_source.GetBlock(0));
 
 				// solve linearized LO system 
 				mfem::tic();
@@ -1212,19 +1226,11 @@ int main(int argc, char *argv[]) {
 				lo_solver.Mult(lo_source, moments); // uses preconditioned CG to invert Schur complement 
 				TimingLog["solve"] += mfem::toc();
 
-				// nonlinearly eliminate temperature 
-				// compute sigma c E term 
-				Mtot_gray.Mult(E, abs_source); 
-				// add cv/dt T0 
-				add(abs_source, 1.0, T0, abs_source); // abs_source + 1.0 * T0 -> abs_source 
-				// nonlinearly solve for T given E 
-				mfem::tic();
-				meb_solver.Mult(abs_source, T);
-				TimingLog["meb solve"] += mfem::toc();
-
 				// stopping criterion 
-				const auto norm = prev.ComputeL2Error(Tcoef);
-				if (norm < 1e-8 or inner >= 10) break;
+				// const auto norm = prev.ComputeL2Error(Tcoef);
+				// if (norm < 1e-8 or inner >= 10) break;
+				const auto norm = prev.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, prev, prev));
+				if (norm < 1e-8 or inner >= 10) break; 
 				inner++;
 			}
 			inner_sum += inner;	// count total inner iterations 
