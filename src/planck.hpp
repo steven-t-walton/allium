@@ -155,6 +155,7 @@ inline double PlanckPolyLogarithmic(double x) {
 } // end namespace internal 
 
 inline double IntegrateNormalizedPlanck(double x) {
+	assert(x >= 0.0);
 	if (x > 1e100) return 1.0;
 	if (x==0.0) return 0.0;
 	const double taylor = internal::PlanckTaylorSeries(x);
@@ -170,7 +171,7 @@ inline double IntegrateNormalizedPlanck(double E, double T) {
 
 inline double PlanckToRosseland(double x, double planck) {
 	if (x > internal::rosseland_max) return planck;
-	return planck - internal::coef/4.0 * pow(x,4) / (std::exp(x) - 1.0);
+	return planck - 0.25*internal::coef * pow(x,4) / std::expm1(x);
 }
 
 inline double IntegrateNormalizedRosseland(double x) {
