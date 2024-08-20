@@ -22,12 +22,8 @@
 #include "restart.hpp"
 #include "smm_source.hpp"
 #include "smm_integrators.hpp"
-
-// running maximum with index into map 
-template<typename T, typename U>
-void LogMax(T &map, const std::string key, U val) {
-	map[key] = std::max(val, map[key]);
-}
+#include "smm_coef.hpp"
+#include "coefficient.hpp"
 
 class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
 {
@@ -127,62 +123,6 @@ void KinsolCallbackFunction(const char *module, const char *function, char *msg,
 		data->monitor->MonitorResidual(it-1, norm, blank, false); 
 	}
 }
-
-class OpacityCorrectionCoefficient : public mfem::VectorCoefficient
-{
-private:
-	mfem::Coefficient &gray;
-	mfem::VectorCoefficient &mg;
-	mfem::MatrixCoefficient &F;
-
-	mfem::Vector mg_eval; 
-	mfem::DenseMatrix Feval;
-public:
-	OpacityCorrectionCoefficient(mfem::Coefficient &gray, mfem::VectorCoefficient &mg, mfem::MatrixCoefficient &F)
-		: gray(gray), mg(mg), F(F), mfem::VectorCoefficient(F.GetWidth())
-	{
-		mg_eval.SetSize(mg.GetVDim());
-		Feval.SetSize(F.GetHeight(), F.GetWidth());
-	}
-	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override
-	{
-		v.SetSize(vdim);
-		const auto gray_eval = gray.Eval(trans, ip);
-		mg.Eval(mg_eval, trans, ip);
-		F.Eval(Feval, trans, ip);
-		for (int d=0; d<vdim; d++) {
-			mfem::Vector Fd;
-			Feval.GetColumnReference(d, Fd);
-			v(d) = gray_eval * Fd.Sum() - (mg_eval * Fd);
-		}
-	}
-};
-
-class MatrixTransposeVectorProductCoefficient : public mfem::VectorCoefficient
-{
-private:
-	mfem::MatrixCoefficient &mat; 
-	mfem::VectorCoefficient &vec;
-
-	mfem::Vector vec_eval; 
-	mfem::DenseMatrix mat_eval; 
-public:
-	MatrixTransposeVectorProductCoefficient(mfem::MatrixCoefficient &mat, mfem::VectorCoefficient &vec)
-		: mat(mat), vec(vec), mfem::VectorCoefficient(mat.GetWidth())
-	{
-		if (mat.GetHeight() != vec.GetVDim()) 
-			MFEM_ABORT("mismatch");
-		vec_eval.SetSize(vec.GetVDim());
-		mat_eval.SetSize(mat.GetHeight(), mat.GetWidth());
-	}
-	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
-	{
-		v.SetSize(vdim);
-		vec.Eval(vec_eval, trans, ip);
-		mat.Eval(mat_eval, trans, ip);
-		mat_eval.MultTranspose(vec_eval, v);
-	}
-};
 
 int main(int argc, char *argv[]) {
 	mfem::StopWatch wall_timer; 
@@ -297,12 +237,7 @@ int main(int argc, char *argv[]) {
 
 		const bool print_bounds = energy_table["print_bounds"].get_or(false);
 		if (print_bounds) {
-			out << YAML::Key << "bounds" << YAML::Value << YAML::Flow << YAML::BeginSeq;
-			const auto &bounds = energy_grid.Bounds();
-			for (const auto &b : bounds) {
-				out << b;
-			}
-			out << YAML::EndSeq;
+			out << YAML::Key << "bounds" << YAML::Value << YAML::Flow << energy_grid.Bounds();
 		}
 	} else {
 		const double Emin = 0.0;
@@ -532,6 +467,7 @@ int main(int argc, char *argv[]) {
 	mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); // vector finite element space, dim copies of fes 
 	fes.ExchangeFaceNbrData(); // create parallel degree of freedom maps used in sweep 
 	mfem::ParFiniteElementSpace fes_mg(&mesh, &fec, G);
+	mfem::ParFiniteElementSpace fes0_mg(&mesh, &fec0, G);
 
 	// piecewise constant used for plotting and storing cross section data 
 	mfem::L2_FECollection sigma_fec(sigma_fe_order, dim, mfem::BasisType::Positive); 
@@ -607,6 +543,10 @@ int main(int argc, char *argv[]) {
 	if (max_cycles_override>0) max_cycles = max_cycles_override; 
 	const int lump = driver["lump"].get_or(0); 
 
+	// SMM alg parameters 
+	const bool reset_to_ho = driver["reset_to_ho"].get_or(false);
+	const bool floor_radE_LO = driver["floor_E"].get_or(false);
+
 	// --- output algorithmic options used --- 
 	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "fe order" << YAML::Value << fe_order; 
@@ -625,6 +565,8 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "initial value" << YAML::Value << time_step; 
 			out << YAML::EndMap; 
 		out << YAML::EndMap; 
+		out << YAML::Key << "reset to HO" << YAML::Value << reset_to_ho;
+		out << YAML::Key << "floor LO E" << YAML::Value << floor_radE_LO;
 
 	// time mass matrix for psi 
 	SNTimeMassMatrix Mpsi(fes, psi_ext, IsMassLumped(lump)); 
@@ -674,8 +616,8 @@ int main(int argc, char *argv[]) {
 	mfem::Vector psi0(x0.GetBlock(SolutionIndex::PSI), 0, psi_size); 
 	mfem::ParGridFunction T(&fes, x.GetBlock(SolutionIndex::TEMP), 0); 
 	mfem::ParGridFunction T0(&fes, x0.GetBlock(SolutionIndex::TEMP), 0); 
-	mfem::ParGridFunction F(&fes, x.GetBlock(SolutionIndex::RADF), 0); 
-	mfem::ParGridFunction F0(&fes, x0.GetBlock(SolutionIndex::RADF), 0); 	
+	mfem::ParGridFunction F(&vfes, x.GetBlock(SolutionIndex::RADF), 0); 
+	mfem::ParGridFunction F0(&vfes, x0.GetBlock(SolutionIndex::RADF), 0); 	
 	mfem::ParGridFunction E(&fes, x.GetBlock(SolutionIndex::RADE), 0); 
 	mfem::ParGridFunction E0(&fes, x0.GetBlock(SolutionIndex::RADE), 0); 
 
@@ -685,7 +627,7 @@ int main(int argc, char *argv[]) {
 
 	// store multigroup E, F from transport 
 	mfem::Vector moments_nu(moment_size);
-	mfem::Vector Enu(moments_nu, 0, phi_size); // multigroup energy density, reference to moments_nu
+	mfem::ParGridFunction Enu(&fes_mg, moments_nu, 0); // multigroup energy density, reference to moments_nu
 	mfem::Vector Fnu(moments_nu, phi_size, phi_size*dim); // multigroup flux, reference to moments_nu
 	// coefficients representing Enu, Fnu
 	ZerothMomentCoefficient Enu_coef(fes, phi_ext, Enu);
@@ -812,12 +754,14 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<NegativeFluxFixupOperator> nff_op = nullptr; 
 	std::unique_ptr<mfem::SLBQPOptimizer> nff_optimizer = nullptr; 
 	sol::optional<sol::table> fixup_avail = driver["fixup"]; 
+	mfem::ParGridFunction fixup_monitor(&fes0_mg);
+	fixup_monitor = 0.0;
 	if (fixup_avail) {
 		sol::table fixup = fixup_avail.value(); 
 		use_fixup = true; 
 		std::string type = fixup["type"]; 
 		io::ValidateOption<std::string>("fixup type", type, 
-			{"zero and scale", "local optimization"}, root); 
+			{"zero and scale", "local optimization", "ryosuke"}, root); 
 		double min = fixup["psi_min"].get_or(0.0); 
 		if (type == "zero and scale") {
 			nff_op = std::make_unique<ZeroAndScaleFixupOperator>(min); 
@@ -831,9 +775,13 @@ int main(int argc, char *argv[]) {
 			nff_optimizer->SetRelTol(reltol); 
 			nff_optimizer->SetMaxIter(max_iter); 
 			nff_optimizer->SetPrintLevel(print_level); 
+			nff_optimizer->iterative_mode = fixup["iterative_mode"].get_or(true);
 			nff_op = std::make_unique<LocalOptimizationFixupOperator>(*nff_optimizer, min); 
+		} else if (type == "ryosuke") {
+			nff_op = std::make_unique<RyosukeFixupOperator>(min);
 		}
 		Linv.SetFixupOperator(*nff_op); 
+		Linv.SetFixupMonitorData(fixup_monitor);
 		out << YAML::Key << "negative flux fixup" << YAML::Value << fixup; 
 	}
 	Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight); 
@@ -842,31 +790,21 @@ int main(int argc, char *argv[]) {
 	// cv/dt + sigma B(T)
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	BlockDiagonalByElementNonlinearForm meb_form(&fes);
-	if (IsMassLumped(lump)) {
-		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total))); 
-		meb_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
-	}
-	else {
-		meb_form.AddDomainIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total, 2, 2 + sigma_fe_order)); 
-		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
-	}
+	// meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
+	meb_form.AddDomainIntegrator(
+		new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
+	meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new mfem::MassIntegrator(Cvdt)));
 
 	// emission nonlinear form 
 	// sigma_g B_g(T) 
 	PlanckEmissionNFI planck_int(energy_grid.Bounds(), total);
 	PlanckEmissionNonlinearForm emission_form(fes, phi_ext, planck_int, IsMassLumped(lump));
 
-	// gray version of emission_form 
-	// used in gray LO system 
+	// gray emission 
 	BlockDiagonalByElementNonlinearForm gr_emission_form(&fes);
-	if (IsMassLumped(lump)) {
-		gr_emission_form.AddDomainIntegrator(
-			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total))); 
-	}
-	else {
-		gr_emission_form.AddDomainIntegrator(
-			new GrayPlanckEmissionNFI(energy_grid.Bounds(), total, 2, 2 + sigma_fe_order)); 
-	}
+	// gr_emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
+	gr_emission_form.AddDomainIntegrator(
+		new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
 
 	// sigmaE absorption mass matrix 
 	// used in gray energy balance equation 
@@ -876,6 +814,7 @@ int main(int argc, char *argv[]) {
 		Mtot_gray.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(totalE)));
 	else
 		Mtot_gray.AddDomainIntegrator(new mfem::MassIntegrator(totalE));
+	Mtot_gray.UsePrecomputedSparsity();
 	Mtot_gray.Assemble(); 
 	Mtot_gray.Finalize();
 
@@ -919,15 +858,19 @@ int main(int argc, char *argv[]) {
 			const bool restart_mode = viz["restart_mode"].get_or(false) and restart_table_avail;
 			dc->SetPrecision(precision); 
 			dc->RegisterField("E", &E); 
+			dc->RegisterField("Eho", &Enu);
 			dc->RegisterField("F", &F);
+			dc->RegisterField("Fho", &Fho);
 			dc->RegisterField("T", &T); 
 			dc->RegisterField("Tpw", &Tpw); 
 			dc->RegisterField("sigmaR", &totalR_gf); 
 			dc->RegisterField("sigmaE", &totalE_gf);
 			dc->RegisterField("sigmaP", &totalP_gf);
+			dc->RegisterField("total", &total_gf);
 			dc->RegisterField("cv", &cvgf); 
 			dc->RegisterField("density", &density_gf); 
 			dc->RegisterField("partition", &partition); 
+			dc->RegisterField("fixup", &fixup_monitor);
 			// paraview has a "restart mode" 
 			// that allows continuing the same output after a restart 
 			if (restart_mode) {
@@ -1064,7 +1007,8 @@ int main(int argc, char *argv[]) {
 
 	// solver for low order system 
 	mfem::CGSolver cg_solver(MPI_COMM_WORLD);
-	cg_solver.SetRelTol(1e-10);
+	cg_solver.SetRelTol(1e-12);
+	cg_solver.SetMaxIter(200);
 	cg_solver.iterative_mode = true;
 	mfem::HypreBoomerAMG amg;
 	amg.SetPrintLevel(0);
@@ -1078,14 +1022,14 @@ int main(int argc, char *argv[]) {
 	// by meb_solver 
 	EnergyBalanceNewtonSolver local_meb_solver;
 	local_meb_solver.SetRelTol(1e-8);
-	local_meb_solver.SetMaxIter(40);
+	local_meb_solver.SetMaxIter(100);
 	local_meb_solver.SetPreconditioner(*local_mat_inv);
 	local_meb_solver.iterative_mode = true;
 	BlockDiagonalByElementNonlinearSolver meb_solver(local_meb_solver);
 	meb_solver.SetOperator(meb_form); // solves meb_form = (cv/dt + B(.))T 
 
 	mfem::LinearForm opac_corr_form(&vfes);
-	OpacityCorrectionCoefficient opac_corr_coef(sigmaR, total, Fnu_coef);
+	OpacityCorrectionCoefficient opac_corr_coef(totalR, total, Fnu_coef);
 	if (IsMassLumped(lump))
 		opac_corr_form.AddDomainIntegrator(
 			new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef)));
@@ -1093,26 +1037,15 @@ int main(int argc, char *argv[]) {
 		opac_corr_form.AddDomainIntegrator(
 			new mfem::VectorDomainLFIntegrator(opac_corr_coef));
 
-	// LO system uses sigmaR in first moment equation
-	// this differs from moments of HO system 
-	// => create an additive correction term 
-	// sigmaR sum_g F_g - sum_g sigma_g F_g 
-	// splitting terms into two linear form saves
-	// some redundant computation 
-	// mg_Fsigma computes sum_g sigma_g F_g 
-	mfem::LinearForm mg_Fsigma(&vfes);
-	MatrixTransposeVectorProductCoefficient Fsigma(Fnu_coef, total);
-	mg_Fsigma.AddDomainIntegrator(
-		new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(Fsigma)));
-
-	// gr_Fsigma computes sigmaR sum_g F_g 
-	mfem::LinearForm gr_Fsigma(&vfes);
-	mfem::ScalarVectorProductCoefficient Fsigma_gr(totalR, Fho_coef);
-	gr_Fsigma.AddDomainIntegrator(
-		new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(Fsigma_gr)));
+	// mfem::MixedBilinearForm opac_corr_bform(&fes, &vfes);
+	// NormalizedOpacityCorrectionCoefficient opac_corr_coef2(totalR, total, Enu_coef, Fnu_coef);
+	// opac_corr_bform.AddDomainIntegrator(
+	// 	new QuadratureLumpedIntegrator(new MixedVectorScalarMassIntegrator(opac_corr_coef2)));
+	// opac_corr_bform.Assemble();
+	// opac_corr_bform.Finalize();
 
 	// working vectors for moment algorithm 
-	mfem::Vector em_source(fes.GetVSize()*G), abs_source(fes.GetVSize());
+	mfem::Vector em_source(fes.GetVSize()*G), em_source_gr(fes.GetVSize()), abs_source(fes.GetVSize());
 	mfem::BlockVector smm_source(lo_disc.GetOffsets()), lo_source(lo_disc.GetOffsets());
 
 	mfem::StopWatch cycle_timer; // times cost per time step 
@@ -1120,8 +1053,9 @@ int main(int argc, char *argv[]) {
 	// such as number of outer iterations 
 	// assumed to be data that does not require parallel 
 	// reduction 
-	std::map<std::string,int> log; 
-	// use the global log TimingLog to track timings
+	LogMap<int,MAX> log;
+	LogMap<double,MAX> value_log;
+	LogMap<double,SUM,MAX> timing_log(MPI_COMM_WORLD);
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
 	while (true) {
 		cycle_timer.Restart(); 
@@ -1148,7 +1082,7 @@ int main(int argc, char *argv[]) {
 			psi += psi0; // add in time, fixed source 
 			mfem::tic();
 			Linv.Mult(psi, psi); // sweep, in place to avoid extra memory
-			TimingLog["sweep"] += mfem::toc();
+			timing_log.Log("sweep", mfem::toc());
 
 			// compute gray moments of psi 
 			Dlin.Mult(psi, moments_nu);
@@ -1157,7 +1091,7 @@ int main(int argc, char *argv[]) {
 			// compute E_HO-weighted opacity 
 			mfem::tic(); 
 			totalE_gf.ProjectCoefficient(sigmaE);
-			TimingLog["sigmaE"] += mfem::toc();
+			timing_log.Log("sigmaE", mfem::toc());
 			// re-assemble mass matrix 
 			Mtot_gray = 0.0; // set all entries to zero 
 			// assemble into existing sparsity pattern 
@@ -1169,6 +1103,7 @@ int main(int argc, char *argv[]) {
 			int inner = 1;
 			while (true) {
 				mfem::ParGridFunction prev(E); // previous temperature for stopping criterion 
+				mfem::ParGridFunction Tprev(T);
 
 				// nonlinearly eliminate temperature 
 				// compute sigma c E term 
@@ -1178,19 +1113,24 @@ int main(int argc, char *argv[]) {
 				// nonlinearly solve for T given E 
 				mfem::tic();
 				meb_solver.Mult(abs_source, T);
-				TimingLog["meb solve"] += mfem::toc();
+				timing_log.Log("meb solve", mfem::toc());
+				ValueLog.Log("meb residual", meb_solver.GetFinalRelNorm());
 
 				// compute rosseland-weighted opacity 
 				// used in moment solve 
 				mfem::tic();
 				totalR_gf.ProjectCoefficient(sigmaR);
-				TimingLog["sigmaR"] += mfem::toc();
+				// totalP_gf.ProjectCoefficient(sigmaP);
+				timing_log.Log("sigmaR", mfem::toc());
 
 				// compute rosseland opacity-dependent 
 				// term in opacity correction 
 				mfem::tic();
 				opac_corr_form.Assemble();
-				TimingLog["opac correction"] += mfem::toc();
+				// delete opac_corr_bform.LoseMat();
+				// opac_corr_bform.Assemble(); 
+				// opac_corr_bform.Finalize();
+				timing_log.Log("opac correction", mfem::toc());
 
 				// form schur complement of jacobian 
 				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc.GetOperator(totalR, totalE));
@@ -1208,34 +1148,48 @@ int main(int argc, char *argv[]) {
 				static_cast<mfem::HypreParMatrix*>(&K->GetBlock(1,1))->GetDiag(diag);
 				diag.Add(-1.0, *lin_emission);
 
+				// mfem::SparseMatrix diag2;
+				// static_cast<mfem::HypreParMatrix*>(&K->GetBlock(0,1))->GetDiag(diag2);
+				// diag2.Add(3.0, opac_corr_bform.SpMat());
+
 				// compute Newton residual 
 				// applies inverse of "U" matrix to form 
 				// the source for the Schur complement operator 
-				gr_emission_form.Mult(T, em_source);
-				add(em_source, 1.0, smm_source.GetBlock(1), lo_source.GetBlock(1));
-				meb_form.Mult(T, em_source);
-				add(T0, -1.0, em_source, em_source);
-				product.AddMult(em_source, lo_source.GetBlock(1));
+				gr_emission_form.Mult(T, em_source_gr);
+				add(em_source_gr, 1.0, smm_source.GetBlock(1), lo_source.GetBlock(1));
+				meb_form.Mult(T, em_source_gr);
+				add(T0, -1.0, em_source_gr, em_source_gr);
+				product.AddMult(em_source_gr, lo_source.GetBlock(1));
 				// add in opacity correction and SMM source
-				// add(smm_source.GetBlock(0), 3.0, gr_Fsigma, lo_source.GetBlock(0));
 				add(smm_source.GetBlock(0), 3.0, opac_corr_form, lo_source.GetBlock(0));
 
 				// solve linearized LO system 
 				mfem::tic();
 				lo_solver.SetOperator(*K); // <-- requires AMG setup 
 				lo_solver.Mult(lo_source, moments); // uses preconditioned CG to invert Schur complement 
-				TimingLog["solve"] += mfem::toc();
+				if (!cg_solver.GetConverged() and root)
+					MFEM_WARNING("cg not converged. final norm = " << cg_solver.GetFinalRelNorm());
+				if (floor_radE_LO) {
+					for (int i=0; i<E.Size(); i++) {
+						if (E(i) < 1e-10) {
+							E(i) = 1e-10; 
+							EventLog.Register("floor E");
+						}
+					}					
+				}
+				timing_log.Log("solve", mfem::toc());
 
 				// stopping criterion 
 				// const auto norm = prev.ComputeL2Error(Tcoef);
 				// if (norm < 1e-8 or inner >= 10) break;
 				const auto norm = prev.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, prev, prev));
-				if (norm < 1e-8 or inner >= 10) break; 
+				const auto Tnorm = Tprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tprev, Tprev));
+				if (norm + Tnorm < 1e-8 or inner >= 40) break; 
 				inner++;
 			}
 			inner_sum += inner;	// count total inner iterations 
 			const double norm = Estar.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Estar, Estar));
-			if (norm < 1e-6 or outer >= 20) break;
+			if (norm < 1e-6 or outer >= 30) break;
 			outer++;
 		}
 
@@ -1245,6 +1199,8 @@ int main(int argc, char *argv[]) {
 		// to iterative solver tolerances 
 		const auto consistency_E = E.ComputeL2Error(Eho_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Eho, Eho));
 		const auto consistency_F = F.ComputeL2Error(Fho_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Fho, Fho));
+		value_log.Log("max consistency E", consistency_E);
+		value_log.Log("max consistency F", consistency_F);
 
 		// get peicewise constant version of temperature 
 		// used for comparison to other codes 
@@ -1260,7 +1216,11 @@ int main(int argc, char *argv[]) {
 		if (dc and (cycle % output_freq == 0 or done)) {
 			output_cycle++;
 			dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
+			E *= 1.0/constants::SpeedOfLight;
+			Enu *= 1.0/constants::SpeedOfLight;
 			dc->Save();
+			E *= constants::SpeedOfLight;
+			Enu *= constants::SpeedOfLight;
 		}
 
 		// write tracer to file 
@@ -1300,14 +1260,18 @@ int main(int argc, char *argv[]) {
 			Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 
 			assembly_timer.Stop(); 
-			TimingLog["assembly time"] += assembly_timer.RealTime();
+			timing_log.Log("assembly time", assembly_timer.RealTime());
+		}
+
+		fixup_monitor = 0.0;
+
+		if (reset_to_ho) {
+			F = Fho;
+			E = Eho;			
 		}
 
 		// store time step 
 		x0 = x; 
-
-		// get statistics from library code in parallel 
-		EventLog.Synchronize(); 
 
 		cycle_timer.Stop(); 
 		double cycle_time = cycle_timer.RealTime(); 
@@ -1319,9 +1283,9 @@ int main(int argc, char *argv[]) {
 			energy_grid.MaxEnergy(), T, 1e-10);
 
 		// --- output progress to terminal --- 
-		LogMax(log, "max outer", outer);
-		LogMax(log, "max inner sum", inner_sum);
-		const double radE_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, E, E)); 
+		log.Log("max outer", outer);
+		log.Log("max inner sum", inner_sum);
+		const double radE_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, E, E)) / constants::SpeedOfLight; 
 		out << YAML::BeginMap; 
 			out << YAML::Key << "cycle" << YAML::Value << cycle; 
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
@@ -1333,16 +1297,9 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "energy density" << YAML::Value << io::FormatScientific(consistency_E);
 				out << YAML::Key << "flux" << YAML::Value << io::FormatScientific(consistency_F);
 			out << YAML::EndMap;
-			if (EventLog.size()) {
-				out << YAML::Key << "event log" << YAML::Value << YAML::BeginMap; 
-				for (const auto &it : EventLog) {
-					out << YAML::Key << it.first << YAML::Value << it.second; 
-				}				
-				out << YAML::EndMap; 
-			}
+			io::ProcessGlobalLogs(out);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
-		EventLog.clear(); 
 
 		// warn if max cycles reached 
 		if (cycle == max_cycles and root) 
@@ -1358,11 +1315,15 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "log" << YAML::Value << log;
 	}
 
+	if (value_log.size()) {
+		out << YAML::Key << "value log" << YAML::Value << value_log;
+	}
+
 	// print the timing log to YAML map 
-	TimingLog.Synchronize(); // <-- get times in parallel 
-	if (TimingLog.size()) {
+	timing_log.Synchronize(); // <-- get times in parallel 
+	if (timing_log.size()) {
 		out << YAML::Key << "timing log" << YAML::Value;
-		io::PrintTimingMap(out, TimingLog);
+		io::PrintTimingMap(out, timing_log);
 	}
 
 	// --- clean up hanging pointers --- 
