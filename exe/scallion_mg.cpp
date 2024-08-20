@@ -20,12 +20,7 @@
 #include "mg_form.hpp"
 #include "planck.hpp"
 #include "restart.hpp"
-
-// running maximum with index into map 
-template<typename T, typename U>
-void LogMax(T &map, const std::string key, U val) {
-	map[key] = std::max(val, map[key]);
-}
+#include "coefficient.hpp"
 
 class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
 {
@@ -239,12 +234,7 @@ int main(int argc, char *argv[]) {
 
 		const bool print_bounds = energy_table["print_bounds"].get_or(false);
 		if (print_bounds) {
-			out << YAML::Key << "bounds" << YAML::Value << YAML::Flow << YAML::BeginSeq;
-			const auto &bounds = energy_grid.Bounds();
-			for (const auto &b : bounds) {
-				out << b;
-			}
-			out << YAML::EndSeq;
+			out << YAML::Key << "bounds" << YAML::Value << YAML::Flow << energy_grid.Bounds();
 		}
 	} else {
 		const double Emin = 0.0;
@@ -524,6 +514,9 @@ int main(int argc, char *argv[]) {
 	const auto phi_size = TotalExtent(phi_ext); 
 	const auto phi_size_global = mesh.ReduceInt(phi_size); 
 
+	// moments
+	MomentVectorExtents moment_ext(G, dim+1, fes.GetVSize());
+
 	// temporal parameters 
 	const double final_time = driver["final_time"]; 
 
@@ -594,8 +587,17 @@ int main(int argc, char *argv[]) {
 	mfem::ParGridFunction T(&fes, x.GetBlock(SolutionIndex::TEMP), 0); 
 	mfem::GridFunctionCoefficient Tcoef(&T); 
 	mfem::ParGridFunction T0(&fes, x0.GetBlock(SolutionIndex::TEMP), 0); 
-	mfem::ParGridFunction E(&fes); // gray energy density 
-	mfem::Vector Enu(TotalExtent(phi_ext));
+
+	// moments of psi 
+	mfem::Vector moments_nu(TotalExtent(moment_ext));
+	mfem::Vector Enu(moments_nu, 0, phi_size);
+	mfem::Vector Fnu(moments_nu, phi_size, phi_size*dim);
+	FirstMomentCoefficient Fnu_coef(fes, moment_ext, moments_nu);
+
+	// gray moments 
+	mfem::Vector moments(fes.GetVSize() * (dim+1));
+	mfem::ParGridFunction E(&fes, moments, 0);
+	mfem::ParGridFunction F(&vfes, moments, fes.GetVSize());
 
 	// piecewise constant temperature 
 	mfem::ParGridFunction Tpw(&fes0); 
@@ -655,9 +657,11 @@ int main(int argc, char *argv[]) {
 
 	// kinetic to continuum operators 
 	DiscreteToMoment D(*quad, psi_ext, phi_ext); 
+	DiscreteToMoment Dlin(*quad, psi_ext, moment_ext);
 	GroupCollapseOperator to_gray_op(phi_ext);
-	D.Mult(psi, Enu);
-	to_gray_op.Mult(Enu, E);
+	GroupCollapseOperator to_gray_op_moments(moment_ext);
+	Dlin.Mult(psi, moments_nu);
+	to_gray_op_moments.Mult(moments_nu, moments);
 	E *= 1.0/constants::SpeedOfLight;
 
 	// opacity weighting operators 
@@ -703,7 +707,7 @@ int main(int argc, char *argv[]) {
 		use_fixup = true; 
 		std::string type = fixup["type"]; 
 		io::ValidateOption<std::string>("fixup type", type, 
-			{"zero and scale", "local optimization"}, root); 
+			{"zero and scale", "local optimization", "ryosuke"}, root); 
 		double min = fixup["psi_min"].get_or(0.0); 
 		if (type == "zero and scale") {
 			nff_op = std::make_unique<ZeroAndScaleFixupOperator>(min); 
@@ -717,7 +721,11 @@ int main(int argc, char *argv[]) {
 			nff_optimizer->SetRelTol(reltol); 
 			nff_optimizer->SetMaxIter(max_iter); 
 			nff_optimizer->SetPrintLevel(print_level); 
+			nff_optimizer->iterative_mode = fixup["iterative_mode"].get_or(true);
 			nff_op = std::make_unique<LocalOptimizationFixupOperator>(*nff_optimizer, min); 
+		} else if (type == "ryosuke") {
+			double min = fixup["psi_min"].get_or(0.0);
+			nff_op = std::make_unique<RyosukeFixupOperator>(min);
 		}
 		Linv.SetFixupOperator(*nff_op); 
 		out << YAML::Key << "negative flux fixup" << YAML::Value << fixup; 
@@ -946,9 +954,10 @@ int main(int argc, char *argv[]) {
 			const bool restart_mode = viz["restart_mode"].get_or(false) and restart_table_avail;
 			dc->SetPrecision(precision); 
 			dc->RegisterField("E", &E); 
+			dc->RegisterField("F", &F);
 			dc->RegisterField("T", &T); 
 			dc->RegisterField("Tpw", &Tpw); 
-			dc->RegisterField("sigma", &gray_total_gf); 
+			dc->RegisterField("sigmaR", &gray_total_gf); 
 			dc->RegisterField("cv", &cvgf); 
 			dc->RegisterField("density", &density_gf); 
 			dc->RegisterField("partition", &partition); 
@@ -1041,9 +1050,9 @@ int main(int argc, char *argv[]) {
 	}
 
 	mfem::StopWatch cycle_timer; 
+	LogMap<int,MAX> log;
+	LogMap<double,SUM,MAX> timing_log;
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
-	std::map<std::string,int> log; 
-	std::map<std::string,double> timing_log;
 	while (true) {
 		cycle_timer.Restart(); 
 
@@ -1064,8 +1073,8 @@ int main(int argc, char *argv[]) {
 		stepper->Mult(x0, x); 
 
 		// --- post process new time solution --- 
-		D.Mult(psi, Enu); // update energy density 
-		to_gray_op.Mult(Enu, E);
+		Dlin.Mult(psi, moments_nu); // update energy density 
+		to_gray_op_moments.Mult(moments_nu, moments);
 		E *= 1.0/constants::SpeedOfLight; 
 		if (E.CheckFinite() > 0) MFEM_ABORT("infinite energy density"); 
 
@@ -1112,8 +1121,6 @@ int main(int argc, char *argv[]) {
 		// --- update opacity and opacity-dependent terms --- 
 		if (T.Min() < 0) MFEM_ABORT("negative temperature"); 
 		if (temp_dependent_opacity or time_step_changed) {
-			mfem::StopWatch assembly_timer;
-			assembly_timer.Start();
 			// recompute opacities 
 			total_gf.ProjectCoefficient(total_coef); 
 			gray_total_gf.ProjectCoefficient(totalR);
@@ -1134,16 +1141,10 @@ int main(int argc, char *argv[]) {
 				gray_total_gf.ExchangeFaceNbrData();
 				dsa_mat.reset(Kform->GetOperator(gray_total, pseudo_abs));
 			}
-
-			assembly_timer.Stop(); 
-			timing_log["assembly time"] += assembly_timer.RealTime();
 		}
 
 		// store time step 
 		x0 = x; 
-
-		// get statistics from library code in parallel 
-		EventLog.Synchronize(); 
 
 		cycle_timer.Stop(); 
 		double cycle_time = cycle_timer.RealTime(); 
@@ -1172,26 +1173,19 @@ int main(int argc, char *argv[]) {
 			if (inner_monitor) {
 				out << YAML::Key << "inner solver" << YAML::Value << *inner_monitor;
 			} else if (linear_solver) {
-				LogMax(log, "max transport iterations", linear_solver->GetNumIterations());
+				log.Log("max transport iterations", linear_solver->GetNumIterations());
 				out << YAML::Key << "linear solver" << YAML::Value << YAML::BeginMap; 
 					out << YAML::Key << "it" << YAML::Value << linear_solver->GetNumIterations(); 
 					out << YAML::Key << "norm" << YAML::Value << linear_solver->GetFinalRelNorm(); 
 				out << YAML::EndMap; 
 			}
 			if (dsa_monitor) {
-				LogMax(log, "max DSA iterations", dsa_monitor->iters.Max());
+				log.Log("max DSA iterations", dsa_monitor->iters.Max());
 				out << YAML::Key << "dsa solver" << YAML::Value << *dsa_monitor;
 			}
-			if (EventLog.size()) {
-				out << YAML::Key << "event log" << YAML::Value << YAML::BeginMap; 
-				for (const auto &it : EventLog) {
-					out << YAML::Key << it.first << YAML::Value << it.second; 
-				}				
-				out << YAML::EndMap; 
-			}
+			io::ProcessGlobalLogs(out);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
-		EventLog.clear(); 
 
 		// warn if max cycles reached 
 		if (cycle == max_cycles and root) 
@@ -1203,19 +1197,12 @@ int main(int argc, char *argv[]) {
 	out << YAML::EndSeq; // time integration sequence 
 
 	if (log.size()) {
-		out << YAML::Key << "log" << YAML::Value << YAML::BeginMap; 
-		for (const auto &it : log) {
-			out << YAML::Key << it.first << YAML::Value << it.second; 
-		}
-		out << YAML::EndMap; 
+		out << YAML::Key << "log" << YAML::Value << log;
 	}
 
 	if (timing_log.size()) {
-		out << YAML::Key << "timing log" << YAML::Value << YAML::BeginMap;
-		for (const auto &it : timing_log) {
-			out << YAML::Key << it.first << YAML::Value << io::FormatTimeString(it.second);
-		}
-		out << YAML::EndMap;
+		out << YAML::Key << "timing log" << YAML::Value; 
+		io::PrintTimingMap(out, timing_log);
 	}
 
 	// --- clean up hanging pointers --- 
