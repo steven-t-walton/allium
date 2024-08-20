@@ -28,6 +28,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/multigroup.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mg_form.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/restart.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/coefficient.hpp
 )
 
 LIST(APPEND srcs 
