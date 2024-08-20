@@ -140,7 +140,7 @@ public:
 	P1Discretization(
 		mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 		const BoundaryConditionMap &bc_map, int lumping);
-	mfem::HypreParMatrix *GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const override;
+	mfem::BlockOperator *GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const override;
 
 	friend class ConsistentP1SMMOperator;
 };

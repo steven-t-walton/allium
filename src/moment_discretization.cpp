@@ -355,7 +355,7 @@ P1Discretization::P1Discretization(
 {
 }
 
-mfem::HypreParMatrix *P1Discretization::GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const
+mfem::BlockOperator *P1Discretization::GetOperator(mfem::Coefficient &total, mfem::Coefficient &absorption) const
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -380,7 +380,7 @@ mfem::HypreParMatrix *P1Discretization::GetOperator(mfem::Coefficient &total, mf
 	Mtform.Assemble(); 
 	Mtform.Finalize();  
 	mfem::HypreParMatrix *Mt = Mtform.ParallelAssemble(); 
-	if (Mtime_v) Mt->Add(time_absorption_v, *Mtime_v);
+	if (Mtime_v) Mt->Add(3.0*time_absorption_v, *Mtime_v);
 
 	mfem::ParBilinearForm Maform(&fes); 
 	mfem::ConstantCoefficient alpha_c(alpha/2); 
@@ -430,11 +430,11 @@ mfem::HypreParMatrix *P1Discretization::GetOperator(mfem::Coefficient &total, mf
 	// Gform.Finalize(); 
 	// mfem::HypreParMatrix *G = Gform.ParallelAssemble(); 
 
-	mfem::BlockOperator op(offsets);
-	op.SetBlock(0,0, Mt); 
-	op.SetBlock(0,1, G); 
-	op.SetBlock(1,0, D); 
-	op.SetBlock(1,1, Ma); 
-	op.owns_blocks = 1;
-	return BlockOperatorToMonolithic(op);
+	auto *op = new mfem::BlockOperator(offsets);
+	op->SetBlock(0,0, Mt); 
+	op->SetBlock(0,1, G); 
+	op->SetBlock(1,0, D); 
+	op->SetBlock(1,1, Ma); 
+	op->owns_blocks = 1;
+	return op;
 }
