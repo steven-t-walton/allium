@@ -182,7 +182,9 @@ private:
 	mfem::SuperLUSolver slu;
 	std::unique_ptr<mfem::SuperLURowLocMatrix> slu_op;
 public:
-	SuperLUSolver(MPI_Comm comm) : slu(comm) { }
+	SuperLUSolver(MPI_Comm comm) : slu(comm) {
+		slu.SetPrintStatistics(false);
+	}
 	void SetOperator(const mfem::Operator &op) override;
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const override {
 		slu.Mult(b, x);
