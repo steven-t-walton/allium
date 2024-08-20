@@ -16,6 +16,26 @@ TEST(EventLog, Synchonize) {
 	}
 }
 
+TEST(EventLog, LogValue) {
+	EventLog.clear();
+	EventLog.Register("test");
+	EventLog.Register("test");
+	EventLog.Register("test");
+	EXPECT_EQ(EventLog["test"], 3);
+}
+
+TEST(ValueLog, LogMax) {
+	ValueLog.Log("max", 1.0);
+	ValueLog.Log("max", 3.0);
+	EXPECT_DOUBLE_EQ(ValueLog["max"], 3.0);
+}
+
+TEST(TimingLog, Sum) {
+	TimingLog.Log("test", 5.0);
+	TimingLog.Log("test", 4.0);
+	std::cout << TimingLog["test"] << std::endl; 
+}
+
 template<typename T>
 class Dictionary 
 {

@@ -30,17 +30,17 @@ bool ZeroAndScaleFixupOperator::Apply(const mfem::DenseMatrix &A,
 	const double original_balance = rhs.Sum();
 	const double new_balance = weights * solution;
 	if (original_balance < 0.0 or new_balance < 0.0) {
-		EventLog["fixup failed"]++;
+		EventLog.Register("fixup failed");
 	}
 
 	else if (original_balance == 0.0 or new_balance == 0.0) {
 		solution = 0.0;
-		EventLog["zero balance"]++;
+		EventLog.Register("zero balance");
 	}
 
 	else {
 		solution *= (original_balance/new_balance); 
-		EventLog["fixup applied"] += 1; 
+		EventLog.Register("fixup applied");
 	}
 
 	return true;
@@ -70,9 +70,9 @@ bool LocalOptimizationFixupOperator::Apply(const mfem::DenseMatrix &A,
 	source = solution;
 	opt.Mult(source, solution); 
 	if (opt.GetConverged()) {
-		EventLog["fixup applied"] += 1; 
+		EventLog.Register("fixup applied");
 	} else {
-		EventLog["fixup failed"] += 1; 
+		EventLog.Register("fixup failed");
 	}
 	return true;
 }
@@ -157,9 +157,9 @@ unsigned RyosukeFixupOperator::perform_nff(unsigned sz, double *x, double *A, do
 		}
 	}
 	if (rebalance_fail) {
-		EventLog["rebalanced failed"]++;
+		EventLog.Register("rebalance failed");
 	} else {
-		EventLog["fixup applied"]++;
+		EventLog.Register("fixup applied");
 	}
 
 	return 1;
