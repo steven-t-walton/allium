@@ -75,6 +75,30 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table)
 	out << YAML::EndMap; 
 }
 
+void ProcessGlobalLogs(YAML::Emitter &out)
+{
+	EventLog.Synchronize();
+	TimingLog.Synchronize();
+	ValueLog.Synchronize();
+
+	if (EventLog.size() or TimingLog.size() or ValueLog.size()) {
+		out << YAML::Key << "logs" << YAML::Value << YAML::BeginMap; 
+			if (EventLog.size())
+				out << YAML::Key << "event" << EventLog;
+			if (TimingLog.size()) {
+				out << YAML::Key << "timing" << YAML::Value;
+				PrintTimingMap(out, TimingLog);
+			}
+			if (ValueLog.size())
+				out << YAML::Key << "value" << ValueLog;
+		out << YAML::EndMap;
+	}
+
+	EventLog.clear();
+	TimingLog.clear();
+	ValueLog.clear();
+}
+
 mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 
 	mfem::Mesh &mesh, bool root)
 {

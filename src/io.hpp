@@ -49,6 +49,8 @@ void PrintArray(YAML::Emitter &out, const mfem::Array<T> &x)
 	out << YAML::EndSeq;
 }
 
+void ProcessGlobalLogs(YAML::Emitter &out);
+
 mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 
 	mfem::Mesh &mesh, bool root);
 
