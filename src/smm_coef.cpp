@@ -203,3 +203,33 @@ void InflowPartialCurrentCoefficient::Eval(mfem::Vector &v,
 		v(g) *= scale;
 	}
 }
+
+void OpacityCorrectionCoefficient::Eval(mfem::Vector &v, 
+	mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
+{
+	v.SetSize(vdim);
+	const auto gray_eval = gray.Eval(trans, ip);
+	mg.Eval(mg_eval, trans, ip);
+	F.Eval(Feval, trans, ip);
+	for (int d=0; d<vdim; d++) {
+		mfem::Vector Fd;
+		Feval.GetColumnReference(d, Fd);
+		v(d) = gray_eval * Fd.Sum() - (mg_eval * Fd);
+	}
+}
+
+void NormalizedOpacityCorrectionCoefficient::Eval(mfem::Vector &v, 
+	mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) 
+{
+	v.SetSize(vdim);
+	const auto gray_eval = gray.Eval(trans, ip);
+	mg.Eval(mg_eval, trans, ip);
+	E.Eval(E_eval, trans, ip);
+	const auto gray_E = E_eval.Sum();
+	F.Eval(Feval, trans, ip);
+	for (int d=0; d<vdim; d++) {
+		mfem::Vector Fd;
+		Feval.GetColumnReference(d, Fd);
+		v(d) = ((mg_eval * Fd) - gray_eval * Fd.Sum()) / gray_E;
+	}
+}

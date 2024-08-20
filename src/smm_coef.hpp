@@ -114,3 +114,45 @@ public:
 		return eval.Sum();
 	}
 };
+
+class OpacityCorrectionCoefficient : public mfem::VectorCoefficient
+{
+private:
+	mfem::Coefficient &gray;
+	mfem::VectorCoefficient &mg;
+	mfem::MatrixCoefficient &F;
+
+	mfem::Vector mg_eval; 
+	mfem::DenseMatrix Feval;
+public:
+	OpacityCorrectionCoefficient(mfem::Coefficient &gray, mfem::VectorCoefficient &mg, mfem::MatrixCoefficient &F)
+		: gray(gray), mg(mg), F(F), mfem::VectorCoefficient(F.GetWidth())
+	{
+		assert(mg.GetVDim() == F.GetHeight());
+		mg_eval.SetSize(mg.GetVDim());
+		Feval.SetSize(F.GetHeight(), F.GetWidth());
+	}
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+};
+
+class NormalizedOpacityCorrectionCoefficient : public mfem::VectorCoefficient
+{
+private:
+	mfem::Coefficient &gray; 
+	mfem::VectorCoefficient &mg, &E;
+	mfem::MatrixCoefficient &F; 
+
+	mfem::Vector mg_eval, E_eval; 
+	mfem::DenseMatrix Feval;
+public:
+	NormalizedOpacityCorrectionCoefficient(mfem::Coefficient &gray, mfem::VectorCoefficient &mg, 
+		mfem::VectorCoefficient &E, mfem::MatrixCoefficient &F)
+		: gray(gray), mg(mg), E(E), F(F), mfem::VectorCoefficient(F.GetWidth())
+	{
+		assert(mg.GetVDim() == F.GetHeight() and mg.GetVDim() == E.GetVDim());
+		mg_eval.SetSize(mg.GetVDim());
+		E_eval.SetSize(E.GetVDim());
+		Feval.SetSize(F.GetHeight(), F.GetWidth());
+	}
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+};
