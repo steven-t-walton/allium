@@ -66,7 +66,11 @@ public:
 	{
 		sigma.Eval(sigma_eval, trans, ip);
 		weight.Eval(weight_eval, trans, ip);
-		return (sigma_eval*weight_eval) / weight_eval.Sum(); 
+		const auto denom = weight_eval.Sum(); 
+		const auto numer = sigma_eval*weight_eval;
+		assert(denom > 0.0);
+		assert(numer >= 0.0);
+		return numer / denom;
 	}
 };
 
