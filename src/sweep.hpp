@@ -73,6 +73,7 @@ private:
 
 	bool apply_fixup = false; 
 	NegativeFluxFixupOperator *fixup_op = nullptr; 
+	mfem::Vector *fixup_monitor = nullptr;
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 		MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int lump=0); 
@@ -99,6 +100,7 @@ public:
 		fixup_op = &op; 
 		apply_fixup = true; 
 	}
+	void SetFixupMonitorData(mfem::Vector &x) { fixup_monitor = &x; }
 	void WriteGraphToDot(std::string prefix) const; 
 
 	// lumping type accessors 

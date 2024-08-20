@@ -246,6 +246,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	const auto Ne = mesh.GetNE(); 
 	const auto Nomega = quad.Size(); 
 	const auto G = psi_ext.extent(0); 
+	const auto rank = mesh.GetMyRank(); 
 	// place to store face ids/element, dofs/element, and dofs of neighboring elements 
 	mfem::Array<int> faces, dofs, dofs2; 
 
@@ -293,6 +294,10 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// persistent storage of local system 
 	mfem::DenseMatrix grad, A, lu; 
 	mfem::Vector rhs, sol, psi2, psi_fixup, nor(dim), ones, fixup_weights; 
+
+	int mpi_buffer_size = MPI_BSEND_OVERHEAD + sizeof(double) * fes.num_face_nbr_dofs * G * Nomega;
+	auto *mpi_buffer = new char[mpi_buffer_size];
+	MPI_Buffer_attach(mpi_buffer, mpi_buffer_size);
 
 	// --- do sweep --- 
 	// vertices traversed, only count owned elements 
@@ -400,14 +405,12 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				mfem::LinearSolve(lu, sol.GetData()); 
 
 				if (fixup_op and apply_fixup) {
-					fixup_op->SetLocalSystem(A, rhs); 
-					fixup_op->Mult(sol, rhs); 
-				} else {
-					rhs = sol; 
-				}
+					const bool applied = fixup_op->Apply(A, rhs, sol);
+					if (fixup_monitor and applied) (*fixup_monitor)(e + g*fes.GetNE())++;
+				} 
 
 				// scatter back 
-				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = rhs(i); }
+				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = sol(i); }
 			}
 
 			// --- compute next + send data to other processors --- 
@@ -450,7 +453,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				for (auto fn=0; fn<num_face_nbrs; fn++) {
 					if (send_table.RowSize(fn) == 0) continue; 
 					const auto nbr_rank = mesh.GetFaceNbrRank(fn); 
-					auto buffer_size = 0;
+					int buffer_size = 0;
 					auto nodes = std::span<const int>(send_table.GetRow(fn), send_table.RowSize(fn)); 
 					for (auto n : nodes) {
 						fes.GetElementDofs(n / Nomega, dofs); 
@@ -459,7 +462,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 					buffer_size *= G; 
 					assert(par_data_buffer.Size() >= buffer_size); 
-					auto idx = 0;
+					int idx = 0;
 					for (auto n : nodes) {
 						const auto e = n / Nomega; 
 						const auto a = n % Nomega; 
@@ -474,8 +477,9 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					MPI_Request request[2]; 
 					MPI_Isend(send_table.GetRow(fn), send_table.RowSize(fn), MPI_INT, nbr_rank, message_count++, 
 						MPI_COMM_WORLD, &request[0]); 
-					MPI_Isend(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, nbr_rank, message_count++, MPI_COMM_WORLD, &request[1]); 
-					MPI_Waitall(2, request, MPI_STATUS_IGNORE); 
+					MPI_Ibsend(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, nbr_rank, message_count++, 
+						MPI_COMM_WORLD, &request[1]); 
+					MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
 				}
 				send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
 			}
@@ -502,12 +506,12 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			// make sure data can fit in buffers 
 			assert(node_buffer.Size() >= node_count); 
 			assert(par_data_buffer.Size() >= data_count); 
-
-			MPI_Request request[2]; 
 			assert(status[0].MPI_SOURCE == status[1].MPI_SOURCE); 
-			MPI_Irecv(node_buffer.GetData(), node_count, MPI_INT, source, status[0].MPI_TAG, MPI_COMM_WORLD, &request[0]); 
-			MPI_Irecv(par_data_buffer.GetData(), data_count, MPI_DOUBLE, source, status[1].MPI_TAG, MPI_COMM_WORLD, &request[1]); 
-			MPI_Waitall(2, request, MPI_STATUSES_IGNORE); 
+
+			MPI_Recv(node_buffer.GetData(), node_count, MPI_INT, source, 
+				status[0].MPI_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			MPI_Recv(par_data_buffer.GetData(), data_count, MPI_DOUBLE, source, 
+				status[1].MPI_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
 			const auto fn = proc_to_fn.at(source); 
 			int buffer_idx = 0; 
@@ -544,6 +548,9 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// clean up data 
 	igraph_vector_int_destroy(&nbrs); 
 	igraph_vector_int_destroy(&nbr_nbrs); 
+
+	MPI_Buffer_detach(mpi_buffer, &mpi_buffer_size);
+	delete[] mpi_buffer;
 
 	// use barrier to avoid tag clash? 
 	MPI_Barrier(MPI_COMM_WORLD); 
