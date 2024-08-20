@@ -3,6 +3,7 @@
 #include "smm_integrators.hpp"
 #include "sweep.hpp"
 #include "lumping.hpp"
+#include "trt_integrators.hpp"
 
 TEST(Integrators, Penalty1D) {
 	mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D(3, 1.0); 
@@ -363,4 +364,63 @@ TEST(Integrators, TriMassMatrix) {
 	lmi.AssembleElementMatrix(fe, trans, elmat_lump); 
 	elmat -= elmat_lump; 
 	EXPECT_NEAR(elmat.FNorm(), 0.0, 1e-14); 
+}
+
+TEST(Integrators, MixedVecScalMass) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(1,1, mfem::Element::QUADRILATERAL, true, 1.0, 0.25, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace fes(&mesh, &fec); 
+
+	const auto &fe = *fes.GetFE(0);
+	const auto dof = fe.GetDof();
+	auto &trans = *mesh.GetElementTransformation(0); 
+	mfem::DenseMatrix elmat; 
+	mfem::Vector coef_data(mesh.Dimension());
+	for (int d=0; d<coef_data.Size(); d++) { coef_data(d) = d+1; }
+	mfem::VectorConstantCoefficient coef(coef_data);
+	MixedVectorScalarMassIntegrator mi(coef);
+	mi.AssembleElementMatrix2(fe, fe, trans, elmat);
+
+	mfem::MassIntegrator mass;
+	mfem::DenseMatrix M;
+	mass.AssembleElementMatrix(fe, trans, M);
+	for (int d=0; d<mesh.Dimension(); d++) {
+		mfem::DenseMatrix sub(dof,dof); 
+		elmat.GetSubMatrix(d*dof, (d+1)*dof, 0, dof, sub);
+		sub *= 1.0/coef_data(d);
+		sub -= M; 
+		EXPECT_NEAR(sub.FNorm(), 0.0, 1e-14);
+	}
+}
+
+TEST(Integrators, LumpedMixedVecScalMass) {
+	auto mesh = mfem::Mesh::MakeCartesian2D(1,1, mfem::Element::QUADRILATERAL, true, 1.0, 0.25, false); 
+	const auto dim = mesh.Dimension(); 
+	mfem::L2_FECollection fec(1, dim, mfem::BasisType::GaussLobatto); 
+	mfem::FiniteElementSpace fes(&mesh, &fec); 
+
+	const auto &fe = *fes.GetFE(0);
+	const auto dof = fe.GetDof();
+	auto &trans = *mesh.GetElementTransformation(0); 
+	LumpedIntegrationRule rule(trans.GetGeometryType());
+	mfem::DenseMatrix elmat; 
+	mfem::Vector coef_data(mesh.Dimension());
+	for (int d=0; d<coef_data.Size(); d++) { coef_data(d) = d+1; }
+	mfem::VectorConstantCoefficient coef(coef_data);
+	MixedVectorScalarMassIntegrator mi(coef);
+	mi.SetIntegrationRule(rule);
+	mi.AssembleElementMatrix2(fe, fe, trans, elmat);
+
+	mfem::MassIntegrator mass;
+	mass.SetIntegrationRule(rule);
+	mfem::DenseMatrix M;
+	mass.AssembleElementMatrix(fe, trans, M);
+	for (int d=0; d<mesh.Dimension(); d++) {
+		mfem::DenseMatrix sub(dof,dof); 
+		elmat.GetSubMatrix(d*dof, (d+1)*dof, 0, dof, sub);
+		sub *= 1.0/coef_data(d);
+		sub -= M; 
+		EXPECT_NEAR(sub.FNorm(), 0.0, 1e-14);
+	}
 }
