@@ -107,3 +107,4 @@ public:
 
 extern ParMap<double,MAX> TimingLog; 
 extern ParMap<int,SUM> EventLog; 
+extern ParMap<double,MAX> ValueLog;
