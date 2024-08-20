@@ -39,6 +39,15 @@ void PrintTimingMap(YAML::Emitter &out, const T &map)
 	}
 	out << YAML::EndMap;
 }
+template<typename T>
+void PrintArray(YAML::Emitter &out, const mfem::Array<T> &x)
+{
+	out << YAML::BeginSeq; 
+	for (const auto &it : x) {
+		out << it;
+	}
+	out << YAML::EndSeq;
+}
 
 mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 
 	mfem::Mesh &mesh, bool root);
@@ -148,5 +157,12 @@ template<typename T>
 YAML::Emitter &operator<<(YAML::Emitter &out, const T &map)
 {
 	io::PrintMap(out, map);
+	return out;
+}
+
+template<typename T>
+YAML::Emitter &operator<<(YAML::Emitter &out, const mfem::Array<T> &x)
+{
+	io::PrintArray(out, x);
 	return out;
 }
