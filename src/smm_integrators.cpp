@@ -661,3 +661,34 @@ void LDGTraceIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &tr_fe1,
 		}
 	}
 }
+
+void MixedVectorScalarMassIntegrator::AssembleElementMatrix2(
+	const mfem::FiniteElement &trial_fe, const mfem::FiniteElement &test_fe, 
+	mfem::ElementTransformation &trans, mfem::DenseMatrix &elmat)
+{
+	const auto dof = trial_fe.GetDof(); 
+	const auto dim = test_fe.GetDim();
+	assert(trial_fe.GetDof() == test_fe.GetDof());
+
+	const mfem::IntegrationRule *ir = IntRule; 
+	if (!ir) {
+		ir = &mfem::IntRules.Get(trial_fe.GetGeomType(), 2*trial_fe.GetOrder()); 
+	}
+
+	shape.SetSize(dof); 
+	shape_vvt.SetSize(dof);
+	elmat.SetSize(dof*dim, dof); 
+	elmat = 0.0;
+
+	for (int n=0; n<ir->GetNPoints(); n++) {
+		const auto &ip = ir->IntPoint(n);
+		trans.SetIntPoint(&ip);
+		trial_fe.CalcShape(ip, shape);
+		coef.Eval(coef_eval, trans, ip);
+		coef_eval *= trans.Weight() * ip.weight;
+		MultVVt(shape, shape_vvt);
+		for (int d=0; d<dim; d++) {
+			elmat.AddMatrix(coef_eval(d), shape_vvt, d*dof, 0);
+		}
+	}
+}

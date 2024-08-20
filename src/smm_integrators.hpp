@@ -147,3 +147,21 @@ public:
 		mfem::FaceElementTransformations &T, 
 		mfem::DenseMatrix &elmat);
 };
+
+
+class MixedVectorScalarMassIntegrator : public mfem::BilinearFormIntegrator
+{
+private:
+	mfem::VectorCoefficient &coef;
+
+	mfem::Vector shape, coef_eval;
+	mfem::DenseMatrix shape_vvt;
+public:
+	MixedVectorScalarMassIntegrator(mfem::VectorCoefficient &coef)
+		: coef(coef)
+	{
+		coef_eval.SetSize(coef.GetVDim());
+	}
+	void AssembleElementMatrix2(const mfem::FiniteElement &trial_fe, const mfem::FiniteElement &test_fe, 
+		mfem::ElementTransformation &trans, mfem::DenseMatrix &elmat) override;
+};
