@@ -23,7 +23,7 @@ void BlackBodyEmissionNFI::AssembleElementVector(
 		trans.SetIntPoint(&ip); 
 		el.CalcShape(ip, shape); 
 		double T = elfun * shape; // interpolate T 
-		double B_at_ip = sigma.Eval(trans, ip) * constants::StefanBoltzmann * pow(T, 4); 
+		double B_at_ip = sigmaP.Eval(trans, ip) * constants::StefanBoltzmann * pow(T, 4); 
 		elvec.Add(B_at_ip * ip.weight * trans.Weight(), shape); 
 	}
 }
@@ -48,7 +48,7 @@ void BlackBodyEmissionNFI::AssembleElementGrad(
 		trans.SetIntPoint(&ip); 
 		el.CalcShape(ip, shape); 
 		double T = shape * elfun; 
-		double dB_at_ip = sigma.Eval(trans, ip) * 4.0 * constants::StefanBoltzmann * pow(T, 3); 
+		double dB_at_ip = sigmaR.Eval(trans, ip) * 4.0 * constants::StefanBoltzmann * pow(T, 3); 
 		AddMult_a_VVt(dB_at_ip * ip.weight * trans.Weight(), shape, elmat); 
 	}
 }

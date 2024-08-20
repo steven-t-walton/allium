@@ -6,12 +6,15 @@
 class BlackBodyEmissionNFI : public mfem::NonlinearFormIntegrator 
 {
 private:
-	mfem::Coefficient &sigma; 
+	mfem::Coefficient &sigmaP, &sigmaR; 
 	mfem::Vector shape; 
 	int oa, ob; 
 public:
 	BlackBodyEmissionNFI(mfem::Coefficient &s, int a=2, int b=1) 
-		: sigma(s), oa(a), ob(b)
+		: sigmaP(s), sigmaR(s), oa(a), ob(b)
+	{ }
+	BlackBodyEmissionNFI(mfem::Coefficient &p, mfem::Coefficient &r, int a=2, int b=1)
+		: sigmaP(p), sigmaR(r), oa(a), ob(b)
 	{ }
 	void AssembleElementVector(const mfem::FiniteElement &el, mfem::ElementTransformation &trans, 
 		const mfem::Vector &elfun, mfem::Vector &elvec) override;
