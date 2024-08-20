@@ -368,6 +368,11 @@ void EnergyBalanceNewtonSolver::SetOperator(const mfem::Operator &op)
 {
 	NewtonSolver::SetOperator(op); 
 	xnew.SetSize(height); 
+	successive_residual.SetSize(height);
+}
+
+double Norm(const mfem::Vector &x) {
+	return x.Norml1();
 }
 
 void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
@@ -375,19 +380,25 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 	MFEM_ASSERT(oper != NULL, "the Operator is not set (use SetOperator).");
 	MFEM_ASSERT(prec != NULL, "the Solver is not set (use SetSolver).");
 
-	const bool have_b = (b.Size() == Height());
-
 	if (!iterative_mode) {
 		x = 0.0;
 	}
 
 	int it;
-	double successive_iter, norm, norm0; 
+	double successive_iter_norm, norm, norm0; 
 
 	// compute initial residual norm 
 	oper->Mult(x, r); 
-	if (have_b) r -= b; 
-	norm0 = norm = initial_norm = Norm(r); 
+	r -= b; 
+	norm0 = norm = initial_norm = ::Norm(r); 
+	if (norm0/::Norm(b) < rel_tol) {
+		EventLog["skipping meb solve"]++;
+		converged = true; 
+		final_iter = 1;
+		final_norm = rel_tol;
+		initial_norm = 1.0;
+		return;
+	}
 
 	// stopping criterion for nonlinear residual norm 
 	const double norm_goal = std::max(rel_tol*norm, abs_tol); 
@@ -410,24 +421,24 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 		add(x, -1.0, c, xnew);
 		for (int i=0; i<height; i++) {
 			if (xnew(i) <= minimum_solution) 
-				xnew(i) = x(i) - under_relax_param*c(i); 
+				xnew(i) = (1.0 - under_relax_param)*x(i);
 		}
-		x -= xnew; 
-		successive_iter = Norm(x); 
+		add(xnew, -1.0, x, successive_residual);
+		successive_iter_norm = successive_residual.Normlinf(); 
 		x = xnew;
-		if (successive_iter <= minimum_solution * 1e-2) {
+
+		oper->Mult(x, r); 
+		r -= b;
+		norm = ::Norm(r); 		
+		if (successive_iter_norm <= minimum_solution * 1e-2) {
 			stagnation_count++; 
 			if (stagnation_count > max_stagnation_count) {
-				initial_norm = Norm(b); 
 				exit_code = Stagnated; 
 				break; 				
 			}
 		} else {
 			stagnation_count = 0; 
 		}
-		oper->Mult(x, r); 
-		if (have_b) r -= b;
-		norm = Norm(r); 
 	}
 
 	converged = exit_code > 0; 
