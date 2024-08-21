@@ -1053,10 +1053,10 @@ int main(int argc, char *argv[]) {
 		while (true) {
 			mfem::ParGridFunction Estar(E); // store previous energy density for stopping criterion
 
+			mfem::tic();
 			emission_form.Mult(T, em_source); // comute emission term 
 			D.MultTranspose(em_source, psi); // phi -> psi 
 			psi += psi0; // add in time, fixed source 
-			mfem::tic();
 			Linv.Mult(psi, psi); // sweep, in place to avoid extra memory
 			timing_log.Log("sweep", mfem::toc());
 
@@ -1083,13 +1083,13 @@ int main(int argc, char *argv[]) {
 				mfem::ParGridFunction prev(E); // previous temperature for stopping criterion 
 				mfem::ParGridFunction Tprev(T);
 
+				mfem::tic();
 				// nonlinearly eliminate temperature 
 				// compute sigma c E term 
 				Mtot_gray.Mult(E, abs_source); 
 				// add cv/dt T0 
 				add(abs_source, 1.0, T0, abs_source); // abs_source + 1.0 * T0 -> abs_source 
 				// nonlinearly solve for T given E 
-				mfem::tic();
 				meb_solver.Mult(abs_source, T);
 				timing_log.Log("meb solve", mfem::toc());
 				ValueLog.Log("meb residual", meb_solver.GetFinalRelNorm());
@@ -1192,6 +1192,7 @@ int main(int argc, char *argv[]) {
 
 		// --- output to file --- 
 		// write data collection to file 
+		mfem::tic();
 		bool done = time >= final_time - 1e-14 or cycle >= max_cycles; 
 		if (dc and (cycle % output_freq == 0 or done)) {
 			output_cycle++;
@@ -1216,6 +1217,7 @@ int main(int argc, char *argv[]) {
 			restart_dc->SetTime(time); restart_dc->SetTimeStep(time_step);
 			restart_dc->Write(x);
 		}
+		timing_log.Log("write", mfem::toc());
 
 		// check for new time step size 
 		bool time_step_changed = false; 

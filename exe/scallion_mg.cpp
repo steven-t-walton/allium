@@ -472,7 +472,8 @@ int main(int argc, char *argv[]) {
 
 	// --- allocate grid functions that store opacity data --- 
 	mfem::ParGridFunction total_gf(&sigma_fes); 
-	mfem::ParGridFunction gray_total_gf(&gray_sigma_fes);
+	mfem::ParGridFunction totalE_gf(&gray_sigma_fes);
+	mfem::ParGridFunction totalR_gf(&gray_sigma_fes);
 
 	// --- angular quadrature rule --- 
 	const int sn_order = driver["sn_order"]; 
@@ -628,7 +629,8 @@ int main(int argc, char *argv[]) {
 	total_gf.ProjectCoefficient(total_coef); 
 	// build coefficients out of sigma grid function data 
 	GridFunctionMGCoefficient total(total_gf);
-	mfem::GridFunctionCoefficient gray_total(&gray_total_gf);
+	mfem::GridFunctionCoefficient totalE(&totalE_gf);
+	mfem::GridFunctionCoefficient totalR(&totalR_gf);
 
 	// kinetic to continuum operators 
 	DiscreteToMoment D(*quad, psi_ext, phi_ext); 
@@ -642,13 +644,18 @@ int main(int argc, char *argv[]) {
 	// opacity weighting operators 
 	// energy density weighted 
 	ZerothMomentCoefficient Enu_coef(fes, phi_ext, Enu);
+	OpacityGroupCollapseCoefficient sigmaE(total, Enu_coef);
+	totalE_gf.ProjectCoefficient(sigmaE);
+	totalE_gf.ExchangeFaceNbrData();
 
 	// rosseland weighted 
 	RosselandSpectrumMGCoefficient rosseland_coef(energy_grid.Bounds(), Tcoef);
-	OpacityGroupCollapseCoefficient totalR(total, rosseland_coef);
+	OpacityGroupCollapseCoefficient sigmaR(total, rosseland_coef);
+	totalR_gf.ProjectCoefficient(sigmaR);
+	totalR_gf.ExchangeFaceNbrData(); // <-- gray can need exchange for diffusion operator 
+
+	// collapse to gray with rosseland spectrum 
 	WeightedGroupCollapseOperator to_gray_ross_op(fes, phi_ext, rosseland_coef);
-	gray_total_gf.ProjectCoefficient(totalR);
-	gray_total_gf.ExchangeFaceNbrData(); // <-- gray can need exchange for diffusion operator 
 
 	// form fixed source term 
 	mfem::Vector source_vec(psi_size); 
@@ -749,7 +756,7 @@ int main(int argc, char *argv[]) {
 	mfem::Vector nor(dim); 
 	nor = 0.0; nor(0) = 1.0; 
 	const double alpha = ComputeAlpha(*quad, nor); 
-	LinearizedPseudoAbsorptionCoefficient pseudo_abs(Tcoef, Cvdt, gray_total);
+	LinearizedPseudoAbsorptionCoefficient pseudo_abs(Tcoef, Cvdt, totalE);
 
 	sol::table solver = driver["solver"]; 
 	if (!solver.valid()) MFEM_ABORT("must supply solver options"); 
@@ -856,7 +863,7 @@ int main(int argc, char *argv[]) {
 			Kform->SetAlpha(alpha);
 			Kform->SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 
-			dsa_mat.reset(Kform->GetOperator(gray_total, pseudo_abs));
+			dsa_mat.reset(Kform->GetOperator(totalR, pseudo_abs));
 
 			sol::table solver_table = prec_table["solver"]; 
 			dsa_solver.reset(io::CreateSolver(solver_table, MPI_COMM_WORLD));
@@ -932,7 +939,8 @@ int main(int argc, char *argv[]) {
 			dc->RegisterField("F", &F);
 			dc->RegisterField("T", &T); 
 			dc->RegisterField("Tpw", &Tpw); 
-			dc->RegisterField("sigmaR", &gray_total_gf); 
+			dc->RegisterField("sigmaR", &totalR_gf); 
+			dc->RegisterField("sigmaE", &totalE_gf);
 			dc->RegisterField("cv", &cvgf); 
 			dc->RegisterField("density", &density_gf); 
 			dc->RegisterField("partition", &partition); 
@@ -981,7 +989,8 @@ int main(int argc, char *argv[]) {
 			tracer_dc->RegisterField("E", &E); 
 			tracer_dc->RegisterField("T", &T); 
 			tracer_dc->RegisterField("Tpwc", &Tpw); 
-			tracer_dc->RegisterField("sigma", &gray_total_gf); 
+			tracer_dc->RegisterField("sigmaR", &totalR_gf); 
+			tracer_dc->RegisterField("sigmaE", &totalE_gf);
 			if (restart_mode)
 				tracer_dc->UseRestartMode(true);
 			else {
@@ -1104,7 +1113,8 @@ int main(int argc, char *argv[]) {
 		if (temp_dependent_opacity or time_step_changed) {
 			// recompute opacities 
 			total_gf.ProjectCoefficient(total_coef); 
-			gray_total_gf.ProjectCoefficient(totalR);
+			totalR_gf.ProjectCoefficient(sigmaR);
+			totalE_gf.ProjectCoefficient(sigmaE);
 
 			// recompute sweep data 
 			Linv.AssembleLocalMatrices(); 
@@ -1124,8 +1134,9 @@ int main(int argc, char *argv[]) {
 				Kform->SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 				// DSA operator can require 
 				// gray opacity on parallel faces 
-				gray_total_gf.ExchangeFaceNbrData();
-				dsa_mat.reset(Kform->GetOperator(gray_total, pseudo_abs));
+				totalR_gf.ExchangeFaceNbrData();
+				totalE_gf.ExchangeFaceNbrData();
+				dsa_mat.reset(Kform->GetOperator(totalR, pseudo_abs));
 			}
 		}
 
