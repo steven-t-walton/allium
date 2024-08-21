@@ -421,25 +421,8 @@ int main(int argc, char *argv[]) {
 	}
 	mesh.ExchangeFaceNbrData(); // create parallel communication data needed for sweep 
 	mesh.SetAttributes(); 
-	// print mesh characteristics 
-	double hmin, hmax, kmin, kmax; 
-	mesh.GetCharacteristics(hmin, hmax, kmin, kmax); 
-	const auto global_ne = mesh.ReduceInt(mesh.GetNE()); 
-	out << YAML::Key << "dim" << YAML::Value << dim; 
-	out << YAML::Key << "elements" << YAML::Value << global_ne; 
-	out << YAML::Key << "mesh size" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "min" << YAML::Value << hmin; 
-		out << YAML::Key << "max" << YAML::Value << hmax; 
-	out << YAML::EndMap; 
-	out << YAML::Key << "mesh conditioning" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "min" << YAML::Value << kmin; 
-		out << YAML::Key << "max" << YAML::Value << kmax; 
-	out << YAML::EndMap; 
-	out << YAML::Key << "MPI ranks" << YAML::Value << mfem::Mpi::WorldSize(); 
-	out << YAML::Key << "refinements" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "serial" << YAML::Value << ser_ref; 
-		out << YAML::Key << "parallel" << YAML::Value << par_ref; 
-	out << YAML::EndMap; 
+	// print info about mesh 
+	io::PrintMeshCharacteristics(out, mesh, ser_ref, par_ref);
 	out << YAML::EndMap; 
 
 	// --- load algorithmic parameters --- 
@@ -523,21 +506,13 @@ int main(int argc, char *argv[]) {
 	const double final_time = driver["final_time"]; 
 
 	// allocate time step control parameters 
-	double time_step; 
 	double time = 0.0;
 	int cycle = 0, output_cycle = 0;
 
 	// get initial time step
-	// either as fixed value or from a function 
-	sol::optional<sol::function> time_step_func_avail = driver["time_step"]; 
-	sol::optional<double> time_step_value_avail = driver["time_step"]; 
-	if (time_step_func_avail) {
-		time_step = time_step_func_avail.value()(0.0); 
-	} else if (time_step_value_avail) {
-		time_step = time_step_value_avail.value(); 
-	} else {
-		MFEM_ABORT("must supply time step"); 
-	}
+	// optionally get function to change time step 
+	double time_step = driver["time_step"];
+	sol::optional<sol::function> time_step_func_avail = driver["time_step_function"]; 
 
 	int max_cycles = driver["max_cycles"].get_or(std::numeric_limits<int>::max()); 
 	if (max_cycles_override>0) max_cycles = max_cycles_override; 
@@ -551,6 +526,7 @@ int main(int argc, char *argv[]) {
 	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "fe order" << YAML::Value << fe_order; 
 		out << YAML::Key << "opacity fe order" << YAML::Value << sigma_fe_order; 
+		out << YAML::Key << "gray opacity fe order" << YAML::Value << gray_sigma_fe_order;
 		out << YAML::Key << "sn order" << YAML::Value << sn_order; 
 		out << YAML::Key << "sn quadrature type" << YAML::Value << sn_type; 
 		out << YAML::Key << "num angles" << YAML::Value << Nomega; 			
@@ -1091,15 +1067,17 @@ int main(int argc, char *argv[]) {
 			// compute E_HO-weighted opacity 
 			mfem::tic(); 
 			totalE_gf.ProjectCoefficient(sigmaE);
-			timing_log.Log("sigmaE", mfem::toc());
 			// re-assemble mass matrix 
 			Mtot_gray = 0.0; // set all entries to zero 
 			// assemble into existing sparsity pattern 
 			Mtot_gray.Assemble(); 
+			timing_log.Log("sigmaE", mfem::toc());
 
 			// compute SMM closure 
+			mfem::tic();
 			source_op.Mult(psi, smm_source);
 			smm_source += moments0; // time source 
+			timing_log.Log("SMM source", mfem::toc());
 			int inner = 1;
 			while (true) {
 				mfem::ParGridFunction prev(E); // previous temperature for stopping criterion 
@@ -1133,6 +1111,7 @@ int main(int argc, char *argv[]) {
 				timing_log.Log("opac correction", mfem::toc());
 
 				// form schur complement of jacobian 
+				mfem::tic();
 				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc.GetOperator(totalR, totalE));
 				const auto &dB = gr_emission_form.GetGradient(T); // gradient of emission
 				auto &dBt_inv = meb_form.GetGradient(T); // gradient of energy balance equation
@@ -1162,6 +1141,7 @@ int main(int argc, char *argv[]) {
 				product.AddMult(em_source_gr, lo_source.GetBlock(1));
 				// add in opacity correction and SMM source
 				add(smm_source.GetBlock(0), 3.0, opac_corr_form, lo_source.GetBlock(0));
+				timing_log.Log("LO assembly", mfem::toc());
 
 				// solve linearized LO system 
 				mfem::tic();
@@ -1177,7 +1157,7 @@ int main(int argc, char *argv[]) {
 						}
 					}					
 				}
-				timing_log.Log("solve", mfem::toc());
+				timing_log.Log("LO solve", mfem::toc());
 
 				// stopping criterion 
 				// const auto norm = prev.ComputeL2Error(Tcoef);
@@ -1239,11 +1219,17 @@ int main(int argc, char *argv[]) {
 
 		// check for new time step size 
 		bool time_step_changed = false; 
-		if (time_step_func_avail) {
-			double new_time_step = time_step_func_avail.value()(time); 
+		const double time_step_old = time_step;
+		// reduce time step to end at final_time, if needed 
+		if (time + time_step > final_time) {
+			time_step_changed = true;
+			time_step = final_time - time;
+		}
+		// query time step function for new value 
+		else if (time_step_func_avail) {
+			double new_time_step = time_step_func_avail.value()(time, time_step); 
 			time_step_changed = std::fabs(new_time_step - time_step) > 1e-14; 
 			time_step = new_time_step; 
-			Cvdt.SetAConst(1.0/time_step); 
 		}
 
 		// --- update opacity and opacity-dependent terms --- 
@@ -1258,6 +1244,13 @@ int main(int argc, char *argv[]) {
 			// recompute sweep data 
 			Linv.AssembleLocalMatrices(); 
 			Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
+
+			// energy balance time step 
+			Cvdt.SetAConst(1.0/time_step); 
+
+			// LO system time step 
+			lo_disc.SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
+			lo_disc.SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
 
 			assembly_timer.Stop(); 
 			timing_log.Log("assembly time", assembly_timer.RealTime());
@@ -1289,7 +1282,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::BeginMap; 
 			out << YAML::Key << "cycle" << YAML::Value << cycle; 
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
-			out << YAML::Key << "time step size" << YAML::Value << time_step; 
+			out << YAML::Key << "time step size" << YAML::Value << time_step_old; 
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
 			out << YAML::Key << "outer" << YAML::Value << outer;
 			out << YAML::Key << "inner sum" << YAML::Value << inner_sum;

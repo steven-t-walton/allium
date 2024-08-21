@@ -367,6 +367,30 @@ void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,dou
 	}
 }
 
+void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, int pr)
+{
+	double hmin, hmax, kmin, kmax; 
+	mesh.GetCharacteristics(hmin, hmax, kmin, kmax); 
+	const auto global_ne = mesh.ReduceInt(mesh.GetNE()); 
+	const auto nranks = mesh.GetNRanks();
+	const auto dim = mesh.Dimension();
+	out << YAML::Key << "dim" << YAML::Value << dim; 
+	out << YAML::Key << "elements" << YAML::Value << global_ne; 
+	out << YAML::Key << "mesh size" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "min" << YAML::Value << hmin; 
+		out << YAML::Key << "max" << YAML::Value << hmax; 
+	out << YAML::EndMap; 
+	out << YAML::Key << "mesh conditioning" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "min" << YAML::Value << kmin; 
+		out << YAML::Key << "max" << YAML::Value << kmax; 
+	out << YAML::EndMap; 
+	out << YAML::Key << "MPI ranks" << YAML::Value << nranks; 
+	out << YAML::Key << "refinements" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "serial" << YAML::Value << sr; 
+		out << YAML::Key << "parallel" << YAML::Value << pr; 
+	out << YAML::EndMap; 
+}
+
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root) 
 {
 	for (const auto &it : table) {

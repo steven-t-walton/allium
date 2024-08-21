@@ -49,8 +49,10 @@ void PrintArray(YAML::Emitter &out, const mfem::Array<T> &x)
 	out << YAML::EndSeq;
 }
 
+// synchronize parallel logs, print to YAML, clear 
 void ProcessGlobalLogs(YAML::Emitter &out);
 
+// create a data collection based on string description 
 mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 
 	mfem::Mesh &mesh, bool root);
 
@@ -72,6 +74,7 @@ void SetMeshAttributes(mfem::Mesh &mesh, std::function<std::string(double,double
 // set bdr element attribute according to a provide boundary condition map 
 void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f, 
 	const std::unordered_map<std::string,int> &map, bool root=true);
+void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, int pr);
 
 // set AMG options like max levels, num sweeps, etc via a lua table 
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root=true); 
