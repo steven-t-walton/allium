@@ -237,6 +237,8 @@ InverseAdvectionOperator::~InverseAdvectionOperator()
 
 void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) const 
 {
+	mfem::StopWatch timer; 
+	timer.Start();
 	assert(source.Size() == Width()); 
 	assert(psi.Size() == Height()); 
 	assert(mass_matrices[0]); 
@@ -294,10 +296,6 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// persistent storage of local system 
 	mfem::DenseMatrix grad, A, lu; 
 	mfem::Vector rhs, sol, psi2, psi_fixup, nor(dim), ones, fixup_weights; 
-
-	int mpi_buffer_size = MPI_BSEND_OVERHEAD + sizeof(double) * fes.num_face_nbr_dofs * G * Nomega;
-	auto *mpi_buffer = new char[mpi_buffer_size];
-	MPI_Buffer_attach(mpi_buffer, mpi_buffer_size);
 
 	// --- do sweep --- 
 	// vertices traversed, only count owned elements 
@@ -477,7 +475,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					MPI_Request request[2]; 
 					MPI_Isend(send_table.GetRow(fn), send_table.RowSize(fn), MPI_INT, nbr_rank, message_count++, 
 						MPI_COMM_WORLD, &request[0]); 
-					MPI_Ibsend(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, nbr_rank, message_count++, 
+					MPI_Isend(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, nbr_rank, message_count++, 
 						MPI_COMM_WORLD, &request[1]); 
 					MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
 				}
@@ -549,11 +547,11 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	igraph_vector_int_destroy(&nbrs); 
 	igraph_vector_int_destroy(&nbr_nbrs); 
 
-	MPI_Buffer_detach(mpi_buffer, &mpi_buffer_size);
-	delete[] mpi_buffer;
-
 	// use barrier to avoid tag clash? 
 	MPI_Barrier(MPI_COMM_WORLD); 
+
+	timer.Stop();
+	TimingLog.Log("sweep", timer.RealTime());
 }
 
 void InverseAdvectionOperator::AssembleLocalMatrices() 
