@@ -5,6 +5,7 @@
 #include "dg_trace_coll.hpp"
 #include "smm_integrators.hpp"
 #include "smm_coef.hpp"
+#include "coefficient.hpp"
 
 MomentFaceClosuresOperator::MomentFaceClosuresOperator(
 	mfem::ParFiniteElementSpace &fes,

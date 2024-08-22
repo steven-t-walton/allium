@@ -78,3 +78,22 @@ public:
 		}
 	}
 };
+
+class VectorComponentSumCoefficient : public mfem::Coefficient
+{
+private:
+	mfem::VectorCoefficient &coef;
+
+	mfem::Vector eval;
+public:
+	VectorComponentSumCoefficient(mfem::VectorCoefficient &coef)
+		: coef(coef)
+	{
+		eval.SetSize(coef.GetVDim());
+	}
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override
+	{
+		coef.Eval(eval, trans, ip);
+		return eval.Sum();
+	}
+};
