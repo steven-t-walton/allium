@@ -521,6 +521,7 @@ int main(int argc, char *argv[]) {
 	// SMM alg parameters 
 	const bool reset_to_ho = driver["reset_to_ho"].get_or(false);
 	const bool floor_radE_LO = driver["floor_E"].get_or(false);
+	const bool implicit_opacity = driver["implicit_opacity"].get_or(false);
 
 	// --- output algorithmic options used --- 
 	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
@@ -543,6 +544,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap; 
 		out << YAML::Key << "reset to HO" << YAML::Value << reset_to_ho;
 		out << YAML::Key << "floor LO E" << YAML::Value << floor_radE_LO;
+		out << YAML::Key << "implicit opacity" << YAML::Value << implicit_opacity;
 
 	// time mass matrix for psi 
 	SNTimeMassMatrix Mpsi(fes, psi_ext, IsMassLumped(lump)); 
@@ -672,36 +674,44 @@ int main(int argc, char *argv[]) {
 		F0 = 0.0;
 	}
 
-	// --- allocate grid functions that store opacity data --- 
-	mfem::ParGridFunction total_gf(&sigma_fes); // MG opacity
-	mfem::ParGridFunction totalE_gf(&gray_sigma_fes); // E-weighted gray 
-	mfem::ParGridFunction totalR_gf(&gray_sigma_fes); // rosseland-weighted 
-	mfem::ParGridFunction totalP_gf(&gray_sigma_fes); // planck-weighted 
-
-	// --- create coefficients to represent opacity data --- 
-	GridFunctionMGCoefficient total(total_gf);
-	mfem::GridFunctionCoefficient totalE(&totalE_gf);	
-	mfem::GridFunctionCoefficient totalR(&totalR_gf);
-	mfem::GridFunctionCoefficient totalP(&totalP_gf);
+	// allocate data for total opacity 
+	ProjectedVectorCoefficient total(sigma_fes, total_coef);
 
 	// project initial opacity 
 	total_coef.SetTemperature(Tcoef); 
 	total_coef.SetDensity(density); 
-	total_gf.ProjectCoefficient(total_coef); 
+	total.Project();
 
 	// --- opacity weighting operators --- 
 	// energy density weighted 
-	OpacityGroupCollapseCoefficient sigmaE(total, Enu_coef);
+	OpacityGroupCollapseCoefficient sigmaE_coef(total, Enu_coef);
 	// rosseland weighted 
 	RosselandSpectrumMGCoefficient rosseland_coef(energy_grid.Bounds(), Tcoef);
-	OpacityGroupCollapseCoefficient sigmaR(total, rosseland_coef);
+	OpacityGroupCollapseCoefficient sigmaR_coef(total, rosseland_coef);
+	InverseOpacityGroupCollapseCoefficient sigmaRinv_coef(total, rosseland_coef);
 	// planck weighted 
 	PlanckSpectrumMGCoefficient planck_coef(energy_grid.Bounds(), Tcoef);
-	OpacityGroupCollapseCoefficient sigmaP(total, planck_coef);
-	// compute initial gray opacities 
-	totalE_gf.ProjectCoefficient(sigmaE);
-	totalR_gf.ProjectCoefficient(sigmaR);
-	totalP_gf.ProjectCoefficient(sigmaP);
+	OpacityGroupCollapseCoefficient sigmaP_coef(total, planck_coef);
+	// flux collapse
+	RowL2NormVectorCoefficient flux_collapse_coef(Fnu_coef);
+	OpacityGroupCollapseCoefficient sigmaF_coef(total, flux_collapse_coef);
+	// second derivative weighted 
+	PlanckSecondDerivativeSpectrumMGCoefficient planck2_coef(energy_grid.Bounds(), Tcoef);
+	OpacityGroupCollapseCoefficient sigmaP2_coef(total, planck2_coef);
+
+	// compute and store initial gray opacities 
+	ProjectedCoefficient totalE(gray_sigma_fes, sigmaE_coef);
+	ProjectedCoefficient totalR(gray_sigma_fes, sigmaR_coef);
+	ProjectedCoefficient totalRinv(gray_sigma_fes, sigmaRinv_coef);
+	ProjectedCoefficient totalP(gray_sigma_fes, sigmaP_coef);
+	ProjectedCoefficient totalP2(gray_sigma_fes, sigmaP2_coef); 
+	ProjectedCoefficient totalF(gray_sigma_fes, sigmaF_coef);
+	totalE.Project();
+	totalR.Project();
+	totalRinv.Project();
+	totalP.Project();
+	totalP2.Project();
+	totalF.Project();
 
 	// form fixed source term 
 	mfem::Vector source_vec(psi_size); 
@@ -766,9 +776,11 @@ int main(int argc, char *argv[]) {
 	// cv/dt + sigma B(T)
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	BlockDiagonalByElementNonlinearForm meb_form(&fes);
-	// meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
-	meb_form.AddDomainIntegrator(
-		new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
+	if (implicit_opacity)
+		meb_form.AddDomainIntegrator(
+			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
+	else
+		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
 	meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new mfem::MassIntegrator(Cvdt)));
 
 	// emission nonlinear form 
@@ -778,9 +790,11 @@ int main(int argc, char *argv[]) {
 
 	// gray emission 
 	BlockDiagonalByElementNonlinearForm gr_emission_form(&fes);
-	// gr_emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
-	gr_emission_form.AddDomainIntegrator(
-		new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
+	if (implicit_opacity)
+		gr_emission_form.AddDomainIntegrator(
+			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
+	else
+		gr_emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
 
 	// sigmaE absorption mass matrix 
 	// used in gray energy balance equation 
@@ -839,10 +853,12 @@ int main(int argc, char *argv[]) {
 			dc->RegisterField("Fho", &Fho);
 			dc->RegisterField("T", &T); 
 			dc->RegisterField("Tpw", &Tpw); 
-			dc->RegisterField("sigmaR", &totalR_gf); 
-			dc->RegisterField("sigmaE", &totalE_gf);
-			dc->RegisterField("sigmaP", &totalP_gf);
-			dc->RegisterField("total", &total_gf);
+			dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
+			dc->RegisterField("sigmaE", &totalE.GetGridFunction());
+			dc->RegisterField("sigmaP", &totalP.GetGridFunction());
+			dc->RegisterField("sigmaP2", &totalP2.GetGridFunction());
+			dc->RegisterField("sigmaRinv", &totalRinv.GetGridFunction());
+			dc->RegisterField("total", &total.GetGridFunction());
 			dc->RegisterField("cv", &cvgf); 
 			dc->RegisterField("density", &density_gf); 
 			dc->RegisterField("partition", &partition); 
@@ -893,9 +909,9 @@ int main(int argc, char *argv[]) {
 			tracer_dc->RegisterField("F", &F);
 			tracer_dc->RegisterField("T", &T); 
 			tracer_dc->RegisterField("Tpwc", &Tpw); 
-			tracer_dc->RegisterField("sigmaR", &totalR_gf); 
-			tracer_dc->RegisterField("sigmaE", &totalE_gf);
-			tracer_dc->RegisterField("sigmaP", &totalP_gf);
+			tracer_dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
+			tracer_dc->RegisterField("sigmaE", &totalE.GetGridFunction());
+			tracer_dc->RegisterField("sigmaP", &totalP.GetGridFunction());
 			if (restart_mode)
 				tracer_dc->UseRestartMode(true);
 			else {
@@ -959,7 +975,7 @@ int main(int argc, char *argv[]) {
 	auto Mtime_v = std::unique_ptr<mfem::HypreParMatrix>(Mtime_form_v.ParallelAssemble());
 
 	// LO discretization object 
-	BlockLDGDiscretization lo_disc(fes, vfes, bc_map, lump);
+	BlockLDGDiscretization lo_disc(fes, vfes, totalF, totalE, bc_map, lump);
 	lo_disc.SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
 	lo_disc.SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
 	lo_disc.SetAlpha(alpha);
@@ -971,6 +987,7 @@ int main(int argc, char *argv[]) {
 	mfem::Vector source_vec_gr(TotalExtent(psi_ext_gr));
 	to_gray_op_psi.Mult(source_vec, source_vec_gr);
 	ConsistentLDGSMMOperator gr_source_op(lo_disc, *quad, psi_ext_gr, source_vec_gr);
+	// IndependentSMMOperator gr_source_op(fes, vfes, *quad, energy_grid, psi_ext_gr, source, inflow, alpha, bc_map, lump);
 	// NOTE: product operator has temporary storage the size of 
 	// one group of psi 
 	mfem::ProductOperator source_op(&gr_source_op, &to_gray_op_psi, false, false);
@@ -1005,13 +1022,22 @@ int main(int argc, char *argv[]) {
 	meb_solver.SetOperator(meb_form); // solves meb_form = (cv/dt + B(.))T 
 
 	mfem::LinearForm opac_corr_form(&vfes);
-	OpacityCorrectionCoefficient opac_corr_coef(totalR, total, Fnu_coef);
+	OpacityCorrectionCoefficient opac_corr_coef(lo_disc.GetTotal(), total, Fnu_coef);
 	if (IsMassLumped(lump))
 		opac_corr_form.AddDomainIntegrator(
 			new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef)));
 	else
 		opac_corr_form.AddDomainIntegrator(
 			new mfem::VectorDomainLFIntegrator(opac_corr_coef));
+
+	mfem::VectorGridFunctionCoefficient Flo_coef(&F);
+	mfem::VectorSumCoefficient Fdiff_coef(Flo_coef, Fho_coef, 1.0, -1.0);
+	mfem::ScalarVectorProductCoefficient totalSF(totalP2, Fdiff_coef);
+	mfem::MixedBilinearForm rosseland_grad_form(&fes, &vfes);
+	rosseland_grad_form.AddDomainIntegrator(
+		new QuadratureLumpedIntegrator(new MixedVectorScalarMassIntegrator(totalSF)));
+	rosseland_grad_form.Assemble(); 
+	rosseland_grad_form.Finalize();
 
 	// mfem::MixedBilinearForm opac_corr_bform(&fes, &vfes);
 	// NormalizedOpacityCorrectionCoefficient opac_corr_coef2(totalR, total, Enu_coef, Fnu_coef);
@@ -1066,12 +1092,17 @@ int main(int argc, char *argv[]) {
 
 			// compute E_HO-weighted opacity 
 			mfem::tic(); 
-			totalE_gf.ProjectCoefficient(sigmaE);
+			totalE.Project();
 			// re-assemble mass matrix 
 			Mtot_gray = 0.0; // set all entries to zero 
 			// assemble into existing sparsity pattern 
 			Mtot_gray.Assemble(); 
 			timing_log.Log("sigmaE", mfem::toc());
+
+			totalR.Project();
+			totalRinv.Project();
+			totalP.Project();
+			totalF.Project();
 
 			// compute SMM closure 
 			mfem::tic();
@@ -1094,12 +1125,16 @@ int main(int argc, char *argv[]) {
 				timing_log.Log("meb solve", mfem::toc());
 				ValueLog.Log("meb residual", meb_solver.GetFinalRelNorm());
 
-				// compute rosseland-weighted opacity 
-				// used in moment solve 
-				mfem::tic();
-				totalR_gf.ProjectCoefficient(sigmaR);
-				// totalP_gf.ProjectCoefficient(sigmaP);
-				timing_log.Log("sigmaR", mfem::toc());
+				if (implicit_opacity) {
+					total.Project();
+					totalR.Project();
+					totalF.Project();
+					totalRinv.Project();
+					totalP.Project();
+					totalE.Project();
+					Mtot_gray = 0.0; // set all entries to zero 
+					Mtot_gray.Assemble(); 					
+				}
 
 				// compute rosseland opacity-dependent 
 				// term in opacity correction 
@@ -1112,7 +1147,7 @@ int main(int argc, char *argv[]) {
 
 				// form schur complement of jacobian 
 				mfem::tic();
-				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc.GetOperator(totalR, totalE));
+				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc.GetOperator());
 				const auto &dB = gr_emission_form.GetGradient(T); // gradient of emission
 				auto &dBt_inv = meb_form.GetGradient(T); // gradient of energy balance equation
 				dBt_inv.Invert(); // <-- for lumping >0, this is diagonal, could save work with a diagonal inverse
@@ -1126,6 +1161,18 @@ int main(int argc, char *argv[]) {
 				mfem::SparseMatrix diag;
 				static_cast<mfem::HypreParMatrix*>(&K->GetBlock(1,1))->GetDiag(diag);
 				diag.Add(-1.0, *lin_emission);
+
+				// delete rosseland_grad_form.LoseMat();
+				// rosseland_grad_form.Assemble();
+				// rosseland_grad_form.Finalize();
+
+				// mfem::SparseMatrix diag2;
+				// auto product2 = std::unique_ptr<mfem::SparseMatrix>(
+				// 	Mult(rosseland_grad_form.SpMat(), dBt_inv.AsSparseMatrix()));
+				// auto lin_emission2 = std::unique_ptr<mfem::SparseMatrix>(
+				// 	Mult(*product2, Mtot_gray.SpMat()));
+				// static_cast<mfem::HypreParMatrix*>(&K->GetBlock(0,1))->GetDiag(diag2);
+				// diag2.Add(-3.0, *lin_emission2);
 
 				// mfem::SparseMatrix diag2;
 				// static_cast<mfem::HypreParMatrix*>(&K->GetBlock(0,1))->GetDiag(diag2);
@@ -1164,12 +1211,18 @@ int main(int argc, char *argv[]) {
 				// if (norm < 1e-8 or inner >= 10) break;
 				const auto norm = prev.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, prev, prev));
 				const auto Tnorm = Tprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tprev, Tprev));
-				if (norm + Tnorm < 1e-8 or inner >= 40) break; 
+				if (norm + Tnorm < 1e-9) break; 
+				if (inner >= 60) {
+					EventLog.Register("inner solve not converged");
+					break;
+				}
 				inner++;
 			}
+			if (implicit_opacity)
+				Linv.AssembleLocalMatrices();
 			inner_sum += inner;	// count total inner iterations 
 			const double norm = Estar.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Estar, Estar));
-			if (norm < 1e-6 or outer >= 30) break;
+			if (norm < 1e-6 or outer >= 40) break;
 			outer++;
 		}
 
@@ -1240,8 +1293,8 @@ int main(int argc, char *argv[]) {
 			mfem::StopWatch assembly_timer;
 			assembly_timer.Start();
 			// recompute opacities 
-			total_gf.ProjectCoefficient(total_coef); 
-			totalP_gf.ProjectCoefficient(sigmaP);
+			total.Project();
+			totalP.Project();
 
 			// recompute sweep data 
 			Linv.AssembleLocalMatrices(); 
