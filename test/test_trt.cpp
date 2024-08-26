@@ -418,8 +418,8 @@ TEST(NewtonTRT, JacobianSolver) {
 	gmres.SetMaxIter(100); 
 	gmres.SetPrintLevel(0); 
 
-	NewtonTRTOperator::NonlinearOperator op(offsets, Linv, D, emission_form, meb_form, Mtot, psi); 
-	NewtonTRTOperator::JacobianSolver grad_inv(offsets, gmres, meb_grad_inv); 
+	experimental::NewtonTRTOperator::NonlinearOperator op(offsets, Linv, D, emission_form, meb_form, Mtot, psi); 
+	experimental::NewtonTRTOperator::JacobianSolver grad_inv(offsets, gmres, meb_grad_inv); 
 
 	mfem::BlockVector x(offsets), y(offsets), z(offsets), source(offsets); 
 	mfem::ParGridFunction phi(&fes, x.GetBlock(0), 0); 

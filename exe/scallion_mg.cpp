@@ -470,11 +470,6 @@ int main(int argc, char *argv[]) {
 	for (int i=0; i<nbattr; i++) { battrs[i] = i+1; }
 	PWPhaseSpaceCoefficient inflow(battrs, inflow_list); 
 
-	// --- allocate grid functions that store opacity data --- 
-	mfem::ParGridFunction total_gf(&sigma_fes); 
-	mfem::ParGridFunction totalE_gf(&gray_sigma_fes);
-	mfem::ParGridFunction totalR_gf(&gray_sigma_fes);
-
 	// --- angular quadrature rule --- 
 	const int sn_order = driver["sn_order"]; 
 	const std::string sn_type = io::GetAndValidateOption(driver, "sn_quadrature_type", 
@@ -626,11 +621,8 @@ int main(int argc, char *argv[]) {
 	// initial opacity 
 	total_coef.SetTemperature(Tcoef); 
 	total_coef.SetDensity(density); 
-	total_gf.ProjectCoefficient(total_coef); 
-	// build coefficients out of sigma grid function data 
-	GridFunctionMGCoefficient total(total_gf);
-	mfem::GridFunctionCoefficient totalE(&totalE_gf);
-	mfem::GridFunctionCoefficient totalR(&totalR_gf);
+	ProjectedVectorCoefficient total(sigma_fes, total_coef);
+	total.Project();
 
 	// kinetic to continuum operators 
 	DiscreteToMoment D(*quad, psi_ext, phi_ext); 
@@ -645,14 +637,14 @@ int main(int argc, char *argv[]) {
 	// energy density weighted 
 	ZerothMomentCoefficient Enu_coef(fes, phi_ext, Enu);
 	OpacityGroupCollapseCoefficient sigmaE(total, Enu_coef);
-	totalE_gf.ProjectCoefficient(sigmaE);
-	totalE_gf.ExchangeFaceNbrData();
+	ProjectedCoefficient totalE(gray_sigma_fes, sigmaE);
+	totalE.Project();
 
 	// rosseland weighted 
 	RosselandSpectrumMGCoefficient rosseland_coef(energy_grid.Bounds(), Tcoef);
 	OpacityGroupCollapseCoefficient sigmaR(total, rosseland_coef);
-	totalR_gf.ProjectCoefficient(sigmaR);
-	totalR_gf.ExchangeFaceNbrData(); // <-- gray can need exchange for diffusion operator 
+	ProjectedCoefficient totalR(gray_sigma_fes, sigmaR);
+	totalR.Project();
 
 	// collapse to gray with rosseland spectrum 
 	WeightedGroupCollapseOperator to_gray_ross_op(fes, phi_ext, rosseland_coef);
@@ -756,7 +748,7 @@ int main(int argc, char *argv[]) {
 	mfem::Vector nor(dim); 
 	nor = 0.0; nor(0) = 1.0; 
 	const double alpha = ComputeAlpha(*quad, nor); 
-	LinearizedPseudoAbsorptionCoefficient pseudo_abs(Tcoef, Cvdt, totalE);
+	LinearizedPseudoAbsorptionCoefficient pseudo_abs(Tcoef, Cvdt, totalR);
 
 	sol::table solver = driver["solver"]; 
 	if (!solver.valid()) MFEM_ABORT("must supply solver options"); 
@@ -764,16 +756,17 @@ int main(int argc, char *argv[]) {
 	io::ValidateOption<std::string>("solver type", solver_type, {"picard", "linearized", "newton"}, root); 
 	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver, local_meb_solver, global_meb_solver,
 		linear_solver;
-	std::unique_ptr<mfem::Solver> dsa_solver;
 	std::unique_ptr<BlockDiagonalByElementNonlinearSolver> meb_solver;
 	std::unique_ptr<BlockDiagonalByElementSolver> linearized_meb_solver;
-	std::unique_ptr<mfem::Operator> dsa_mat;
+	std::unique_ptr<mfem::Solver> dsa_solver;
 	std::unique_ptr<MomentDiscretization> Kform; 
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
+	std::unique_ptr<PARSolver> lmfg_solver;
+	std::unique_ptr<InverseMomentDiscretization> dsa_inv;
 	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor; 
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
+	std::unique_ptr<LinearizedTRTOperator> linearized_op;
 	std::unique_ptr<mfem::Operator> stepper; 	
-	std::unique_ptr<PARSolver> lmfg_solver;
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
 	out << YAML::Key << "type" << YAML::Value << solver_type; 
 	if (solver_type == "picard") {
@@ -787,26 +780,29 @@ int main(int argc, char *argv[]) {
 		const std::string meb_type = meb_solver_table["type"]; 
 		io::ValidateOption<std::string>("energy balance solver", 
 			meb_solver_table["type"], {"newton", "local newton"}, root); 
+		mfem::Solver *meb_solver_ptr;
 		if (meb_type == "newton") {
 			linearized_meb_solver = std::make_unique<BlockDiagonalByElementSolver>(*local_mat_inv);
 			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
 			global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
 			global_meb_solver->SetOperator(meb_form); 
-			stepper = std::make_unique<PicardTRTOperator>(
-				offsets, Linv, D, emission_form, Mtot_collapse, *global_meb_solver, *nonlinear_solver); 
 			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*global_meb_solver); 
-			nonlinear_solver->SetMonitor(*inner_monitor); 
+			meb_solver_ptr = global_meb_solver.get();
 		} else if (meb_type == "local newton") {
 			local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
 			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
 			local_meb_solver->SetPreconditioner(*local_mat_inv);
 			meb_solver = std::make_unique<BlockDiagonalByElementNonlinearSolver>(*local_meb_solver); 			
 			meb_solver->SetOperator(meb_form); 
-			stepper = std::make_unique<PicardTRTOperator>(
-				offsets, Linv, D, emission_form, Mtot_collapse, *meb_solver, *nonlinear_solver); 
 			inner_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver); 
-			nonlinear_solver->SetMonitor(*inner_monitor); 
+			meb_solver_ptr = meb_solver.get();
 		}
+
+		auto *step_ptr = new PicardTRTOperator(
+			offsets, Linv, D, emission_form, Mtot_collapse, *meb_solver_ptr, *nonlinear_solver); 
+		step_ptr->UseImplicitOpacity(total, Mtot);
+		stepper.reset(step_ptr);
+		nonlinear_solver->SetMonitor(*inner_monitor); 
 
 		auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get()); 
 		if (sundials) {
@@ -823,19 +819,16 @@ int main(int argc, char *argv[]) {
 
 	else if (solver_type == "newton" or solver_type == "linearized") {
 		// create nonlinear solver 
-		sol::optional<sol::table> nonlin_solve_table_avail = solver["nonlinear_solver"]; 
-		if (nonlin_solve_table_avail) {
-			sol::table nonlin_solve_table = nonlin_solve_table_avail.value(); 
-			io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
-				{"newton", "kinsol"}, root); 
-			nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
-			auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get());
-			if (sundials) {
-				const std::string strategy = nonlin_solve_table["strategy"]; 
-				io::ValidateOption<std::string>("kinsol strategy", strategy, {"none", "linesearch", "picard"}, root); 		
-			}
-			out << YAML::Key << "nonlinear solver" << YAML::Key << nonlin_solve_table; 
+		sol::table nonlin_solve_table = solver["nonlinear_solver"]; 
+		io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
+			{"fp", "kinsol"}, root); 
+		nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
+		auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get());
+		if (sundials) {
+			const std::string strategy = nonlin_solve_table["strategy"]; 
+			io::ValidateOption<std::string>("kinsol strategy", strategy, {"none", "linesearch", "picard"}, root); 		
 		}
+		out << YAML::Key << "nonlinear solver" << YAML::Key << nonlin_solve_table; 
 
 		// create solver for transport operator 
 		sol::table transport_solve_table = solver["transport_solver"]; 
@@ -845,25 +838,23 @@ int main(int argc, char *argv[]) {
 		// create solver for dsa system 
 		sol::optional<sol::table> prec_table_avail = transport_solve_table["preconditioner"]; 
 		if (prec_table_avail) {
-			if (nonlinear_solver and root) MFEM_ABORT("DSA with Newton not implemented");
+			// if (nonlinear_solver and root) MFEM_ABORT("DSA with Newton not implemented");
 			sol::table prec_table = prec_table_avail.value(); 
 			const std::string type = prec_table["type"]; 
 			io::ValidateOption<std::string>("preconditioner type", type, {"mip", "ldg"}, root); 
 
 			if (type == "mip") {
 				const double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 				
-				auto *disc = new InteriorPenaltyDiscretization(fes, bc_map, lump);
+				auto *disc = new InteriorPenaltyDiscretization(fes, totalR, pseudo_abs, bc_map, lump);
 				disc->SetPenaltyLowerBound(alpha/2);
 				disc->SetKappa(kappa);
 				Kform.reset(disc);
 			} else if (type == "ldg") {
-				auto *disc = new LDGDiscretization(fes, bc_map, lump);
+				auto *disc = new LDGDiscretization(fes, totalR, pseudo_abs, bc_map, lump);
 				Kform.reset(disc);
 			}
 			Kform->SetAlpha(alpha);
 			Kform->SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
-
-			dsa_mat.reset(Kform->GetOperator(totalR, pseudo_abs));
 
 			sol::table solver_table = prec_table["solver"]; 
 			dsa_solver.reset(io::CreateSolver(solver_table, MPI_COMM_WORLD));
@@ -878,35 +869,47 @@ int main(int argc, char *argv[]) {
 			// LMFG restricts to gray, solves diffusion, prolongs back to multigroup 
 			// rosseland spectrum is used for both restriction and prolongation
 			lmfg_solver = std::make_unique<PARSolver>(to_gray_ross_op, *dsa_solver, to_gray_ross_op);
+			dsa_inv = std::make_unique<InverseMomentDiscretization>(*Kform, *lmfg_solver);
 		}
 		out << YAML::Key << "transport solver" << YAML::Value << transport_solve_table; 
 
 		linearized_meb_solver = std::make_unique<BlockDiagonalByElementSolver>(*local_mat_inv);
-		if (nonlinear_solver) {
-			auto *ptr = new NewtonTRTOperator(
-				offsets, Linv, D, emission_form, meb_form, 
-				Mtot_collapse, *nonlinear_solver, *linear_solver, *linearized_meb_solver);
-			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
-			auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get());
-			if (sundials) {
-				mfem::IdentityOperator identity(2*fes.GetVSize()); 
-				sundials->SetOperator(identity); 
-				kinsol_data = std::make_unique<KinsolCallbackData>(inner_monitor.get()); 
-				KINSetInfoHandlerFn(sundials->GetMem(), KinsolCallbackFunction, kinsol_data.get()); 
-				KINSetErrHandlerFn(sundials->GetMem(), io::SundialsErrorFunction, nullptr); 		
-			} else {
-				nonlinear_solver->SetMonitor(*inner_monitor); 				
-			}
-
-			stepper.reset(ptr); 
-		} 
-
-		else {
-			auto *ptr = new LinearizedTRTOperator(
-				offsets, Linv, D, emission_form, meb_form, 
-				Mtot_collapse, *linear_solver, *linearized_meb_solver, lmfg_solver.get());
-			stepper.reset(ptr); 
+		inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
+		nonlinear_solver->SetMonitor(*inner_monitor); 				
+		linearized_op = std::make_unique<LinearizedTRTOperator>(
+			offsets, Linv, D, emission_form, meb_form,
+			Mtot_collapse, *linear_solver, *linearized_meb_solver);
+		sol::optional<sol::table> meb_solver_table_avail = solver["rebalance_solver"]; 
+		if (meb_solver_table_avail) {
+			sol::table meb_solver_table = meb_solver_table_avail.value();
+			const std::string meb_type = meb_solver_table["type"]; 
+			io::ValidateOption<std::string>("energy balance solver", 
+				meb_solver_table["type"], {"newton", "local newton"}, root); 
+			mfem::Solver *meb_solver_ptr;
+			if (meb_type == "newton") {
+				linearized_meb_solver = std::make_unique<BlockDiagonalByElementSolver>(*local_mat_inv);
+				global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
+				global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
+				global_meb_solver->SetOperator(meb_form); 
+				meb_solver_ptr = global_meb_solver.get();
+			} else if (meb_type == "local newton") {
+				local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
+				io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
+				local_meb_solver->SetPreconditioner(*local_mat_inv);
+				meb_solver = std::make_unique<BlockDiagonalByElementNonlinearSolver>(*local_meb_solver); 			
+				meb_solver->SetOperator(meb_form); 
+				meb_solver_ptr = meb_solver.get();
+			}				
+			linearized_op->SetRebalanceSolver(*meb_solver_ptr);
+			out << YAML::Key << "rebalance solver" << YAML::Value << meb_solver_table;
 		}
+		auto *step_ptr = new NewtonTRTOperator(*linearized_op, *nonlinear_solver);
+		if (dsa_inv) step_ptr->SetDSAPreconditioner(*dsa_inv);
+		const bool implicit_opac = driver["implicit_opacity"].get_or(false);
+		if (implicit_opac) step_ptr->UseImplicitOpacity(total, Mtot);
+		stepper.reset(step_ptr);
+
+		out << YAML::Key << "implicit opacity" << YAML::Value << implicit_opac;
 	}
 	out << YAML::EndMap; // end solver output
 	out << YAML::EndMap; // end driver output 
@@ -939,8 +942,8 @@ int main(int argc, char *argv[]) {
 			dc->RegisterField("F", &F);
 			dc->RegisterField("T", &T); 
 			dc->RegisterField("Tpw", &Tpw); 
-			dc->RegisterField("sigmaR", &totalR_gf); 
-			dc->RegisterField("sigmaE", &totalE_gf);
+			dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
+			dc->RegisterField("sigmaE", &totalE.GetGridFunction());
 			dc->RegisterField("cv", &cvgf); 
 			dc->RegisterField("density", &density_gf); 
 			dc->RegisterField("partition", &partition); 
@@ -989,8 +992,8 @@ int main(int argc, char *argv[]) {
 			tracer_dc->RegisterField("E", &E); 
 			tracer_dc->RegisterField("T", &T); 
 			tracer_dc->RegisterField("Tpwc", &Tpw); 
-			tracer_dc->RegisterField("sigmaR", &totalR_gf); 
-			tracer_dc->RegisterField("sigmaE", &totalE_gf);
+			tracer_dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
+			tracer_dc->RegisterField("sigmaE", &totalE.GetGridFunction());
 			if (restart_mode)
 				tracer_dc->UseRestartMode(true);
 			else {
@@ -1045,13 +1048,6 @@ int main(int argc, char *argv[]) {
 		add(source_vec, 1.0/time_step/constants::SpeedOfLight, psi0, psi0); // source_vec + 1/c/dt psi0 -> psi0
 		Mcv.Mult(T, T0); // assume T = T0 to get Mcv T0 -> T0 
 		T0 *= 1.0/time_step; 
-
-		// --- pre process mult for this time step --- 
-		// SuperLU segfaults or complains 
-		// if SetOperator is called without at least one Mult 
-		// calling SetOperator here ensures every SetOperator gets 
-		// at least one Mult call, avoiding issue with SuperLU 
-		if (dsa_mat) lmfg_solver->SetOperator(*dsa_mat);
 
 		// --- get new time step solution --- 
 		stepper->Mult(x0, x); 
@@ -1112,9 +1108,9 @@ int main(int argc, char *argv[]) {
 		if (T.Min() < 0) MFEM_ABORT("negative temperature"); 
 		if (temp_dependent_opacity or time_step_changed) {
 			// recompute opacities 
-			total_gf.ProjectCoefficient(total_coef); 
-			totalR_gf.ProjectCoefficient(sigmaR);
-			totalE_gf.ProjectCoefficient(sigmaE);
+			total.Project(); 
+			totalR.Project();
+			totalE.Project();
 
 			// recompute sweep data 
 			Linv.AssembleLocalMatrices(); 
@@ -1129,14 +1125,9 @@ int main(int argc, char *argv[]) {
 			Mtot.Finalize();
 
 			// DSA matrix depends on sigma and dt 
-			if (dsa_mat) {
+			if (Kform) {
 				// set DSA time step 
 				Kform->SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
-				// DSA operator can require 
-				// gray opacity on parallel faces 
-				totalR_gf.ExchangeFaceNbrData();
-				totalE_gf.ExchangeFaceNbrData();
-				dsa_mat.reset(Kform->GetOperator(totalR, pseudo_abs));
 			}
 		}
 
@@ -1160,6 +1151,8 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "time step size" << YAML::Value << time_step_old; 
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
 			if (nonlinear_solver) {
+				log.Log("max newton iterations", nonlinear_solver->GetNumIterations());
+				log.Log("max transport iterations", inner_monitor->iters.Max());
 				out << YAML::Key << "it" << YAML::Value << nonlinear_solver->GetNumIterations(); 
 				out << YAML::Key << "norm" << YAML::Value; 
 				if (kinsol_data) 

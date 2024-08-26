@@ -5,6 +5,9 @@
 #include "moment_discretization.hpp"
 #include "planck.hpp"
 
+namespace experimental
+{
+
 NewtonTRTOperator::NewtonTRTOperator(
 	const mfem::Array<int> &offsets, 
 	const InverseAdvectionOperator &Linv, 
@@ -199,19 +202,19 @@ JacobianSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
 	meb_grad_inv.Mult(tmp_T, T); 
 }
 
+} // end namespace experimental 
+
 LinearizedTRTOperator::LinearizedTRTOperator(
 	const mfem::Array<int> &offsets, 
-	const InverseAdvectionOperator &Linv, 
+	InverseAdvectionOperator &Linv, 
 	const mfem::Operator &D, 
 	const mfem::Operator &B, 
 	const mfem::Operator &Bt, 
 	const mfem::Operator &sigma, 
 	mfem::IterativeSolver &schur_solver, 
-	mfem::Solver &meb_grad_inv, 
-	const mfem::Solver *dsa_solver)
+	mfem::Solver &meb_grad_inv)
 	: offsets(offsets), Linv(Linv), D(D), B(B), Bt(Bt), sigma(sigma), 
-	  schur_solver(schur_solver), meb_grad_inv(meb_grad_inv), 
-	  dsa_solver(dsa_solver)
+	  schur_solver(schur_solver), meb_grad_inv(meb_grad_inv)
 {
 	height = width = offsets.Last(); 
 	temp_resid.SetSize(Bt.Height()); 
