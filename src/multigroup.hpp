@@ -2,6 +2,7 @@
 
 #include "mfem.hpp"
 #include "tvector.hpp"
+#include "planck.hpp"
 
 // data structure class that stores information about 
 // energy discretization 
@@ -73,6 +74,31 @@ public:
 		return numer / denom;
 	}
 };
+
+// collapse according to sum_g weight_g / sum_g weight_g/sigma_g 
+class InverseOpacityGroupCollapseCoefficient : public mfem::Coefficient
+{
+private:
+	mfem::VectorCoefficient &sigma, &weight;
+	mfem::Vector sigma_eval, weight_eval;
+public:
+	InverseOpacityGroupCollapseCoefficient(mfem::VectorCoefficient &sigma, mfem::VectorCoefficient &weight)
+		: sigma(sigma), weight(weight)
+	{
+		sigma_eval.SetSize(sigma.GetVDim());
+		weight_eval.SetSize(weight.GetVDim());
+	}
+	inline double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
+	{
+		sigma.Eval(sigma_eval, trans, ip);
+		weight.Eval(weight_eval, trans, ip);
+		sigma_eval.Reciprocal();
+		const auto numer = weight_eval.Sum();
+		const auto denom = sigma_eval*weight_eval;
+		return numer / denom;
+	}
+};
+
 
 // sums over the energy index to produce a gray vector 
 // the template parameter controls the assumed layout 
@@ -154,6 +180,8 @@ public:
 class MultiGroupCoefficient : public mfem::VectorCoefficient
 {
 public:
+	MultiGroupCoefficient() : mfem::VectorCoefficient(0)
+	{ }
 	MultiGroupCoefficient(int G) : mfem::VectorCoefficient(G)
 	{ }
 
@@ -202,56 +230,75 @@ public:
 class GridFunctionMGCoefficient : public MultiGroupCoefficient
 {
 private:
-	const mfem::GridFunction &gf;
 	mfem::VectorGridFunctionCoefficient vec_coef;
+protected:
+	GridFunctionMGCoefficient() = default;
 public:
 	GridFunctionMGCoefficient(const mfem::GridFunction &gf)
-		: gf(gf), vec_coef(&gf), MultiGroupCoefficient(gf.VectorDim())
+		: vec_coef(&gf), MultiGroupCoefficient(gf.VectorDim())
 	{ }
 	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override 
 	{
+		assert(vec_coef.GetGridFunction());
 		vec_coef.Eval(v, trans, ip);
 	}
 	mfem::GridFunctionCoefficient *GetGroupCoefficient(int g) override
 	{
-		return new mfem::GridFunctionCoefficient(&gf, g+1); 
+		return new mfem::GridFunctionCoefficient(vec_coef.GetGridFunction(), g+1); 
 	}
-	const mfem::GridFunction &GetGridFunction() const { return gf; }
+protected:
+	void SetGridFunction(const mfem::GridFunction &gf_in)
+	{
+		vec_coef.SetGridFunction(&gf_in);
+		vdim = vec_coef.GetVDim();
+	}
+public:
+	const mfem::GridFunction &GetGridFunction() const { return *vec_coef.GetGridFunction(); }
 };
 
-// evaluates normalized planck spectrum 
-// in the MultiGroupCoefficient format 
-// vector eval is optimized to reduce number of calls 
-// to IntegrateNormalizedPlanck
-class PlanckSpectrumMGCoefficient : public MultiGroupCoefficient {
+namespace internal
+{
+
+// multi group coefficient that evaluates 
+// scalar and vector-valued spectrum 
+// defined by F such that F_g = F(E_{g+1},T) - F(E_g,T) 
+// F is intended to be the IntegrateNormalizedX functions 
+// from planck.hpp
+// template on function pointer that takes in energy and temperature 
+template<double(*F)(double, double)>
+class SpectrumMGCoefficient : public MultiGroupCoefficient
+{
 private:
-	const mfem::Array<double> &energy_grid; 
+	const mfem::Array<double> &energy_grid;
 	mfem::Coefficient &T;
 public:
-	PlanckSpectrumMGCoefficient(const mfem::Array<double> &energy_grid, mfem::Coefficient &T);
-
-	// scalar evaluation 
-	double Eval(int g, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override; 
-	// efficient vector evaluation 
-	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+	SpectrumMGCoefficient(const mfem::Array<double> &energy_grid, mfem::Coefficient &T)
+		: energy_grid(energy_grid), T(T), MultiGroupCoefficient(energy_grid.Size()-1)
+	{ }
+	double Eval(int g, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override
+	{
+		const double temperature = T.Eval(trans, ip);
+		const double low = F(energy_grid[g], temperature);
+		const double high = F(energy_grid[g+1], temperature);
+		return high - low;
+	}
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override
+	{
+		v.SetSize(vdim);
+		const double temperature = T.Eval(trans, ip);
+		EvalSpectrum<F>(energy_grid, temperature, v);
+	}
 };
 
-// evaluates normalized rosseland spectrum 
-// in the MultiGroupCoefficient format 
-// vector eval is optimized to reduce number of calls 
-// to IntegrateNormalizedPlanck
-class RosselandSpectrumMGCoefficient : public MultiGroupCoefficient {
-private:
-	const mfem::Array<double> &energy_grid; 
-	mfem::Coefficient &T;
-public:
-	RosselandSpectrumMGCoefficient(const mfem::Array<double> &energy_grid, mfem::Coefficient &T);
-	
-	// scalar evaluation 
-	double Eval(int g, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override; 
-	// efficient vector evaluation 
-	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
-};
+}
+
+// alias to class that evaluates planck spectrum in MultiGroupCoefficient format 
+using PlanckSpectrumMGCoefficient = internal::SpectrumMGCoefficient<IntegrateNormalizedPlanck>;
+// alias to class that evaluates rosseland spectrum in MultiGroupCoefficient format 
+using RosselandSpectrumMGCoefficient = internal::SpectrumMGCoefficient<IntegrateNormalizedRosseland>;
+// alias to class that evaluates second derivative spectrum in MultiGroupCoefficient format 
+using PlanckSecondDerivativeSpectrumMGCoefficient 
+	= internal::SpectrumMGCoefficient<IntegrateNormalizedPlanckSecondDerivative>;
 
 // MG coefficient that is independent of energy 
 class GrayMGCoefficient : public MultiGroupCoefficient {

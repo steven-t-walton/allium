@@ -1,6 +1,7 @@
 #pragma once 
 
 #include "mfem.hpp"
+#include "multigroup.hpp"
 
 class OpacityCoefficient : public mfem::VectorCoefficient {
 protected:
@@ -78,4 +79,56 @@ public:
 		}
 		if (v.Min() <= 0.0) MFEM_ABORT("negative opacity");
 	}
+};
+
+// helper class for representing a discrete multigroup opacity 
+// on a finite element space as a grid function 
+// this class ties a coefficient to its discrete representation 
+// as a grid function and provides access to this data 
+// as a multigrid grid function coefficient 
+class ProjectedVectorCoefficient : public GridFunctionMGCoefficient 
+{
+private:
+	mfem::VectorCoefficient &coef;
+
+	mfem::ParGridFunction data;
+public:
+	ProjectedVectorCoefficient(mfem::ParFiniteElementSpace &fes, mfem::VectorCoefficient &coef)
+		: coef(coef), data(&fes)
+	{
+		assert(coef.GetVDim() == fes.GetVDim());
+		GridFunctionMGCoefficient::SetGridFunction(data);
+	}
+	void Project()
+	{
+		data.ProjectCoefficient(coef);
+	}
+	void Exchange()
+	{
+		data.ExchangeFaceNbrData();
+	}
+	mfem::GridFunction &GetGridFunction() { return data; }
+};
+
+// scalar version of ProjectedVectorCoefficient 
+class ProjectedCoefficient : public mfem::GridFunctionCoefficient 
+{
+private:
+	mfem::Coefficient &coef; 
+
+	mfem::ParGridFunction data;
+public:
+	ProjectedCoefficient(mfem::ParFiniteElementSpace &fes, mfem::Coefficient &coef)
+		: coef(coef), data(&fes), mfem::GridFunctionCoefficient(&data)
+	{ }
+	void Project()
+	{
+		data.ProjectCoefficient(coef);
+	}
+	void Exchange()
+	{
+		data.ExchangeFaceNbrData();
+	}
+	void SetGridFunction(const mfem::GridFunction *gf) = delete;
+	mfem::GridFunction &GetGridFunction() { return data; }
 };

@@ -24,6 +24,7 @@ constexpr double coef_19 = -3.617/202741834014720;
 constexpr double coef_21 = 43.867/107290978560589824;
 constexpr double coef = 15.0/pow(constants::pi,4);
 constexpr double rosseland_max = pow(std::numeric_limits<double>::max(), 0.25);
+constexpr double second_deriv_max = std::log(std::numeric_limits<double>::max())-1.0;
 
 inline double PlanckTaylorSeries9(double x) {
 	const double x2 = x*x;
@@ -184,10 +185,61 @@ inline double IntegrateNormalizedRosseland(double E, double T) {
 	return IntegrateNormalizedRosseland(x);
 }
 
+inline double PlanckToSecondDerivative(double x, double planck) {
+	if (x > internal::second_deriv_max) return planck;
+	const auto ex = std::exp(x);
+	const auto val = planck - internal::coef/12*std::pow(x,4)*(ex*(x+3.0) - 3.0)/std::pow(std::expm1(x), 2);
+	if (std::isnan(val)) return planck; 
+	else return val;
+}
+
+inline double IntegrateNormalizedPlanckSecondDerivative(double x) {
+	const double planck = IntegrateNormalizedPlanck(x);
+	return PlanckToSecondDerivative(x, planck);
+}
+
+inline double IntegrateNormalizedPlanckSecondDerivative(double E, double T) {
+	const double x = E/T;
+	return IntegrateNormalizedPlanckSecondDerivative(x);
+}
+
+namespace internal {
+
+// evaluate spectrum over all groups at a given temperature 
+// templated on function F(E,T) that returns int_0^E f dE 
+// so that F_g = F(E_{g+1},T) - F(E_g,T) 
+// this function minimizes calls to F by re-using evaluations 
+// from the previous group 
+template<double (*F)(double,double)>
+inline void EvalSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum)
+{
+	const auto G = energy_grid.Size() - 1;
+	spectrum.SetSize(G);
+	double prev = 0.0; 
+	for (int g=0; g<G; g++) {
+		double next = F(energy_grid[g+1], T);
+		spectrum(g) = next - prev;
+		prev = next;
+	}
+}
+
+} // end namespace internal 
+
 // evaluate planck spectrum in all groups
-void EvalPlanckSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum);
+inline void EvalPlanckSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum)
+{
+	internal::EvalSpectrum<IntegrateNormalizedPlanck>(energy_grid, T, spectrum);
+}
 // evaluate rosseland spectrum in all groups
-void EvalRosselandSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum);
+inline void EvalRosselandSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum)
+{
+	internal::EvalSpectrum<IntegrateNormalizedRosseland>(energy_grid, T, spectrum);
+}
+inline void EvalPlanckSecondDerivativeSpectrum(
+	const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum)
+{
+	internal::EvalSpectrum<IntegrateNormalizedPlanckSecondDerivative>(energy_grid, T, spectrum);
+}
 // verify group structure produces integral of 
 // normalized planck from Emin to Emax = 1.0 
 // for max/min temperatures in the domain
