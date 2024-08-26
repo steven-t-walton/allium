@@ -588,8 +588,8 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "type" << YAML::Value << type; 
 			if (type == "p1sa") {
 				if (inner_it_solver) { MFEM_ABORT("only direct available for P1"); }
-				P1Discretization p1(fes, vfes, bc_map, lumping);
-				dsa_op.reset(p1.GetOperator(total, absorption));
+				P1Discretization p1(fes, vfes, total, absorption, bc_map, lumping);
+				dsa_op.reset(p1.GetOperator());
 				inner_solver->SetOperator(*dsa_op);
 				auto *ceo = new ComponentExtractionOperator(p1.GetOffsets(), 1); 
 				auto *ceo_t = new mfem::TransposeOperator(*ceo); 
@@ -599,9 +599,9 @@ int main(int argc, char *argv[]) {
 				prec = std::make_unique<DiffusionSyntheticAccelerationOperator>(*dsa_op_extract, Ms_form);
 			} 
 			else if (type == "ldgsa") {
-				BlockLDGDiscretization disc(fes, vfes, bc_map, lumping);
+				BlockLDGDiscretization disc(fes, vfes, total, absorption, bc_map, lumping);
 				disc.SetAlpha(alpha);
-				auto *block_op = disc.GetOperator(total, absorption);
+				auto *block_op = disc.GetOperator();
 				dsa_op.reset(disc.FormSchurComplement(*block_op));
 				delete block_op;
 
@@ -618,13 +618,13 @@ int main(int argc, char *argv[]) {
 				bool scale_stabilization = prec_table["scale_stabilization"].get_or(true); 
 				bool lower_bound = prec_table["bound_stabilization_below"].get_or(true); 
 				// const auto bc_type = io::GetDiffusionBCType(bc_str); 
-				BlockIPDiscretization disc(fes, vfes, bc_map, lumping);
+				BlockIPDiscretization disc(fes, vfes, total, absorption, bc_map, lumping);
 				disc.SetAlpha(alpha);
 				disc.SetKappa(kappa);
 				disc.SetScalePenalty(scale_stabilization);
 				if (lower_bound)
 					disc.SetPenaltyLowerBound(alpha/2);
-				auto *block_op = disc.GetOperator(total, absorption);
+				auto *block_op = disc.GetOperator();
 				dsa_op.reset(disc.FormSchurComplement(*block_op));
 				delete block_op;
 
@@ -644,11 +644,11 @@ int main(int argc, char *argv[]) {
 			else if (type == "scalar mip") {
 				double kappa = prec_table["kappa"].get_or(pow(fe_order+1,2)); 
 				double sigma = prec_table["sigma"].get_or(-1.0); 
-				InteriorPenaltyDiscretization ipdisc(fes, bc_map, lumping);
+				InteriorPenaltyDiscretization ipdisc(fes, total, absorption, bc_map, lumping);
 				ipdisc.SetKappa(kappa);
 				ipdisc.SetSigma(sigma);
 				ipdisc.SetPenaltyLowerBound(alpha/2);
-				dsa_op.reset(ipdisc.GetOperator(total, absorption));
+				dsa_op.reset(ipdisc.GetOperator());
 
 				if (inner_it_solver) {
 					amg = std::make_unique<mfem::HypreBoomerAMG>();
@@ -740,9 +740,9 @@ int main(int argc, char *argv[]) {
 		if (type == "LDGSMM") {
 			bool consistent = accel["consistent"].get_or(false); 
 			bool scale_stabilization = accel["scale_stabilization"].get_or(false); 
-			BlockLDGDiscretization disc(fes, vfes, bc_map, lumping);
+			BlockLDGDiscretization disc(fes, vfes, total, absorption, bc_map, lumping);
 			disc.SetAlpha(alpha);
-			lo_op.reset(disc.GetOperator(total, absorption));
+			lo_op.reset(disc.GetOperator());
 
 			// iterative solve
 			if (inner_it_solver) {
@@ -783,12 +783,12 @@ int main(int argc, char *argv[]) {
 			// use kappa = alpha/2 if regular kappa goes below alpha/2 
 			bool stab_bound = accel["bound_stabilization_below"].get_or(true); 
 
-			BlockIPDiscretization disc(fes, vfes, bc_map, lumping);
+			BlockIPDiscretization disc(fes, vfes, total, absorption, bc_map, lumping);
 			disc.SetAlpha(alpha);
 			if (stab_bound)
 				disc.SetPenaltyLowerBound(alpha/2);
 			disc.SetScalePenalty(scale_stabilization);
-			lo_op.reset(disc.GetOperator(total, absorption));
+			lo_op.reset(disc.GetOperator());
 
 			// iterative solve
 			if (inner_it_solver) {
@@ -828,8 +828,8 @@ int main(int argc, char *argv[]) {
 			const bool consistent = accel["consistent"].get_or(true);
 			if (!consistent) MFEM_ABORT("only consistent supported for P1");
 
-			P1Discretization p1(fes, vfes, bc_map, lumping);
-			lo_op.reset(p1.GetOperator(total, absorption));
+			P1Discretization p1(fes, vfes, total, absorption, bc_map, lumping);
+			lo_op.reset(p1.GetOperator());
 			inner_solver->SetOperator(*lo_op);
 			auto *source_op = new ConsistentP1SMMOperator(p1, *quad, psi_ext, source_vec);
 			offsets = p1.GetOffsets();
