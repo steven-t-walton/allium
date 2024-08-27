@@ -1,0 +1,123 @@
+mesh = {
+	num_elements = {100}, 
+	extents = {1/3}, 
+}
+
+function initial_condition(x,y,z)
+	return 1
+end 
+
+materials = {
+	mat = {
+		total = {
+			type = "analytic gray", 
+			coef = 1e9, 
+			nrho = -1, 
+			nT = -3		
+		}, 
+		heat_capacity = 1.3874e11, 
+		source = 0, 
+		density = 1.0
+	}
+}
+
+function material_map(x,y,z)
+	return "mat"
+end
+
+boundary_conditions = {
+	inflow = {
+		type = "inflow", 
+		value = 150
+	}, 
+	vacuum = {
+		type = "vacuum"
+	}
+}
+
+function boundary_map(x,y,z)
+	if (x==0) then 
+		return "inflow"
+	else
+		return "vacuum"
+	end
+end
+
+picard = {
+	type = "picard", 
+	nonlinear_solver = {
+		type = "kinsol", 
+		reltol = 1e-5,
+		abstol = 1e-5, 
+		max_iter = 500, 
+		iterative_mode = true, 
+		print_level = 0,
+		kdim = 0
+	}, 
+	energy_balance_solver = {
+		type = "local newton", 
+		reltol = 1e-8, 
+		abstol = 1e-2,
+		max_iter = 20, 
+		iterative_mode = true,
+		print_level = -1
+	}
+}
+
+linearized = {
+	type = "linearized", 
+	-- comment for one newton algorithm 
+	nonlinear_solver = {
+		type = "fp", 
+		reltol = 1e-8, 
+		max_iter = 1,
+		iterative_mode = true, 
+		print_level = -1
+	}, 
+	transport_solver = {
+		type = "gmres", 
+		abstol = 1e-6, 
+		reltol = 1e-6, 
+		max_iter = 100, 
+		iterative_mode = false, 
+		kdim = 50,
+		print_level = 0,
+		preconditioner = {
+			type = "mip", 
+			kappa = 4,
+			solver = {
+				type = "cg", 
+				reltol = 1e-10, 
+				max_iter = 50, 
+				iterative_mode = false, 
+				print_level = 0
+			}
+		},
+	},
+}
+
+driver = {
+	fe_order = 1, 
+	sigma_fe_order = 0, 
+	gray_sigma_fe_order = 1,
+	sn_order = 6, 
+	basis_type = "lobatto", 
+	solver = linearized,
+	lump = 7, 
+	-- fixup = {
+	-- 	type = "zero and scale", 
+	-- 	psi_min = 0.0
+	-- },
+	time_step = 1e-10,
+	final_time = 1e-7, 
+}
+
+output = {
+	root = "test_data/marshak_thin", 
+	tracer = {
+		precision = 16,
+		locations = {
+			{0.1}
+		},
+	}
+}
