@@ -613,9 +613,9 @@ void ValidateOption<const char*>(std::string key, const char *res, std::initiali
 
 std::string ResolveRelativePath(std::string path) 
 {
-	char output_name_resolve[PATH_MAX];
-	realpath(path.c_str(), output_name_resolve);  	
-	return std::string(output_name_resolve); 
+	std::filesystem::path obj(path);
+	auto resolved = std::filesystem::absolute(path);
+	return resolved.string();
 }
 
 } // end namespace io 
