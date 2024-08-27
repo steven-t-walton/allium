@@ -396,12 +396,13 @@ TEST(NewtonTRT, JacobianSolver) {
 
 	mfem::GridFunction total_data(&fes); 
 	total_data.ProjectCoefficient(total); 
+	GridFunctionMGCoefficient total_coef(total_data);
 	BoundaryConditionMap bc_map;
 	const auto &bdr_attr = mesh.bdr_attributes;
 	for (const auto &attr : bdr_attr) {
 		bc_map[attr] = INFLOW;
 	}
-	InverseAdvectionOperator Linv(fes, quad, total_data, bc_map); 
+	InverseAdvectionOperator Linv(fes, quad, total_coef, bc_map); 
 
 	mfem::Array<int> offsets(3); 
 	offsets[0] = 0; 
@@ -417,8 +418,8 @@ TEST(NewtonTRT, JacobianSolver) {
 	gmres.SetMaxIter(100); 
 	gmres.SetPrintLevel(0); 
 
-	NewtonTRTOperator::NonlinearOperator op(offsets, Linv, D, emission_form, meb_form, Mtot, psi); 
-	NewtonTRTOperator::JacobianSolver grad_inv(offsets, gmres, meb_grad_inv); 
+	experimental::NewtonTRTOperator::NonlinearOperator op(offsets, Linv, D, emission_form, meb_form, Mtot, psi); 
+	experimental::NewtonTRTOperator::JacobianSolver grad_inv(offsets, gmres, meb_grad_inv); 
 
 	mfem::BlockVector x(offsets), y(offsets), z(offsets), source(offsets); 
 	mfem::ParGridFunction phi(&fes, x.GetBlock(0), 0); 
@@ -434,7 +435,7 @@ TEST(NewtonTRT, JacobianSolver) {
 	EXPECT_NEAR(z.Norml2(), 0.0, 1e-5); 
 }
 
-TEST(Planck, Spectrum) {
+TEST(Planck, NormalizedPlanck) {
 	mfem::Array<double> bounds(6);
 	bounds[0] = 0.0;
 	bounds[1] = 0.1;
@@ -458,4 +459,197 @@ TEST(Planck, Spectrum) {
 		2.960039689335636e-6});
 	planck -= exact; 
 	EXPECT_NEAR(planck.Normlinf(), 0.0, 1e-5);
+}
+
+TEST(Planck, NormalizedPlanckRoomTemp) {
+	const double temp = 0.025;
+	mfem::Array<double> bounds(6);
+	bounds[0] = 0.0;
+	bounds[1] = 0.1;
+	bounds[2] = 0.5; 
+	bounds[3] = 3.5;
+	bounds[4] = 20; 
+	bounds[5] = std::numeric_limits<double>::max();
+	for (int i=0; i<bounds.Size() - 1; i++) {
+		bounds[i] /= temp;
+	}
+
+	mfem::Vector planck(bounds.Size()-1);
+	double planck_prev = 0.0;
+	for (int i=0; i<bounds.Size()-1; i++) {
+		double planck_new = IntegrateNormalizedPlanck(bounds[i+1]);  
+		planck(i) = (planck_new - planck_prev) * constants::StefanBoltzmann * pow(temp,4);
+		planck_prev = planck_new;
+	}
+	mfem::Vector exact({
+		0.5970265383409395, 
+		0.4029705016193203, 
+		2.960039740205356e-6, 
+		0.0, 
+		0.0});
+	exact *= constants::StefanBoltzmann * pow(temp,4);
+	for (int i=0; i<exact.Size(); i++) {
+		const double diff = std::fabs(exact(i) - planck(i));
+		if (exact(i) > 0.0) {
+			exact(i) = diff / exact(i);
+		} else {
+			exact(i) = diff;
+		}
+	}
+	EXPECT_NEAR(exact.Normlinf(), 0.0, 1e-12);
+}
+
+TEST(Planck, NormalizedPlanckHighTemp) {
+	const double temp = 1000;
+	mfem::Array<double> bounds(6);
+	bounds[0] = 0.0;
+	bounds[1] = 0.1;
+	bounds[2] = 0.5; 
+	bounds[3] = 3.5;
+	bounds[4] = 20; 
+	bounds[5] = std::numeric_limits<double>::max();
+	for (int i=0; i<bounds.Size() - 1; i++) {
+		bounds[i] /= temp;
+	}
+
+	mfem::Vector planck(bounds.Size()-1);
+	double planck_prev = 0.0;
+	for (int i=0; i<bounds.Size()-1; i++) {
+		double planck_new = IntegrateNormalizedPlanck(bounds[i+1]);  
+		planck(i) = (planck_new - planck_prev) * constants::StefanBoltzmann * pow(temp,4);
+		planck_prev = planck_new;
+	}
+	mfem::Vector exact({
+		5.132798642741388e-14, 
+		6.363707958157811e-12, 
+		2.191467747320839e-9,
+		4.053698254743982e-7, 
+		0.9999995924322917
+	});
+	exact *= constants::StefanBoltzmann * pow(temp,4);
+	for (int i=0; i<exact.Size(); i++) {
+		const double diff = std::fabs(exact(i) - planck(i));
+		if (exact(i) > 0.0) {
+			exact(i) = diff / exact(i);
+		} else {
+			exact(i) = diff;
+		}
+	}
+	EXPECT_NEAR(exact.Normlinf(), 0.0, 1e-12);
+}
+
+TEST(Planck, Coefficient) {
+	const double temp = 1000.0;
+	mfem::Array<double> bounds(6);
+	bounds[0] = 0.0;
+	bounds[1] = 0.1;
+	bounds[2] = 0.5; 
+	bounds[3] = 3.5;
+	bounds[4] = 20; 
+	bounds[5] = std::numeric_limits<double>::max();
+
+	auto mesh = mfem::Mesh::MakeCartesian1D(1, 0.5);
+	mfem::ConstantCoefficient Tcoef(temp);
+	PlanckSpectrumMGCoefficient B(bounds, Tcoef);
+	mfem::Vector planck;
+	auto &trans = *mesh.GetElementTransformation(0);
+	const auto &ip = mfem::Geometries.GetCenter(trans.GetGeometryType());
+	B.Eval(planck, trans, ip);
+	mfem::Vector exact({
+		5.132798642741388e-14, 
+		6.363707958157811e-12, 
+		2.191467747320839e-9,
+		4.053698254743982e-7, 
+		0.9999995924322917
+	});
+	for (int i=0; i<exact.Size(); i++) {
+		const double diff = std::fabs(exact(i) - planck(i));
+		if (exact(i) > 0.0) {
+			exact(i) = diff / exact(i);
+		} else {
+			exact(i) = diff;
+		}
+	}
+	EXPECT_NEAR(exact.Normlinf(), 0.0, 1e-12);
+}
+
+TEST(Planck, RosselandCoefficient) {
+	const double temp = 1000.0;
+	mfem::Array<double> bounds(6);
+	bounds[0] = 0.0;
+	bounds[1] = 0.1;
+	bounds[2] = 0.5; 
+	bounds[3] = 3.5;
+	bounds[4] = 20; 
+	bounds[5] = std::numeric_limits<double>::max();
+
+	auto mesh = mfem::Mesh::MakeCartesian1D(1, 0.5);
+	mfem::ConstantCoefficient Tcoef(temp);
+	RosselandSpectrumMGCoefficient R(bounds, Tcoef);
+	mfem::Vector ross;
+	auto &trans = *mesh.GetElementTransformation(0);
+	const auto &ip = mfem::Geometries.GetCenter(trans.GetGeometryType());
+	R.Eval(ross, trans, ip);
+	mfem::Vector exact({
+		1.283247781193918e-14, 
+		1.591227229431742e-12, 
+		5.485880897619944e-10,
+		1.0210757723025419e-7, 
+		0.9999998973422306
+	});
+	for (int i=0; i<exact.Size(); i++) {
+		const double diff = std::fabs(exact(i) - ross(i));
+		if (exact(i) > 0.0) {
+			exact(i) = diff / exact(i);
+		} else {
+			exact(i) = diff;
+		}
+	}
+	EXPECT_NEAR(exact.Normlinf(), 0.0, 1e-11);
+}
+
+TEST(Planck, EmissionNFI) {
+	const double temp = 0.025;
+	mfem::Array<double> bounds(6);
+	bounds[0] = 0.0;
+	bounds[1] = 0.1;
+	bounds[2] = 0.5; 
+	bounds[3] = 3.5;
+	bounds[4] = 20; 
+	bounds[5] = 1e6;
+	const auto G = bounds.Size() - 1;
+
+	auto mesh = mfem::Mesh::MakeCartesian1D(1, 0.5);
+	auto fec = mfem::L2_FECollection(1, mesh.Dimension());
+	auto fes = mfem::FiniteElementSpace(&mesh, &fec);
+	MomentVectorExtents phi_ext(G, 1, fes.GetVSize());
+
+	ConstantGrayMGCoefficient total(1.0, G); 
+	PlanckEmissionNFI planck_int(bounds, total);
+	PlanckEmissionNonlinearForm form(fes, phi_ext, planck_int, true);
+
+	mfem::GridFunction T(&fes);
+	T = temp;
+
+	mfem::Vector emission(TotalExtent(phi_ext));
+	form.Mult(T, emission);
+
+	mfem::Vector ex({
+		0.5970265383409381,
+		0.5970265383409381,
+		0.4029705016193203, 
+		0.4029705016193203,
+		2.960039740205356e-6,
+		2.960039740205356e-6, 
+		0.0, 0.0, 
+		0.0, 0.0
+	});
+	ex *= constants::StefanBoltzmann * pow(temp, 4) * 0.25;
+	for (int i=0; i<ex.Size(); i++) {
+		ex(i) = ex(i) - emission(i);
+		if (emission(i) > 0.0)
+			ex(i) /= emission(i);
+	}
+	double inf = ex.Normlinf();
+	EXPECT_NEAR(inf, 0.0, 1e-12);
 }

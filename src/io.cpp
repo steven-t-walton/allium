@@ -2,6 +2,7 @@
 #include "linalg.hpp"
 #include <algorithm>
 #include <regex>
+#include <filesystem>
 
 namespace io 
 {
@@ -47,6 +48,13 @@ void PrintGitString(YAML::Emitter &out)
 #endif
 }
 
+std::string FormatScientific(double val, int precision)
+{
+	std::stringstream ss; 
+	ss << std::scientific << std::setprecision(precision) << val; 
+	return ss.str();
+}
+
 void PrintSolTable(YAML::Emitter &out, sol::table &table) 
 {
 	out << YAML::BeginMap; 
@@ -67,18 +75,49 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table)
 	out << YAML::EndMap; 
 }
 
+void ProcessGlobalLogs(YAML::Emitter &out)
+{
+	EventLog.Synchronize();
+	TimingLog.Synchronize();
+	ValueLog.Synchronize();
+
+	if (EventLog.size() or TimingLog.size() or ValueLog.size()) {
+		out << YAML::Key << "logs" << YAML::Value << YAML::BeginMap; 
+			if (EventLog.size())
+				out << YAML::Key << "event" << EventLog;
+			if (TimingLog.size()) {
+				out << YAML::Key << "timing" << YAML::Value;
+				PrintTimingMap(out, TimingLog);
+			}
+			if (ValueLog.size())
+				out << YAML::Key << "value" << ValueLog;
+		out << YAML::EndMap;
+	}
+
+	EventLog.clear();
+	TimingLog.clear();
+	ValueLog.clear();
+}
+
 mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 
 	mfem::Mesh &mesh, bool root)
 {
 	ValidateOption<std::string>("data collection type", type, {"paraview", "visit", "glvis"}, root);
+	// clear trailing '/'
+	if (output_root.back() == '/')
+		output_root.pop_back();		
 	if (type == "paraview") {
 		return new mfem::ParaViewDataCollection(output_root, &mesh);
 	} else if (type == "visit") {
-		const std::string collection_name = output_root + "/" + output_root; 
-		return new mfem::VisItDataCollection(collection_name, &mesh); 
+		auto path = std::filesystem::path(output_root);
+		if (!path.has_filename()) MFEM_ABORT("visit path must have a filename component");
+		path.append(path.filename().string());
+		return new mfem::VisItDataCollection(path.string(), &mesh); 
 	} else if (type == "glvis") {
-		const std::string collection_name = output_root + "/" + output_root; 
-		return new mfem::DataCollection(collection_name, &mesh); 
+		auto path = std::filesystem::path(output_root);
+		if (!path.has_filename()) MFEM_ABORT("visit path must have a filename component");
+		path.append(path.filename().string());
+		return new mfem::DataCollection(path.string(), &mesh); 
 	}
 	return nullptr;
 }
@@ -216,9 +255,6 @@ void SetIterativeSolverOptions(sol::table &table, mfem::IterativeSolver &solver)
 	solver.SetPrintLevel( (dynamic_cast<mfem::KINSolver*>(&solver) ? 1 : print_level)); 
 	sol::optional<double> abstol = table["abstol"]; 
 	sol::optional<double> reltol = table["reltol"]; 
-	if (!abstol and !reltol) {
-		MFEM_ABORT("must specify one of \"abstol\" or \"reltol\""); 
-	}
 	if (abstol) { solver.SetAbsTol(abstol.value()); }
 	else { table["abstol"] = 0.0; }
 	if (reltol) { solver.SetRelTol(reltol.value()); }
@@ -329,6 +365,30 @@ void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,dou
 		}
 		mesh.SetBdrAttribute(e, map.at(attr_name)); 
 	}
+}
+
+void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, int pr)
+{
+	double hmin, hmax, kmin, kmax; 
+	mesh.GetCharacteristics(hmin, hmax, kmin, kmax); 
+	const auto global_ne = mesh.ReduceInt(mesh.GetNE()); 
+	const auto nranks = mesh.GetNRanks();
+	const auto dim = mesh.Dimension();
+	out << YAML::Key << "dim" << YAML::Value << dim; 
+	out << YAML::Key << "elements" << YAML::Value << global_ne; 
+	out << YAML::Key << "mesh size" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "min" << YAML::Value << hmin; 
+		out << YAML::Key << "max" << YAML::Value << hmax; 
+	out << YAML::EndMap; 
+	out << YAML::Key << "mesh conditioning" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "min" << YAML::Value << kmin; 
+		out << YAML::Key << "max" << YAML::Value << kmax; 
+	out << YAML::EndMap; 
+	out << YAML::Key << "MPI ranks" << YAML::Value << nranks; 
+	out << YAML::Key << "refinements" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "serial" << YAML::Value << sr; 
+		out << YAML::Key << "parallel" << YAML::Value << pr; 
+	out << YAML::EndMap; 
 }
 
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root) 
@@ -553,9 +613,9 @@ void ValidateOption<const char*>(std::string key, const char *res, std::initiali
 
 std::string ResolveRelativePath(std::string path) 
 {
-	char output_name_resolve[PATH_MAX];
-	realpath(path.c_str(), output_name_resolve);  	
-	return std::string(output_name_resolve); 
+	std::filesystem::path obj(path);
+	auto resolved = std::filesystem::absolute(path);
+	return resolved.string();
 }
 
 } // end namespace io 

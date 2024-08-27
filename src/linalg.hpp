@@ -182,17 +182,66 @@ private:
 	mfem::SuperLUSolver slu;
 	std::unique_ptr<mfem::SuperLURowLocMatrix> slu_op;
 public:
-	SuperLUSolver(MPI_Comm comm) : slu(comm) { }
-	void SetOperator(const mfem::Operator &op) override {
-		height = op.Height(); 
-		width = op.Width();
-		slu_op.reset(new mfem::SuperLURowLocMatrix(op));
-		slu.SetOperator(*slu_op);
+	SuperLUSolver(MPI_Comm comm) : slu(comm) {
+		slu.SetPrintStatistics(false);
 	}
+	void SetOperator(const mfem::Operator &op) override;
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const override {
 		slu.Mult(b, x);
 	}
 
 	mfem::SuperLUSolver &GetSolver() { return slu; }
 	const mfem::SuperLUSolver &GetSolver() const { return slu; }
+};
+
+class BlockDiagonalPreconditioner : public mfem::Solver
+{
+private:
+	int nBlocks;
+	mfem::Array<mfem::Solver*> solvers;
+	mfem::Array<int> offsets;
+
+	mutable mfem::BlockVector xBlock, bBlock;
+public:
+	BlockDiagonalPreconditioner(int nBlocks);
+	~BlockDiagonalPreconditioner();
+	void SetOperator(const mfem::Operator &op) override; 
+	void Mult(const mfem::Vector &b, mfem::Vector &x) const override;
+	void SetDiagonalBlock(int iBlock, mfem::Solver &solver);
+	mfem::Solver &GetDiagonalBlock(int iBlock) { return *solvers[iBlock]; }
+	const mfem::Solver &GetDiagonalBlock(int iBlock) const { return *solvers[iBlock]; }
+
+	int owns_blocks = 0;
+};
+
+class PARSolver : public mfem::Solver
+{
+private:
+	const mfem::Operator &R, &P; 
+	mfem::Solver &A;
+
+	mutable mfem::Vector b_restricted, x_restricted;
+public:
+	PARSolver(const mfem::Operator &R, mfem::Solver &A, const mfem::Operator &P)
+		: R(R), P(P), A(A)
+	{
+		height = P.Width();
+		width = R.Width();
+
+		b_restricted.SetSize(R.Height());
+		x_restricted.SetSize(R.Height());
+		x_restricted = 0.0;
+	}
+	void SetOperator(const mfem::Operator &op)
+	{
+		A.SetOperator(op);
+		assert(R.Height() == A.Width());
+		assert(P.Height() == A.Height());
+	}
+	void Mult(const mfem::Vector &b, mfem::Vector &x) const
+	{
+		R.Mult(b, b_restricted);
+		A.Mult(b_restricted, x_restricted);
+		P.MultTranspose(x_restricted, x);
+	}
 };

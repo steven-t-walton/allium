@@ -3,10 +3,11 @@
 #include "config.hpp"
 #include "log.hpp"
 #include "lumping.hpp"
+#include "multigroup.hpp"
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
-	mfem::GridFunction &_total_data, const BoundaryConditionMap &bc_map, int use_lumping)
-	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total_data(_total_data), lump(use_lumping)
+	MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int use_lumping)
+	: fes(_fes), mesh(*_fes.GetParMesh()), quad(_quad), total(total), lump(use_lumping)
 {
 	if (lump) {
 		const auto *fec = fes.FEColl(); 
@@ -19,7 +20,8 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	const auto Ne = mesh.GetNE(); // processor-local number of elements 
 	const auto Ndof = fes.GetVSize(); // local degrees of freedom 
 	const auto Nomega = quad.Size(); // number of angles 
-	const auto G = total_data.FESpace()->GetVDim(); // number of energy groups 
+	// const auto G = total_data.FESpace()->GetVDim(); // number of energy groups 
+	const auto G = total.GetVDim();
 	psi_ext = TransportVectorExtents(G, Nomega, Ndof); // multi index based on energy, angle, space 
 	// set operator sizes to size of psi 
 	height = width = TotalExtent(psi_ext);
@@ -235,6 +237,8 @@ InverseAdvectionOperator::~InverseAdvectionOperator()
 
 void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) const 
 {
+	mfem::StopWatch timer; 
+	timer.Start();
 	assert(source.Size() == Width()); 
 	assert(psi.Size() == Height()); 
 	assert(mass_matrices[0]); 
@@ -244,6 +248,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	const auto Ne = mesh.GetNE(); 
 	const auto Nomega = quad.Size(); 
 	const auto G = psi_ext.extent(0); 
+	const auto rank = mesh.GetMyRank(); 
 	// place to store face ids/element, dofs/element, and dofs of neighboring elements 
 	mfem::Array<int> faces, dofs, dofs2; 
 
@@ -398,14 +403,12 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				mfem::LinearSolve(lu, sol.GetData()); 
 
 				if (fixup_op and apply_fixup) {
-					fixup_op->SetLocalSystem(A, rhs); 
-					fixup_op->Mult(sol, rhs); 
-				} else {
-					rhs = sol; 
-				}
+					const bool applied = fixup_op->Apply(A, rhs, sol);
+					if (fixup_monitor and applied) (*fixup_monitor)(e + g*fes.GetNE())++;
+				} 
 
 				// scatter back 
-				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = rhs(i); }
+				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = sol(i); }
 			}
 
 			// --- compute next + send data to other processors --- 
@@ -448,7 +451,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				for (auto fn=0; fn<num_face_nbrs; fn++) {
 					if (send_table.RowSize(fn) == 0) continue; 
 					const auto nbr_rank = mesh.GetFaceNbrRank(fn); 
-					auto buffer_size = 0;
+					int buffer_size = 0;
 					auto nodes = std::span<const int>(send_table.GetRow(fn), send_table.RowSize(fn)); 
 					for (auto n : nodes) {
 						fes.GetElementDofs(n / Nomega, dofs); 
@@ -457,7 +460,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 					buffer_size *= G; 
 					assert(par_data_buffer.Size() >= buffer_size); 
-					auto idx = 0;
+					int idx = 0;
 					for (auto n : nodes) {
 						const auto e = n / Nomega; 
 						const auto a = n % Nomega; 
@@ -472,8 +475,9 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					MPI_Request request[2]; 
 					MPI_Isend(send_table.GetRow(fn), send_table.RowSize(fn), MPI_INT, nbr_rank, message_count++, 
 						MPI_COMM_WORLD, &request[0]); 
-					MPI_Isend(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, nbr_rank, message_count++, MPI_COMM_WORLD, &request[1]); 
-					MPI_Waitall(2, request, MPI_STATUS_IGNORE); 
+					MPI_Isend(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, nbr_rank, message_count++, 
+						MPI_COMM_WORLD, &request[1]); 
+					MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
 				}
 				send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
 			}
@@ -500,12 +504,12 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			// make sure data can fit in buffers 
 			assert(node_buffer.Size() >= node_count); 
 			assert(par_data_buffer.Size() >= data_count); 
-
-			MPI_Request request[2]; 
 			assert(status[0].MPI_SOURCE == status[1].MPI_SOURCE); 
-			MPI_Irecv(node_buffer.GetData(), node_count, MPI_INT, source, status[0].MPI_TAG, MPI_COMM_WORLD, &request[0]); 
-			MPI_Irecv(par_data_buffer.GetData(), data_count, MPI_DOUBLE, source, status[1].MPI_TAG, MPI_COMM_WORLD, &request[1]); 
-			MPI_Waitall(2, request, MPI_STATUSES_IGNORE); 
+
+			MPI_Recv(node_buffer.GetData(), node_count, MPI_INT, source, 
+				status[0].MPI_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			MPI_Recv(par_data_buffer.GetData(), data_count, MPI_DOUBLE, source, 
+				status[1].MPI_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
 			const auto fn = proc_to_fn.at(source); 
 			int buffer_idx = 0; 
@@ -545,12 +549,22 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 	// use barrier to avoid tag clash? 
 	MPI_Barrier(MPI_COMM_WORLD); 
+
+	timer.Stop();
+	TimingLog.Log("sweep", timer.RealTime());
 }
 
 void InverseAdvectionOperator::AssembleLocalMatrices() 
 {
 	const auto dim = mesh.Dimension(); 
-	const auto G = total_data.FESpace()->GetVDim(); 
+	const auto G = total.GetVDim();
+
+	mfem::Array2D<mfem::DenseMatrix*> local_mass_mats(G,G);
+	for (int i=0; i<G; i++) {
+		for (int j=0; j<G; j++) {
+			local_mass_mats(i,j) = new mfem::DenseMatrix;
+		}
+	}
 
 	mass_matrices.SetSize(fes.GetNE()*G);
 	auto mass_mat_view = Kokkos::mdspan(mass_matrices.GetData(), G, fes.GetNE());  
@@ -561,12 +575,11 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 		auto &trans = *mesh.GetElementTransformation(e);
 		LumpedIntegrationRule lumped_ir(trans.GetGeometryType()); 
 
+		MGMassIntegrator mi(total);
+		if (IsMassLumped(lump)) mi.SetIntegrationRule(lumped_ir);
+		mi.AssembleElementMatrices(fe, trans, local_mass_mats);
 		for (int g=0; g<G; g++) {
-			mfem::GridFunctionCoefficient total(&total_data, g+1); // component is 1-based :( 
-			mfem::MassIntegrator mi(total); 
-			mass_mat_view(g,e) = new mfem::DenseMatrix; 
-			if (IsMassLumped(lump)) mi.SetIntegrationRule(lumped_ir); 
-			mi.AssembleElementMatrix(fe, trans, *mass_mat_view(g,e)); 
+			mass_mat_view(g,e) = new mfem::DenseMatrix(*local_mass_mats(g,g));
 		}
 
 		mfem::Vector Omega(dim); 
@@ -614,6 +627,12 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			elmat.GetSubMatrix(0,dof1,dof1,dof1+dof2, *face_mat_view(f,0,1)); 
 			elmat.GetSubMatrix(dof1,dof1+dof2,0,dof1, *face_mat_view(f,1,0)); 
 			elmat.GetSubMatrix(dof1,dof1+dof2,dof1,dof1+dof2, *face_mat_view(f,1,1)); 			
+		}
+	}
+
+	for (int i=0; i<G; i++) {
+		for (int j=0; j<G; j++) {
+			delete local_mass_mats(i,j);
 		}
 	}
 }
@@ -673,8 +692,9 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 {
 	const int G = energy_grid.Size() - 1; 
 	for (int g=0; g<G; g++) {
-		double E = (energy_grid[g+1] + energy_grid[g])/2; 
-		source_coef.SetEnergy(E); inflow_coef.SetEnergy(E); 
+		const auto e_low = energy_grid[g]; const auto e_high = energy_grid[g+1];
+		const auto mid = (e_low + e_high)/2;
+		source_coef.SetEnergy(e_low, e_high, mid); inflow_coef.SetEnergy(e_low, e_high, mid); 
 		for (auto a=0; a<quad.Size(); a++) {
 			const auto &Omega = quad.GetOmega(a); 
 			source_coef.SetAngle(Omega); inflow_coef.SetAngle(Omega); 
@@ -688,6 +708,33 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 				source_view(g,a,i) = bform[i]; 
 			}
 		}		
+	}
+}
+
+void FormTransportSource(mfem::FiniteElementSpace &fes, const AngularQuadrature &quad, 
+	const MultiGroupEnergyGrid &energy_grid, PhaseSpaceCoefficient &source_coef, 
+	PhaseSpaceCoefficient &inflow_coef, mfem::Vector &source)
+{
+	TransportVectorExtents psi_ext(energy_grid.Size(), quad.Size(), fes.GetVSize());
+	auto source_view = TransportVectorView(source.GetData(), psi_ext);
+	for (int g=0; g<energy_grid.Size(); g++) {
+		source_coef.SetEnergy(energy_grid.LowerBound(g), energy_grid.UpperBound(g), 
+			energy_grid.MeanEnergy(g));
+		inflow_coef.SetEnergy(energy_grid.LowerBound(g), energy_grid.UpperBound(g), 
+			energy_grid.MeanEnergy(g));		
+		for (int a=0; a<quad.Size(); a++) {
+			const auto &Omega = quad.GetOmega(a);
+			source_coef.SetAngle(Omega); inflow_coef.SetAngle(Omega);
+
+			mfem::LinearForm bform(&fes); 
+			bform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
+			mfem::VectorConstantCoefficient Q(Omega); 
+			bform.AddBdrFaceIntegrator(new mfem::BoundaryFlowIntegrator(inflow_coef, Q, -1.0, -0.5));
+			bform.Assemble(); 
+			for (int i=0; i<bform.Size(); i++) {
+				source_view(g,a,i) = bform[i]; 
+			}
+		}
 	}
 }
 

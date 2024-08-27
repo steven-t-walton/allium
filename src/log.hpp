@@ -5,20 +5,41 @@
 #include <vector>
 #include <numeric>
 
-enum SynchronizeOperation {
+enum LogOperation {
 	SUM, 
 	MIN, 
 	MAX,
 };
 
-template<typename T, SynchronizeOperation Op>
-class ParMap : public std::map<std::string,T> 
+template<LogOperation F, typename T, typename U>
+void Log(T &map, const std::string key, const U &val)
+{
+	auto it = map.find(key);
+	if (it == map.end()) {
+		map[key] = val;
+	}
+
+	else {
+		auto &old_val = it->second;
+		if constexpr (F == LogOperation::MAX) {
+			old_val = std::max(old_val, val);
+		} else if constexpr (F == LogOperation::MIN) {
+			old_val = std::min(old_val, val);
+		} else if constexpr (F == LogOperation::SUM) {
+			old_val += val;
+		}
+	}
+}
+
+template<typename T, LogOperation Op, LogOperation ParOp=Op>
+class LogMap : public std::map<std::string,T> 
 {
 private:
-	MPI_Comm comm; 
+	MPI_Comm comm = MPI_COMM_NULL; 
 	MPI_Datatype T_mpi; 
 public:
-	ParMap(MPI_Comm _comm) : comm(_comm) 
+	LogMap() = default;
+	LogMap(MPI_Comm _comm) : comm(_comm) 
 	{
 		if constexpr (std::is_same<T,double>::value) {
 			T_mpi = MPI_DOUBLE; 
@@ -27,7 +48,17 @@ public:
 		}
 	}
 
+	void Log(const std::string key, const T &val)
+	{
+		::Log<Op>(*this, key, val);
+	}
+	void Register(const std::string key) {
+		static_assert(std::is_same<T,int>::value, "limiting register to int only");
+		::Log<SUM>(*this, key, 1);
+	}
+
 	void Synchronize() {
+		if (comm == MPI_COMM_NULL) return;
 		int rank, size; 
 		MPI_Comm_rank(comm, &rank); 
 		MPI_Comm_size(comm, &size); 
@@ -87,11 +118,11 @@ public:
 						this->operator[](key) = 0; 
 					}
 					T &my_value = this->at(key); 
-					if constexpr (Op == SynchronizeOperation::SUM) {
+					if constexpr (ParOp == LogOperation::SUM) {
 						my_value += nbr; 
-					} else if constexpr (Op == SynchronizeOperation::MIN) {
+					} else if constexpr (ParOp == LogOperation::MIN) {
 						my_value = std::min(my_value, nbr); 
-					} else if constexpr (Op == SynchronizeOperation::MAX) {
+					} else if constexpr (ParOp == LogOperation::MAX) {
 						my_value = std::max(my_value, nbr); 
 					} 
 				}
@@ -105,5 +136,6 @@ public:
 	}
 };
 
-extern ParMap<double,MAX> TimingLog; 
-extern ParMap<int,SUM> EventLog; 
+extern LogMap<double,SUM,MAX> TimingLog; 
+extern LogMap<int,SUM> EventLog; 
+extern LogMap<double,MAX> ValueLog;

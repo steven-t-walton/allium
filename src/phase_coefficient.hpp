@@ -7,22 +7,15 @@ class PhaseSpaceCoefficient : public mfem::Coefficient
 {
 protected:
 	mfem::Vector Omega; 
-	double energy; 
+	double energy_low, energy_high, mean_energy, energy_width; 
 public:
 	PhaseSpaceCoefficient() {
 		Omega.SetSize(3); 
 		Omega = 0.0;
 	}
-	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) = 0; 
-	virtual void SetAngle(const mfem::Vector &Omega_in) {
-		// copy Omega preserving Omega.Size() = 3 
-		for (int d=0; d<Omega_in.Size(); d++) {
-			Omega(d) = Omega_in(d); 
-		}		
-	}
-	virtual void SetEnergy(double E) {
-		energy = E; 
-	}
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override =0; 
+	virtual void SetAngle(const mfem::Vector &Omega_in);
+	virtual void SetEnergy(double low, double high, double mid);
 };
 
 class PWPhaseSpaceCoefficient : public PhaseSpaceCoefficient
@@ -31,8 +24,8 @@ protected:
 	std::unordered_map<int,PhaseSpaceCoefficient*> map; 
 public:
 	PWPhaseSpaceCoefficient(const mfem::Array<int> &attrs, const mfem::Array<PhaseSpaceCoefficient*> &coefs); 
-	void SetAngle(const mfem::Vector &Omega_in);
-	void SetEnergy(double E);  
+	void SetAngle(const mfem::Vector &Omega_in) override;
+	void SetEnergy(double low, double high, double mid) override;
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
 };
 
@@ -41,7 +34,7 @@ class ConstantPhaseSpaceCoefficient : public PhaseSpaceCoefficient
 public:
 	double constant; 
 	ConstantPhaseSpaceCoefficient(double c) : constant(c) { }
-	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override {
 		return constant; 
 	}
 };
@@ -52,7 +45,7 @@ private:
 	mfem::Coefficient &coef; 
 public:
 	IsotropicGrayCoefficient(mfem::Coefficient &c) : coef(c) { } 
-	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) { return coef.Eval(trans, ip); }
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override { return coef.Eval(trans, ip); }
 };
 
 class FunctionGrayCoefficient : public PhaseSpaceCoefficient 
@@ -62,7 +55,7 @@ private:
 	PhaseFunction f; 
 public:
 	FunctionGrayCoefficient(PhaseFunction _f) : f(_f) { }
-	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override; 
 };
 
 class FunctionPhaseSpaceCoefficient : public PhaseSpaceCoefficient 
@@ -77,21 +70,18 @@ private:
 public:
 	FunctionPhaseSpaceCoefficient(PhaseFunction F) : f(std::move(F)) { }
 	FunctionPhaseSpaceCoefficient(PhaseFunctionTD Ftd) : ftd(std::move(Ftd)) { }
-	double Eval(mfem::ElementTransformation &T, const mfem::IntegrationPoint &ip); 
+	double Eval(mfem::ElementTransformation &T, const mfem::IntegrationPoint &ip) override; 
 };
 
-class InflowPartialCurrentCoefficient : public mfem::Coefficient 
+// evaluates multigroup planck emission 
+// designed for computing initial conditions and boundary conditions 
+// where a scalar coefficient is needed for each angle and energy group 
+class PlanckEmissionPSCoefficient : public PhaseSpaceCoefficient
 {
 private:
-	PhaseSpaceCoefficient &phase_coef; 
-	const AngularQuadrature &quad; 
-	double scale; 
-
-	mfem::Vector nor; 
+	mfem::Coefficient &temperature;
 public:
-	InflowPartialCurrentCoefficient(PhaseSpaceCoefficient &pc, const AngularQuadrature &q, double s=1.0) 
-		: phase_coef(pc), quad(q), scale(s)
+	PlanckEmissionPSCoefficient(mfem::Coefficient &T) : temperature(T)
 	{ }
-
-	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
 };

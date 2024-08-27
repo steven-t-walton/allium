@@ -15,12 +15,44 @@ using LuaPhaseFunction = std::function<double(double,double,double,double,double
 std::string FormatTimeString(double time); 
 // print git commit, branch, tag information 
 void PrintGitString(YAML::Emitter &out); 
+std::string FormatScientific(double val, int precision=3);
 
 // iterate over table and print to yaml map 
 // tables in Lua do not have an order => this function 
 // kind of annoyingly prints values in random order :( 
 void PrintSolTable(YAML::Emitter &out, sol::table &table); 
+template<typename T>
+void PrintMap(YAML::Emitter &out, const T &map)
+{
+	out << YAML::BeginMap;
+	for (const auto &it : map) {
+		out << YAML::Key << it.first << YAML::Value << it.second;
+	}
+	out << YAML::EndMap;
+}
+template<typename T>
+void PrintTimingMap(YAML::Emitter &out, const T &map)
+{
+	out << YAML::BeginMap;
+	for (const auto &it : map) {
+		out << YAML::Key << it.first << YAML::Value << FormatTimeString(it.second);
+	}
+	out << YAML::EndMap;
+}
+template<typename T>
+void PrintArray(YAML::Emitter &out, const mfem::Array<T> &x)
+{
+	out << YAML::BeginSeq; 
+	for (const auto &it : x) {
+		out << it;
+	}
+	out << YAML::EndSeq;
+}
 
+// synchronize parallel logs, print to YAML, clear 
+void ProcessGlobalLogs(YAML::Emitter &out);
+
+// create a data collection based on string description 
 mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 
 	mfem::Mesh &mesh, bool root);
 
@@ -42,6 +74,7 @@ void SetMeshAttributes(mfem::Mesh &mesh, std::function<std::string(double,double
 // set bdr element attribute according to a provide boundary condition map 
 void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f, 
 	const std::unordered_map<std::string,int> &map, bool root=true);
+void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, int pr);
 
 // set AMG options like max levels, num sweeps, etc via a lua table 
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root=true); 
@@ -120,5 +153,21 @@ std::string ResolveRelativePath(std::string path);
 } // end namespace io 
 
 // convenience function to print sol::table's into YAML maps 
-// calls parse::PrintSolTable 
+// calls io::PrintSolTable 
 YAML::Emitter &operator<<(YAML::Emitter &out, sol::table &table); 
+
+// print std::map-type objects to YAML map
+// calls io::PrintMap
+template<typename T>
+YAML::Emitter &operator<<(YAML::Emitter &out, const T &map)
+{
+	io::PrintMap(out, map);
+	return out;
+}
+
+template<typename T>
+YAML::Emitter &operator<<(YAML::Emitter &out, const mfem::Array<T> &x)
+{
+	io::PrintArray(out, x);
+	return out;
+}

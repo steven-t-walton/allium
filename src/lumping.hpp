@@ -1,5 +1,6 @@
 #pragma once 
 #include "mfem.hpp"
+#include "mg_form.hpp"
 
 // enum for bitset operations to define lumping scheme 
 // 0 = no lumping 
@@ -97,4 +98,17 @@ public:
 		mfem::FaceElementTransformations &Tr, mfem::Vector &elvect) override;
 	void AssembleRHSElementVect(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 		mfem::FaceElementTransformations &Tr, mfem::Vector &elvect) override;
+};
+
+class QuadratureLumpedMGIntegrator : public MultiGroupBilinearFormIntegrator
+{
+private:
+	MultiGroupBilinearFormIntegrator *bfi;
+	int own_bfi;
+public:
+	QuadratureLumpedMGIntegrator(MultiGroupBilinearFormIntegrator *bfi, int own_bfi=1)
+		: bfi(bfi), own_bfi(own_bfi)
+	{ }
+	void AssembleElementMatrices(const mfem::FiniteElement &el, 
+		mfem::ElementTransformation &Tr, const mfem::Array2D<mfem::DenseMatrix*> &elmats) override;
 };

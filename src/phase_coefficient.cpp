@@ -1,4 +1,23 @@
 #include "phase_coefficient.hpp"
+#include "planck.hpp"
+
+void PhaseSpaceCoefficient::SetAngle(const mfem::Vector &Omega_in)
+{
+	// copy Omega preserving Omega.Size() = 3 
+	for (int d=0; d<Omega_in.Size(); d++) {
+		Omega(d) = Omega_in(d); 
+	}		
+}
+
+void PhaseSpaceCoefficient::SetEnergy(double low, double high, double mid)
+{
+	assert(high > low);
+	assert(mid > low and mid < high);
+	energy_low = low; 
+	energy_high = high; 
+	mean_energy = mid;
+	energy_width = high - low;
+}
 
 PWPhaseSpaceCoefficient::PWPhaseSpaceCoefficient(const mfem::Array<int> &attrs, const mfem::Array<PhaseSpaceCoefficient*> &coefs) {
 	assert(attrs.Size() == coefs.Size()); 
@@ -14,10 +33,10 @@ void PWPhaseSpaceCoefficient::SetAngle(const mfem::Vector &Omega_in) {
 	}
 }
 
-void PWPhaseSpaceCoefficient::SetEnergy(double E) {
+void PWPhaseSpaceCoefficient::SetEnergy(double low, double high, double mid) {
 	for (auto &it : map) {
 		if (it.second) 
-			it.second->SetEnergy(E); 
+			it.second->SetEnergy(low, high, mid); 
 	}
 }
 
@@ -39,33 +58,12 @@ double FunctionPhaseSpaceCoefficient::Eval(mfem::ElementTransformation &trans, c
 	mfem::Vector x(3); 
 	mfem::Vector transip(x, 0, 3); 
 	trans.Transform(ip, transip); 	
-	if (f) return f(x,Omega,energy);
-	else return ftd(x,Omega,energy,GetTime());  
+	if (f) return f(x,Omega,mean_energy) * energy_width;
+	else return ftd(x,Omega,mean_energy,GetTime()) * energy_width;  
 }
 
-double InflowPartialCurrentCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {
-	assert(trans.ElementType == mfem::ElementTransformation::BDR_FACE); 
-	auto *ftrans = dynamic_cast<mfem::FaceElementTransformations*>(&trans); 
-	assert(ftrans); 
-	ftrans->SetAllIntPoints(&ip); 
-	const auto dim = trans.GetSpaceDim(); 
-	nor.SetSize(dim); 
-	if (dim==1) {
-		nor(0) = 2*ftrans->GetElement1IntPoint().x - 1.0;
-	} else {
-		CalcOrtho(ftrans->Jacobian(), nor); 				
-	}
-	nor.Set(1./nor.Norml2(), nor); 
-
-	double Jin = 0.0; 
-	for (auto a=0; a<quad.Size(); a++) {
-		const auto &Omega = quad.GetOmega(a); 
-		phase_coef.SetAngle(Omega); 
-		double psi_in = phase_coef.Eval(trans, ip); 
-		double dot = Omega*nor; 
-		if (dot <= 0) {
-			Jin += dot * psi_in * quad.GetWeight(a); 
-		}
-	}
-	return Jin * scale; 
+double PlanckEmissionPSCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {
+	const auto T = temperature.Eval(trans, ip);
+	const auto b = IntegrateNormalizedPlanck(energy_high, T) - IntegrateNormalizedPlanck(energy_low, T);
+	return b * constants::StefanBoltzmann * std::pow(T, 4) / 4 / constants::pi;
 }

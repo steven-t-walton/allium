@@ -1,4 +1,5 @@
 #include "log.hpp"
 
-ParMap<double,MAX> TimingLog(MPI_COMM_WORLD); 
-ParMap<int,SUM> EventLog(MPI_COMM_WORLD); 	
+LogMap<double,SUM,MAX> TimingLog(MPI_COMM_WORLD); 
+LogMap<int,SUM> EventLog(MPI_COMM_WORLD); 	
+LogMap<double,MAX> ValueLog(MPI_COMM_WORLD);

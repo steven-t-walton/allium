@@ -82,7 +82,7 @@ private:
 	using HypreParMatrixPtr = std::unique_ptr<mfem::HypreParMatrix>;
 	HypreParMatrixPtr Ma, D, DT;
 public:
-	ConsistentIPSMMOperator(const BlockIPDiscretization &disc, 
+	ConsistentIPSMMOperator(const BlockIPDiscretization &disc, mfem::Coefficient &total, 
 		const AngularQuadrature &quad, const TransportVectorExtents &psi_ext, const mfem::Vector &source_vec);
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const override;
 };
@@ -102,6 +102,11 @@ private:
 public:
 	IndependentSMMOperator(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 		const AngularQuadrature &quad, const TransportVectorExtents &psi_ext, 
+		PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
+		double alpha, const BoundaryConditionMap &bc_map, int lumping);
+	IndependentSMMOperator(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		const AngularQuadrature &quad, const MultiGroupEnergyGrid &energy, 
+		const TransportVectorExtents &psi_ext, 
 		PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
 		double alpha, const BoundaryConditionMap &bc_map, int lumping);
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const override;

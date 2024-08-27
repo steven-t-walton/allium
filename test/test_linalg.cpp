@@ -2,6 +2,7 @@
 #include "linalg.hpp"
 #include "transport_op.hpp"
 #include "sweep.hpp"
+#include "multigroup.hpp"
 
 TEST(Linalg, BlockInverse) {
 	mfem::Mesh smesh = mfem::Mesh::MakeCartesian2D(10,10,mfem::Element::QUADRILATERAL); 
@@ -86,14 +87,13 @@ TEST(Linal, BlockLDUInverse) {
 	Ms_form.Assemble(); 
 	Ms_form.Finalize(); 
 
-	mfem::GridFunction total_data(&fes); 
-	total_data.ProjectCoefficient(total); 
+	GrayMGCoefficient total_coef(total, 1);
 	BoundaryConditionMap bc_map;
 	const auto &bdr_attr = mesh.bdr_attributes;
 	for (const auto &attr : bdr_attr) {
 		bc_map[attr] = INFLOW;
 	}
-	InverseAdvectionOperator Linv(fes, quad, total_data, bc_map); 
+	InverseAdvectionOperator Linv(fes, quad, total_coef, bc_map); 
 
 	TransportOperator T(D, Linv, Ms_form, x.GetBlock(1)); 
 	mfem::GMRESSolver Sinv; 
@@ -111,4 +111,26 @@ TEST(Linal, BlockLDUInverse) {
 	mfem::FunctionCoefficient exact_c(exsol); 
 	double err = phi.ComputeL2Error(exact_c); 
 	EXPECT_LT(err, 0.01); 
+}
+
+TEST(IndexMap, LayoutLeft) {
+	TransportVectorExtents ext(2,4,8);
+	auto custom = IndexMap<0,1,2>::mapping(ext);
+	auto kokkos = Kokkos::layout_left::mapping(ext);
+	EXPECT_EQ(custom(1,2,3), kokkos(1,2,3));
+	EXPECT_EQ(custom(0,1,6), kokkos(0,1,6));
+}
+
+TEST(IndexMap, LayoutRight) {
+	TransportVectorExtents ext(2,4,8);
+	auto custom = IndexMap<2,1,0>::mapping(ext);
+	auto kokkos = Kokkos::layout_right::mapping(ext);
+	EXPECT_EQ(custom(1,2,3), kokkos(1,2,3));
+	EXPECT_EQ(custom(0,1,6), kokkos(0,1,6));
+}
+
+TEST(IndexMap, MomentLayout) {
+	TransportVectorExtents ext(2,4,8);
+	auto custom = IndexMap<2,0,1>::mapping(ext);
+	EXPECT_EQ(custom(1,2,3), 3 + 8*(1 + 2*2));
 }

@@ -120,9 +120,9 @@ private:
 	double under_relax_param = 0.1; 
 	// break if solution doesn't change max_stagnation_count
 	// iterations in a row 
-	static constexpr int max_stagnation_count = 2;
+	static constexpr int max_stagnation_count = 3;
 	// store new solution while checking for positivity 
-	mutable mfem::Vector xnew; 
+	mutable mfem::Vector xnew, successive_residual; 
 	// track exit condition for last call to Mult 
 	mutable ExitCode exit_code = Undefined;
 public:

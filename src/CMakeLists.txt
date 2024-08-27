@@ -6,6 +6,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/transport_op.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_integrators.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/smm_coef.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/phase_coefficient.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/linalg.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dg_trace_coll.hpp
@@ -24,6 +25,10 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_integrators.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_discretization.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/planck.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/multigroup.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/mg_form.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/restart.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/coefficient.hpp
 )
 
 LIST(APPEND srcs 
@@ -32,6 +37,7 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/transport_op.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_integrators.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/smm_coef.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/phase_coefficient.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/linalg.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dg_trace_coll.cpp
@@ -48,6 +54,10 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_source.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_integrators.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_discretization.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/planck.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/multigroup.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/mg_form.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/restart.cpp
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)
