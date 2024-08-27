@@ -43,6 +43,15 @@ mfem::HypreParMatrix *InteriorPenaltyDiscretization::GetOperator() const
 	const bool lump_grad = IsGradientLumped(lumping);
 	const bool lump_face = IsFaceLumped(lumping);
 
+	// total is required across parallel faces -> exchange 
+	// grid function data if coefficient is a grid function coefficient 
+	auto *total_ptr = dynamic_cast<mfem::GridFunctionCoefficient*>(&total);
+	if (total_ptr) {
+		const auto *pgf = dynamic_cast<const mfem::ParGridFunction*>(total_ptr->GetGridFunction());
+		if (pgf)
+			const_cast<mfem::ParGridFunction*>(pgf)->ExchangeFaceNbrData();
+	}
+
 	mfem::ConstantCoefficient alpha_coef(alpha/2);
 	mfem::RatioCoefficient diffco(1.0/3, total);
 	mfem::ParBilinearForm Kform(&fes); 
