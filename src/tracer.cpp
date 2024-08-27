@@ -41,6 +41,7 @@ struct FixedWidthFormatter {
 void TracerDataCollection::Save()
 {
 	if (first) {
+		const auto err = create_directory(GetPrefixPath(), GetMesh(), myid);
 		int count = 0; 
 		for (int n=0; n<elem_ids.Size(); n++) {
 			const auto e = elem_ids[n]; 
