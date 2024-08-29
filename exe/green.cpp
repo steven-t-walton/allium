@@ -518,11 +518,6 @@ int main(int argc, char *argv[]) {
 	if (max_cycles_override>0) max_cycles = max_cycles_override; 
 	const int lump = driver["lump"].get_or(0); 
 
-	// SMM alg parameters 
-	const bool reset_to_ho = driver["reset_to_ho"].get_or(false);
-	const bool floor_radE_LO = driver["floor_E"].get_or(false);
-	const bool implicit_opacity = driver["implicit_opacity"].get_or(false);
-
 	// --- output algorithmic options used --- 
 	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "fe order" << YAML::Value << fe_order; 
@@ -542,9 +537,6 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "initial value" << YAML::Value << time_step; 
 			out << YAML::EndMap; 
 		out << YAML::EndMap; 
-		out << YAML::Key << "reset to HO" << YAML::Value << reset_to_ho;
-		out << YAML::Key << "floor LO E" << YAML::Value << floor_radE_LO;
-		out << YAML::Key << "implicit opacity" << YAML::Value << implicit_opacity;
 
 	// time mass matrix for psi 
 	SNTimeMassMatrix Mpsi(fes, psi_ext, IsMassLumped(lump)); 
@@ -772,6 +764,25 @@ int main(int argc, char *argv[]) {
 	}
 	Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight); 
 
+	sol::table solver = lua["smm"];
+	const auto lo_type = io::GetAndValidateOption<std::string>(solver, "type", {"ldg", "p1"}, root);
+	const bool consistent = solver["consistent"].get_or(true);
+	const bool implicit_opacity = solver["implicit_opacity"].get_or(false);
+	const bool floor_radE_LO = solver["floor_E"].get_or(false);
+	const bool reset_to_ho = solver["reset_to_ho"].get_or(false);
+	const std::string sigmaF_type = io::GetAndValidateOption<std::string>(solver, "sigmaF_weight", 
+		{"flux", "rosseland"}, "flux", root);
+	sol::table linear_solver_table = solver["solver"];
+	sol::table ho_solver_table = solver["ho_solver"];
+	sol::table lo_solver_table = solver["lo_solver"];
+	sol::table meb_solver_table = solver["energy_balance_solver"];
+
+	out << YAML::Key << "smm" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "type" << YAML::Value << lo_type;
+		out << YAML::Key << "consistent" << YAML::Value << consistent;
+		out << YAML::Key << "implicit opacity" << YAML::Value << implicit_opacity;
+		out << YAML::Key << "sigmaF weight" << YAML::Value << sigmaF_type;
+
 	// energy balance nonlinear form 
 	// cv/dt + sigma B(T)
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
@@ -808,6 +819,31 @@ int main(int argc, char *argv[]) {
 	Mtot_gray.Assemble(); 
 	Mtot_gray.Finalize();
 
+	// time mass matrix for LO energy density 
+	mfem::ParBilinearForm Mtime_form_s(&fes);
+	if (IsMassLumped(lump)) 
+		Mtime_form_s.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator));
+	else
+		Mtime_form_s.AddDomainIntegrator(new mfem::MassIntegrator);
+	Mtime_form_s.Assemble(); 
+	Mtime_form_s.Finalize();
+	auto Mtime_s = std::unique_ptr<mfem::HypreParMatrix>(Mtime_form_s.ParallelAssemble());
+
+	// time mass matrix for HO energy density 
+	mfem::ParBilinearForm Mtime_form_v(&vfes);
+	if (IsMassLumped(lump)) 
+		Mtime_form_v.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::VectorMassIntegrator));
+	else
+		Mtime_form_v.AddDomainIntegrator(new mfem::MassIntegrator);
+	Mtime_form_v.Assemble(); 
+	Mtime_form_v.Finalize();
+	auto Mtime_v = std::unique_ptr<mfem::HypreParMatrix>(Mtime_form_v.ParallelAssemble());
+
+	// --- useful components of moment discretizations --- 
+	mfem::Vector nor(dim); 
+	nor = 0.0; nor(0) = 1.0; 
+	const double alpha = ComputeAlpha(*quad, nor); 
+
 	// solver for local dense matrices 
 	// assume diagonal if mass lumped
 	std::unique_ptr<mfem::Solver> local_mat_inv; 
@@ -816,11 +852,96 @@ int main(int argc, char *argv[]) {
 	else
 		local_mat_inv = std::make_unique<mfem::DenseMatrixInverse>(); 
 
-	// --- useful components of moment discretizations --- 
-	mfem::Vector nor(dim); 
-	nor = 0.0; nor(0) = 1.0; 
-	const double alpha = ComputeAlpha(*quad, nor); 
+	// LO discretization, source, solver 
+	std::unique_ptr<BlockMomentDiscretization> lo_disc;
+	std::unique_ptr<mfem::Solver> lo_schur_solver, lo_solver;
+	mfem::IterativeSolver *linear_it_solver = nullptr;
+	std::unique_ptr<mfem::Operator> gr_source_op;
+	std::unique_ptr<mfem::HypreBoomerAMG> amg;
 
+	ProjectedCoefficient *first_moment_opac;
+	if (sigmaF_type == "flux") first_moment_opac = &totalF;
+	else if (sigmaF_type == "rosseland") first_moment_opac = &totalR;
+	// source term 
+	TransportVectorExtents psi_ext_gr(1, quad->Size(), fes.GetVSize());
+	mfem::Vector source_vec_gr(TotalExtent(psi_ext_gr));
+	to_gray_op_psi.Mult(source_vec, source_vec_gr);
+	if (lo_type == "ldg") {
+		auto *ptr = new BlockLDGDiscretization(fes, vfes, *first_moment_opac, 
+			totalE, bc_map, lump);
+		if (consistent)
+			gr_source_op = std::make_unique<ConsistentLDGSMMOperator>(
+				*ptr, *quad, psi_ext_gr, source_vec_gr);
+		else
+			gr_source_op = std::make_unique<IndependentSMMOperator>(fes, vfes, *quad, energy_grid, 
+				psi_ext_gr, source, inflow, alpha, bc_map, lump);			
+		lo_disc.reset(ptr);
+
+		lo_schur_solver.reset(io::CreateSolver(linear_solver_table, MPI_COMM_WORLD));
+		lo_solver = std::make_unique<BlockMomentDiscretization::Solver>(vfes, *lo_schur_solver);
+
+		linear_it_solver = dynamic_cast<mfem::IterativeSolver*>(lo_schur_solver.get());
+		if (linear_it_solver) {
+			amg = std::make_unique<mfem::HypreBoomerAMG>();
+			amg->SetPrintLevel(0);
+			linear_it_solver->SetPreconditioner(*amg);
+		}
+	}
+	else if (lo_type == "p1") {
+		auto *ptr = new P1Discretization(fes, vfes, *first_moment_opac, 
+			totalE, bc_map, lump);
+		if (!consistent) MFEM_ABORT("only consistent supported for P1");
+		gr_source_op = std::make_unique<ConsistentP1SMMOperator>(
+			*ptr, *quad, psi_ext_gr, source_vec_gr);
+		lo_disc.reset(ptr);
+
+		lo_solver.reset(io::CreateSolver(linear_solver_table, MPI_COMM_WORLD));
+	}
+	lo_disc->SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
+	lo_disc->SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
+	lo_disc->SetAlpha(alpha);
+
+	// NOTE: product operator has temporary storage the size of 
+	// one group of psi 
+	mfem::ProductOperator source_op(gr_source_op.get(), &to_gray_op_psi, false, false);
+
+	// print solver info 
+	out << YAML::Key << "linear solver" << YAML::Value << linear_solver_table;
+	const auto ho_solver_opts = io::GetIterativeSolverOptions(ho_solver_table);
+	out << YAML::Key << "ho solver" << YAML::Value << ho_solver_table;
+	const auto lo_solver_opts = io::GetIterativeSolverOptions(lo_solver_table);
+	out << YAML::Key << "lo solver" << YAML::Value << lo_solver_table;
+
+	// solution vector for LO system 
+	// ordered as [F,E] 
+	const auto &lo_offsets = lo_disc->GetOffsets(); 
+	mfem::BlockVector moments(x, offsets[SolutionIndex::RADF], lo_offsets);
+	mfem::BlockVector moments0(x0, offsets[SolutionIndex::RADF], lo_offsets);
+
+	// solver for low order system 
+	auto linear_solver = std::unique_ptr<mfem::Solver>(
+		io::CreateSolver(linear_solver_table, MPI_COMM_WORLD));
+
+	// --- solver for energy balance equation --- 
+	// local_meb_solver is applied on each element independently 
+	// by meb_solver 
+	EnergyBalanceNewtonSolver local_meb_solver;
+	io::SetIterativeSolverOptions(meb_solver_table, local_meb_solver);
+	local_meb_solver.SetPreconditioner(*local_mat_inv);
+	BlockDiagonalByElementNonlinearSolver meb_solver(local_meb_solver);
+	meb_solver.SetOperator(meb_form); // solves meb_form = (cv/dt + B(.))T 
+	out << YAML::Key << "meb solver" << YAML::Value << meb_solver_table;
+
+	mfem::LinearForm opac_corr_form(&vfes);
+	OpacityCorrectionCoefficient opac_corr_coef(lo_disc->GetTotal(), total, Fnu_coef);
+	if (IsMassLumped(lump))
+		opac_corr_form.AddDomainIntegrator(
+			new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef)));
+	else
+		opac_corr_form.AddDomainIntegrator(
+			new mfem::VectorDomainLFIntegrator(opac_corr_coef));
+
+		out << YAML::EndMap; // end smm output 
 	out << YAML::EndMap; // end driver output 
 
 	// --- configure outputs --- 
@@ -954,101 +1075,9 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap; // end output map
 	}
 
-	// time mass matrix for LO energy density 
-	mfem::ParBilinearForm Mtime_form_s(&fes);
-	if (IsMassLumped(lump)) 
-		Mtime_form_s.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator));
-	else
-		Mtime_form_s.AddDomainIntegrator(new mfem::MassIntegrator);
-	Mtime_form_s.Assemble(); 
-	Mtime_form_s.Finalize();
-	auto Mtime_s = std::unique_ptr<mfem::HypreParMatrix>(Mtime_form_s.ParallelAssemble());
-
-	// time mass matrix for HO energy density 
-	mfem::ParBilinearForm Mtime_form_v(&vfes);
-	if (IsMassLumped(lump)) 
-		Mtime_form_v.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::VectorMassIntegrator));
-	else
-		Mtime_form_v.AddDomainIntegrator(new mfem::MassIntegrator);
-	Mtime_form_v.Assemble(); 
-	Mtime_form_v.Finalize();
-	auto Mtime_v = std::unique_ptr<mfem::HypreParMatrix>(Mtime_form_v.ParallelAssemble());
-
-	// LO discretization object 
-	BlockLDGDiscretization lo_disc(fes, vfes, totalF, totalE, bc_map, lump);
-	lo_disc.SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
-	lo_disc.SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
-	lo_disc.SetAlpha(alpha);
-
-	// SMM source term 
-	// create operator that sums over group then  
-	// creates the one-group SMM source term 
-	TransportVectorExtents psi_ext_gr(1, quad->Size(), fes.GetVSize());
-	mfem::Vector source_vec_gr(TotalExtent(psi_ext_gr));
-	to_gray_op_psi.Mult(source_vec, source_vec_gr);
-	ConsistentLDGSMMOperator gr_source_op(lo_disc, *quad, psi_ext_gr, source_vec_gr);
-	// IndependentSMMOperator gr_source_op(fes, vfes, *quad, energy_grid, psi_ext_gr, source, inflow, alpha, bc_map, lump);
-	// NOTE: product operator has temporary storage the size of 
-	// one group of psi 
-	mfem::ProductOperator source_op(&gr_source_op, &to_gray_op_psi, false, false);
-
-	// solution vector for LO system 
-	// ordered as [F,E] 
-	const auto &lo_offsets = lo_disc.GetOffsets(); 
-	mfem::BlockVector moments(x, offsets[SolutionIndex::RADF], lo_offsets);
-	mfem::BlockVector moments0(x0, offsets[SolutionIndex::RADF], lo_offsets);
-
-	// solver for low order system 
-	mfem::CGSolver cg_solver(MPI_COMM_WORLD);
-	cg_solver.SetRelTol(1e-12);
-	cg_solver.SetMaxIter(200);
-	cg_solver.iterative_mode = true;
-	mfem::HypreBoomerAMG amg;
-	amg.SetPrintLevel(0);
-	cg_solver.SetPreconditioner(amg);
-	// solve 2x2 system for [F,E] taking advantage of block diagonal
-	// structure of F equation due to using LDG or IP 
-	BlockMomentDiscretization::Solver lo_solver(vfes, cg_solver);
-
-	// --- solver for energy balance equation --- 
-	// local_meb_solver is applied on each element independently 
-	// by meb_solver 
-	EnergyBalanceNewtonSolver local_meb_solver;
-	local_meb_solver.SetRelTol(1e-8);
-	local_meb_solver.SetMaxIter(100);
-	local_meb_solver.SetPreconditioner(*local_mat_inv);
-	local_meb_solver.iterative_mode = true;
-	BlockDiagonalByElementNonlinearSolver meb_solver(local_meb_solver);
-	meb_solver.SetOperator(meb_form); // solves meb_form = (cv/dt + B(.))T 
-
-	mfem::LinearForm opac_corr_form(&vfes);
-	OpacityCorrectionCoefficient opac_corr_coef(lo_disc.GetTotal(), total, Fnu_coef);
-	if (IsMassLumped(lump))
-		opac_corr_form.AddDomainIntegrator(
-			new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef)));
-	else
-		opac_corr_form.AddDomainIntegrator(
-			new mfem::VectorDomainLFIntegrator(opac_corr_coef));
-
-	mfem::VectorGridFunctionCoefficient Flo_coef(&F);
-	mfem::VectorSumCoefficient Fdiff_coef(Flo_coef, Fho_coef, 1.0, -1.0);
-	mfem::ScalarVectorProductCoefficient totalSF(totalP2, Fdiff_coef);
-	mfem::MixedBilinearForm rosseland_grad_form(&fes, &vfes);
-	rosseland_grad_form.AddDomainIntegrator(
-		new QuadratureLumpedIntegrator(new MixedVectorScalarMassIntegrator(totalSF)));
-	rosseland_grad_form.Assemble(); 
-	rosseland_grad_form.Finalize();
-
-	// mfem::MixedBilinearForm opac_corr_bform(&fes, &vfes);
-	// NormalizedOpacityCorrectionCoefficient opac_corr_coef2(totalR, total, Enu_coef, Fnu_coef);
-	// opac_corr_bform.AddDomainIntegrator(
-	// 	new QuadratureLumpedIntegrator(new MixedVectorScalarMassIntegrator(opac_corr_coef2)));
-	// opac_corr_bform.Assemble();
-	// opac_corr_bform.Finalize();
-
 	// working vectors for moment algorithm 
 	mfem::Vector em_source(fes.GetVSize()*G), em_source_gr(fes.GetVSize()), abs_source(fes.GetVSize());
-	mfem::BlockVector smm_source(lo_disc.GetOffsets()), lo_source(lo_disc.GetOffsets());
+	mfem::BlockVector smm_source(lo_disc->GetOffsets()), lo_source(lo_disc->GetOffsets());
 
 	mfem::StopWatch cycle_timer; // times cost per time step 
 	// log events across time steps 
@@ -1140,14 +1169,11 @@ int main(int argc, char *argv[]) {
 				// term in opacity correction 
 				mfem::tic();
 				opac_corr_form.Assemble();
-				// delete opac_corr_bform.LoseMat();
-				// opac_corr_bform.Assemble(); 
-				// opac_corr_bform.Finalize();
 				timing_log.Log("opac correction", mfem::toc());
 
 				// form schur complement of jacobian 
 				mfem::tic();
-				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc.GetOperator());
+				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc->GetOperator());
 				const auto &dB = gr_emission_form.GetGradient(T); // gradient of emission
 				auto &dBt_inv = meb_form.GetGradient(T); // gradient of energy balance equation
 				dBt_inv.Invert(); // <-- for lumping >0, this is diagonal, could save work with a diagonal inverse
@@ -1161,22 +1187,6 @@ int main(int argc, char *argv[]) {
 				mfem::SparseMatrix diag;
 				static_cast<mfem::HypreParMatrix*>(&K->GetBlock(1,1))->GetDiag(diag);
 				diag.Add(-1.0, *lin_emission);
-
-				// delete rosseland_grad_form.LoseMat();
-				// rosseland_grad_form.Assemble();
-				// rosseland_grad_form.Finalize();
-
-				// mfem::SparseMatrix diag2;
-				// auto product2 = std::unique_ptr<mfem::SparseMatrix>(
-				// 	Mult(rosseland_grad_form.SpMat(), dBt_inv.AsSparseMatrix()));
-				// auto lin_emission2 = std::unique_ptr<mfem::SparseMatrix>(
-				// 	Mult(*product2, Mtot_gray.SpMat()));
-				// static_cast<mfem::HypreParMatrix*>(&K->GetBlock(0,1))->GetDiag(diag2);
-				// diag2.Add(-3.0, *lin_emission2);
-
-				// mfem::SparseMatrix diag2;
-				// static_cast<mfem::HypreParMatrix*>(&K->GetBlock(0,1))->GetDiag(diag2);
-				// diag2.Add(3.0, opac_corr_bform.SpMat());
 
 				// compute Newton residual 
 				// applies inverse of "U" matrix to form 
@@ -1192,10 +1202,10 @@ int main(int argc, char *argv[]) {
 
 				// solve linearized LO system 
 				mfem::tic();
-				lo_solver.SetOperator(*K); // <-- requires AMG setup 
-				lo_solver.Mult(lo_source, moments); // uses preconditioned CG to invert Schur complement 
-				if (!cg_solver.GetConverged() and root)
-					MFEM_WARNING("cg not converged. final norm = " << cg_solver.GetFinalRelNorm());
+				lo_solver->SetOperator(*K); // <-- requires AMG setup 
+				lo_solver->Mult(lo_source, moments); // uses preconditioned CG to invert Schur complement 
+				if (linear_it_solver and !linear_it_solver->GetConverged() and root)
+					EventLog.Register("linear solver not converged");
 				if (floor_radE_LO) {
 					for (int i=0; i<E.Size(); i++) {
 						if (E(i) < 1e-10) {
@@ -1211,8 +1221,8 @@ int main(int argc, char *argv[]) {
 				// if (norm < 1e-8 or inner >= 10) break;
 				const auto norm = prev.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, prev, prev));
 				const auto Tnorm = Tprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tprev, Tprev));
-				if (norm + Tnorm < 1e-9) break; 
-				if (inner >= 60) {
+				if (norm + Tnorm < lo_solver_opts.reltol) break; 
+				if (inner >= lo_solver_opts.max_iter) {
 					EventLog.Register("inner solve not converged");
 					break;
 				}
@@ -1222,7 +1232,11 @@ int main(int argc, char *argv[]) {
 				Linv.AssembleLocalMatrices();
 			inner_sum += inner;	// count total inner iterations 
 			const double norm = Estar.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Estar, Estar));
-			if (norm < 1e-6 or outer >= 40) break;
+			if (norm < ho_solver_opts.reltol) break;
+			if (outer >= ho_solver_opts.max_iter) {
+				EventLog.Register("outer solver not converged");
+				break;
+			}
 			outer++;
 		}
 
@@ -1304,8 +1318,8 @@ int main(int argc, char *argv[]) {
 			Cvdt.SetAConst(1.0/time_step); 
 
 			// LO system time step 
-			lo_disc.SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
-			lo_disc.SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
+			lo_disc->SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
+			lo_disc->SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
 
 			assembly_timer.Stop(); 
 			timing_log.Log("assembly time", assembly_timer.RealTime());
@@ -1323,12 +1337,6 @@ int main(int argc, char *argv[]) {
 
 		cycle_timer.Stop(); 
 		double cycle_time = cycle_timer.RealTime(); 
-
-		// warn if temperature is such that the 
-		// energy group structure can't fully integrate
-		// the planck spectrum 
-		CheckPlanckSpectrumCovered(MPI_COMM_WORLD, energy_grid.MinEnergy(), 
-			energy_grid.MaxEnergy(), T, 1e-10);
 
 		// --- output progress to terminal --- 
 		log.Log("max outer", outer);
@@ -1348,6 +1356,12 @@ int main(int argc, char *argv[]) {
 			io::ProcessGlobalLogs(out);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
+
+		// warn if temperature is such that the 
+		// energy group structure can't fully integrate
+		// the planck spectrum 
+		CheckPlanckSpectrumCovered(MPI_COMM_WORLD, energy_grid.MinEnergy(), 
+			energy_grid.MaxEnergy(), T, 1e-10);
 
 		// warn if max cycles reached 
 		if (cycle == max_cycles and root) 

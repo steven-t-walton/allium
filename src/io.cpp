@@ -267,6 +267,23 @@ void SetIterativeSolverOptions(sol::table &table, mfem::IterativeSolver &solver)
 	table["iterative_mode"] = iterative_mode; 
 }
 
+IterativeSolverOptions GetIterativeSolverOptions(sol::table &table)
+{
+	IterativeSolverOptions opts;
+	opts.print_level = table["print_level"].get_or(0);
+	sol::optional<double> abstol = table["abstol"]; 
+	sol::optional<double> reltol = table["reltol"]; 
+	if (abstol) { opts.abstol = abstol.value(); }
+	else { table["abstol"] = opts.abstol; }
+	if (reltol) { opts.reltol = reltol.value(); }
+	else { table["reltol"] = opts.reltol; }
+	opts.max_iter = table["max_iter"].get_or(opts.max_iter);
+	table["max_iter"] = opts.max_iter; 
+	opts.iterative_mode = table["iterative_mode"].get_or(opts.iterative_mode);
+	table["iterative_mode"] = opts.iterative_mode; 	
+	return opts;
+}
+
 mfem::Mesh CreateMesh(sol::table &table, YAML::Emitter &out, bool root) 
 {
 	mfem::Mesh mesh; 
