@@ -28,6 +28,39 @@ void MomentDiscretization::SetTimeAbsorption(double sigma)
 	time_absorption = sigma;
 }
 
+H1DiffusionDiscretization::H1DiffusionDiscretization(
+	mfem::ParFiniteElementSpace &fes, mfem::Coefficient &total, 
+	mfem::Coefficient &absorption, const BoundaryConditionMap &bc_map, 
+	int lumping)
+	: MomentDiscretization(fes, total, absorption, bc_map, lumping)
+{ }
+
+mfem::HypreParMatrix *H1DiffusionDiscretization::GetOperator() const
+{
+	const bool lump_mass = IsMassLumped(lumping);
+	const bool lump_grad = IsGradientLumped(lumping);
+	const bool lump_face = IsFaceLumped(lumping);
+
+	mfem::ConstantCoefficient alpha_coef(alpha);
+	mfem::RatioCoefficient diffco(1.0/3, total);
+	mfem::ParBilinearForm Kform(&fes); 
+	mfem::BilinearFormIntegrator *bfi;
+	bfi = new mfem::DiffusionIntegrator(diffco);
+	if (lump_grad) bfi = new QuadratureLumpedIntegrator(bfi);
+	Kform.AddDomainIntegrator(bfi);
+	bfi = new mfem::MassIntegrator(absorption);
+	if (lump_mass) bfi = new QuadratureLumpedIntegrator(bfi);
+	Kform.AddDomainIntegrator(bfi);
+	bfi = new mfem::BoundaryMassIntegrator(alpha_coef);
+	if (lump_face) bfi = new QuadratureLumpedIntegrator(bfi);
+	Kform.AddBdrFaceIntegrator(bfi);
+	Kform.Assemble();
+	Kform.Finalize();
+	auto *K = Kform.ParallelAssemble();
+	if (Mtime) K->Add(time_absorption, *Mtime);
+	return K;
+}
+
 InteriorPenaltyDiscretization::InteriorPenaltyDiscretization(
 	mfem::ParFiniteElementSpace &fes, mfem::Coefficient &total, 
 	mfem::Coefficient &absorption, const BoundaryConditionMap &bc_map, 

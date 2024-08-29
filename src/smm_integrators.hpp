@@ -148,7 +148,6 @@ public:
 		mfem::DenseMatrix &elmat);
 };
 
-
 class MixedVectorScalarMassIntegrator : public mfem::BilinearFormIntegrator
 {
 private:
@@ -164,4 +163,31 @@ public:
 	}
 	void AssembleElementMatrix2(const mfem::FiniteElement &trial_fe, const mfem::FiniteElement &test_fe, 
 		mfem::ElementTransformation &trans, mfem::DenseMatrix &elmat) override;
+};
+
+class GradAverageTensorJumpLFIntegrator : public mfem::LinearFormIntegrator
+{
+private:
+	mfem::Coefficient &total_coef;
+	mfem::MatrixCoefficient &Tcoef;
+	int oa, ob;
+
+	mfem::DenseMatrix T, gshape1, gshape2;
+	mfem::Vector Tn1, Tn2, nor;
+public:
+	GradAverageTensorJumpLFIntegrator(mfem::Coefficient &total_coef, mfem::MatrixCoefficient &Tcoef, 
+		int oa=2, int ob=1)
+		: total_coef(total_coef), Tcoef(Tcoef), oa(oa), ob(ob)
+	{ }
+	void AssembleRHSElementVect(const mfem::FiniteElement&, mfem::ElementTransformation&, mfem::Vector&)
+	{
+		MFEM_ABORT("call on interior faces only"); 
+	}
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, 
+		mfem::Vector &elvec)
+	{
+		MFEM_ABORT("call on interior faces only");
+	}
+	void AssembleRHSElementVect(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
+		mfem::FaceElementTransformations &trans, mfem::Vector &elvec); 	
 };

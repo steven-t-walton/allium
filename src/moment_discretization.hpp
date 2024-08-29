@@ -27,6 +27,15 @@ public:
 	void SetTimeAbsorption(double sigma);
 };
 
+class H1DiffusionDiscretization : public MomentDiscretization
+{
+public:
+	H1DiffusionDiscretization(mfem::ParFiniteElementSpace &fes, 
+		mfem::Coefficient &total, mfem::Coefficient &absorption, 
+		const BoundaryConditionMap &bc_map, int lumping);
+	mfem::HypreParMatrix *GetOperator() const override;	
+};
+
 class InteriorPenaltyDiscretization : public MomentDiscretization 
 {
 private:

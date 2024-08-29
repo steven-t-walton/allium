@@ -692,3 +692,55 @@ void MixedVectorScalarMassIntegrator::AssembleElementMatrix2(
 		}
 	}
 }
+
+void GradAverageTensorJumpLFIntegrator::AssembleRHSElementVect(
+	const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
+	mfem::FaceElementTransformations &trans, mfem::Vector &elvec)
+{
+	const auto ndof1 = el1.GetDof(); 
+	const auto ndof2 = el2.GetDof(); 
+	const auto dim = el1.GetDim(); 
+	gshape1.SetSize(ndof1, dim); 
+	gshape2.SetSize(ndof2, dim); 
+	T.SetSize(dim); 
+	Tn1.SetSize(dim); Tn2.SetSize(dim); 
+	nor.SetSize(dim); 
+	elvec.SetSize(ndof1+ndof2); 
+	elvec = 0.0; 
+
+	mfem::Vector elvec1(elvec, 0, ndof1); 
+	mfem::Vector elvec2(elvec, ndof1, ndof2); 
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), oa * std::max(el1.GetOrder(),el2.GetOrder()) + ob);
+	}
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const mfem::IntegrationPoint &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		const auto &eip1 = trans.GetElement1IntPoint(); 
+		const auto &eip2 = trans.GetElement2IntPoint(); 
+		el1.CalcPhysDShape(trans.GetElement1Transformation(), gshape1); 
+		el2.CalcPhysDShape(trans.GetElement2Transformation(), gshape2); 
+		const auto total1 = total_coef.Eval(trans.GetElement1Transformation(), eip1);
+		const auto total2 = total_coef.Eval(trans.GetElement2Transformation(), eip2);
+
+		if (dim==1) {
+			nor(0) = 2*trans.GetElement1IntPoint().x - 1.0;
+		} else {
+			mfem::CalcOrtho(trans.Jacobian(), nor); 
+		}
+
+		Tcoef.Eval(T, trans.GetElement1Transformation(), eip1);
+		T.Mult(nor, Tn1); 
+		Tcoef.Eval(T, trans.GetElement2Transformation(), eip2); 
+		T.Mult(nor, Tn2); 
+		Tn1 -= Tn2;
+
+		const double w = ip.weight / 2;
+		gshape1.AddMult(Tn1, elvec1, w / total1);
+		gshape2.AddMult(Tn1, elvec2, w / total2);
+	}		
+}

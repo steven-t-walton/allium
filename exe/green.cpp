@@ -873,7 +873,7 @@ int main(int argc, char *argv[]) {
 			gr_source_op = std::make_unique<ConsistentLDGSMMOperator>(
 				*ptr, *quad, psi_ext_gr, source_vec_gr);
 		else
-			gr_source_op = std::make_unique<IndependentSMMOperator>(fes, vfes, *quad, energy_grid, 
+			gr_source_op = std::make_unique<IndependentBlockSMMOperator>(fes, vfes, *quad, energy_grid, 
 				psi_ext_gr, source, inflow, alpha, bc_map, lump);			
 		lo_disc.reset(ptr);
 
