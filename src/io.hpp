@@ -172,6 +172,7 @@ T GetAndValidateOption(sol::table &table, std::string key, std::initializer_list
 			ss << " \"" << opt << "\"";
 		}
 		MFEM_ABORT(ss.str()); 
+		return *options.begin();
 	}
 }
 
