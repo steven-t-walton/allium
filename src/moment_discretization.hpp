@@ -101,12 +101,13 @@ public:
 		mfem::Coefficient &total, mfem::Coefficient &absorption,
 		const BoundaryConditionMap &bc_map, int lumping);
 	const mfem::Array<int> &GetOffsets() const { return offsets; }
-	virtual mfem::Operator *GetOperator() const =0;
-	mfem::Coefficient &GetTotal() { return total; }
-	mfem::Coefficient &GetAbsorption() { return absorption; }
+	virtual mfem::BlockOperator *GetOperator() const =0;
 	void SetScalarTimeAbsorption(double sigma, const mfem::HypreParMatrix &M);
 	void SetVectorTimeAbsorption(double sigma, const mfem::HypreParMatrix &M);
 	void SetAlpha(double a) { alpha = a; }
+
+	mfem::Coefficient &GetTotal() { return total; }
+	mfem::Coefficient &GetAbsorption() { return absorption; }
 
 	class Solver : public mfem::Solver {
 	private:
