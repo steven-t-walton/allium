@@ -35,7 +35,6 @@ bool ZeroAndScaleFixupOperator::Apply(const mfem::DenseMatrix &A,
 
 	else if (original_balance == 0.0 or new_balance == 0.0) {
 		solution = 0.0;
-		EventLog.Register("zero balance");
 	}
 
 	else {
