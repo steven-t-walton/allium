@@ -399,6 +399,9 @@ int main(int argc, char *argv[]) {
 	mfem::H1_FECollection cfec(fe_order, dim);
 	mfem::ParFiniteElementSpace cfes(&mesh, &cfec);
 
+	mfem::RT_FECollection rtfec(fe_order, dim);
+	mfem::ParFiniteElementSpace rtfes(&mesh, &rtfec);
+
 	// piecewise constant used for plotting and storing cross section data 
 	mfem::L2_FECollection fec0(0, dim); 
 	mfem::ParFiniteElementSpace fes0(&mesh, &fec0); 
@@ -861,6 +864,23 @@ int main(int argc, char *argv[]) {
 			smm = std::make_unique<mfem::ProductOperator>(
 				inner_solver.get(), source_op, false, true);
 		}
+		else if (type == "RTSMM") {
+			J.SetSpace(&rtfes);
+			RTDiffusionDiscretization disc(fes, rtfes, total, absorption, bc_map, lumping);
+			disc.SetAlpha(alpha);
+			lo_op.reset(disc.GetOperator());
+
+			inner_solver->SetOperator(*lo_op);
+			auto energy = MultiGroupEnergyGrid::MakeGray(0,1.0);
+			auto *source_op = new IndependentRTSMMOperator(fes, rtfes, *quad, psi_ext, energy, 
+				source, inflow, alpha, bc_map, lumping);
+
+			offsets = disc.GetOffsets();
+			block_x.Update(offsets);
+			auto *block_extract = new SubBlockExtractionOperator(block_x, 1);
+			smm = std::make_unique<TripleProductOperator>(
+				block_extract, inner_solver.get(), source_op, true, false, true); 
+		}
 		else { MFEM_ABORT("acceleration type " << type << " not defined"); }
 
 		// set AMG object 
@@ -938,14 +958,14 @@ int main(int argc, char *argv[]) {
 		// compute "consistency" between SN and moment solution 
 		// for scalar flux and current 
 		if (block_x.Size()) {
-			J = block_x.GetBlock(0);
+			J.Distribute(block_x.GetBlock(0));
 			moment_solution_HO.SetSize(moments_size);  
 			Dlin_aniso.Mult(psi, moment_solution_HO); 
 			mfem::ParGridFunction phi_sn(&fes, moment_solution_HO, 0); 
 			mfem::ParGridFunction J_sn(&vfes, moment_solution_HO, fes.GetVSize()); 
 			mfem::GridFunctionCoefficient phi_snc(&phi_sn); 
 			double consistency_phi = phi.ComputeL2Error(phi_snc); 
-			mfem::GridFunctionCoefficient J_snc(&J_sn); 
+			mfem::VectorGridFunctionCoefficient J_snc(&J_sn); 
 			double consistency_J = J.ComputeL2Error(J_snc); 
 			std::stringstream ss; 
 			out << YAML::Key << "consistency" << YAML::Value << YAML::BeginMap; 

@@ -134,3 +134,26 @@ public:
 		double alpha, const BoundaryConditionMap &bc_map, int lumping);
 	void Mult(const mfem::Vector &psi, mfem::Vector &source) const override;
 };
+
+class IndependentRTSMMOperator : public mfem::Operator {
+private:
+	mfem::ParFiniteElementSpace &fes, &vfes;
+	const AngularQuadrature &quad;
+	const TransportVectorExtents &psi_ext;
+	double alpha;
+	const BoundaryConditionMap &bc_map;
+	int lumping;
+
+	mfem::Array<int> offsets;
+	mfem::Vector Q0, Q1;
+	mutable mfem::Array<int> marshak_bdr_attrs, reflect_bdr_attrs;
+	mfem::Array<int> reflect_tdofs;
+public:
+	IndependentRTSMMOperator(
+		mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		const AngularQuadrature &quad, const TransportVectorExtents &psi_ext,
+		const MultiGroupEnergyGrid &energy, PhaseSpaceCoefficient &source_coef, 
+		PhaseSpaceCoefficient &inflow_coef, double alpha, 
+		const BoundaryConditionMap &bc_map, int lumping);
+	void Mult(const mfem::Vector &psi, mfem::Vector &source) const override;
+};

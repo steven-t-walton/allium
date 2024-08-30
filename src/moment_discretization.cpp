@@ -182,8 +182,8 @@ BlockMomentDiscretization::BlockMomentDiscretization(
 {
 	offsets.SetSize(3);
 	offsets[0] = 0; 
-	offsets[1] = vfes.GetVSize(); 
-	offsets[2] = fes.GetVSize(); 
+	offsets[1] = vfes.GetTrueVSize(); 
+	offsets[2] = fes.GetTrueVSize(); 
 	offsets.PartialSum();
 
 	marshak_bdr_attrs = CreateBdrAttributeMarker<INFLOW>(bc_map);
@@ -479,6 +479,66 @@ mfem::BlockOperator *P1Discretization::GetOperator() const
 	// Gform.Assemble(); 
 	// Gform.Finalize(); 
 	// mfem::HypreParMatrix *G = Gform.ParallelAssemble(); 
+
+	auto *op = new mfem::BlockOperator(offsets);
+	op->SetBlock(0,0, Mt); 
+	op->SetBlock(0,1, G); 
+	op->SetBlock(1,0, D); 
+	op->SetBlock(1,1, Ma); 
+	op->owns_blocks = 1;
+	return op;
+}
+
+RTDiffusionDiscretization::RTDiffusionDiscretization(
+	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	mfem::Coefficient &total, mfem::Coefficient &absorption,
+	const BoundaryConditionMap &bc_map, int lumping)
+	: BlockMomentDiscretization(fes, vfes, total, absorption, bc_map, lumping)
+{
+	vfes.GetEssentialTrueDofs(reflect_bdr_attrs, ess_tdof_list);
+}
+
+mfem::BlockOperator *RTDiffusionDiscretization::GetOperator() const
+{
+	const bool lump_mass = IsMassLumped(lumping);
+	const bool lump_grad = IsGradientLumped(lumping);
+	const bool lump_face = IsFaceLumped(lumping);
+
+	mfem::BilinearFormIntegrator *bfi;
+
+	mfem::ParBilinearForm Mtform(&vfes);
+	mfem::ProductCoefficient total3(3.0, total);
+	mfem::ConstantCoefficient marshak_coef(1.0/alpha);
+	bfi = new mfem::VectorFEMassIntegrator(total3);
+	if (lump_mass) bfi = new QuadratureLumpedIntegrator(bfi);
+	Mtform.AddDomainIntegrator(bfi);
+	bfi = new mfem::BoundaryMassIntegrator(marshak_coef);
+	if (lump_face) bfi = new QuadratureLumpedIntegrator(bfi);
+	Mtform.AddBoundaryIntegrator(bfi, marshak_bdr_attrs);
+	Mtform.Assemble();
+	Mtform.Finalize();
+	auto *Mt = Mtform.ParallelAssemble();
+	delete Mt->EliminateRowsCols(ess_tdof_list);
+
+	mfem::ParMixedBilinearForm Dform(&vfes, &fes);
+	bfi = new mfem::VectorFEDivergenceIntegrator;
+	if (lump_grad) bfi = new QuadratureLumpedIntegrator(bfi);
+	Dform.AddDomainIntegrator(bfi);
+	Dform.Assemble();
+	Dform.Finalize();
+	auto *D = Dform.ParallelAssemble();
+	delete D->EliminateCols(ess_tdof_list);
+	auto *G = D->Transpose();
+	(*G) *= -1.0;
+
+	mfem::ParBilinearForm Maform(&fes);
+	bfi = new mfem::MassIntegrator(absorption);
+	if (lump_mass) bfi = new QuadratureLumpedIntegrator(bfi);
+	Maform.AddDomainIntegrator(bfi);
+	Maform.Assemble();
+	Maform.Finalize();
+	auto *Ma = Maform.ParallelAssemble();
+	if (Mtime_s) Ma->Add(time_absorption_s, *Mtime_s);
 
 	auto *op = new mfem::BlockOperator(offsets);
 	op->SetBlock(0,0, Mt); 

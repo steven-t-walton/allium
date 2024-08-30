@@ -186,3 +186,13 @@ public:
 
 	friend class ConsistentP1SMMOperator;
 };
+
+class RTDiffusionDiscretization : public BlockMomentDiscretization {
+private:
+	mfem::Array<int> ess_tdof_list;
+public:
+	RTDiffusionDiscretization(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		mfem::Coefficient &total, mfem::Coefficient &absorption, 
+		const BoundaryConditionMap &bc_map, int lumping);
+	mfem::BlockOperator *GetOperator() const override;	
+};

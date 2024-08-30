@@ -88,3 +88,61 @@ public:
 	void AssembleFaceMatrix(const mfem::FiniteElement &el1, const mfem::FiniteElement &el2, 
 		mfem::FaceElementTransformations &trans, mfem::DenseMatrix &elmat); 
 };
+
+class LDGTraceIntegrator : public mfem::BilinearFormIntegrator
+{
+protected:
+	const mfem::Vector *beta = nullptr;
+	mfem::Coefficient *coef = nullptr; 
+	double kappa = 0.0, limit = 0.0; 
+
+	mfem::Vector tr_shape1, tr_shape2, te_shape1, te_shape2; 
+	mfem::Vector nor; 
+	mfem::DenseMatrix A11, A12, A21, A22; 
+public:
+	LDGTraceIntegrator(const mfem::Vector *b=nullptr) { beta = b; }
+	LDGTraceIntegrator(mfem::Coefficient &c, const mfem::Vector &b, double k, double l) 
+		: coef(&c), beta(&b), kappa(k), limit(l)
+	{ }
+	void AssembleFaceMatrix(
+		const mfem::FiniteElement &tr_fe1,
+		const mfem::FiniteElement &tr_fe2,
+		const mfem::FiniteElement &te_fe1, 
+		const mfem::FiniteElement &te_fe2,
+		mfem::FaceElementTransformations &T, 
+		mfem::DenseMatrix &elmat);
+};
+
+class BoundaryNormalFaceLFIntegrator : public mfem::LinearFormIntegrator 
+{
+private:
+	mfem::Vector shape, nor; 
+	mfem::Coefficient &inflow; 
+	int oa, ob; 
+public:
+	BoundaryNormalFaceLFIntegrator(mfem::Coefficient &_inflow, int a=2, int b=1) : inflow(_inflow), oa(a), ob(b) { } 
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::ElementTransformation &T, mfem::Vector &elvec) {
+		MFEM_ABORT("only call for faces"); 
+	}
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, mfem::Vector &elvec); 
+};
+
+class VectorFEBoundaryNormalFaceLFIntegrator : public mfem::LinearFormIntegrator
+{
+private:	
+	mfem::Coefficient &inflow;
+	int oa, ob;
+
+	mfem::Vector nor;
+	mfem::DenseMatrix vshape;
+public:
+	VectorFEBoundaryNormalFaceLFIntegrator(mfem::Coefficient &inflow, int a=2, int b=1)
+		: inflow(inflow), oa(a), ob(b)
+	{ }
+	void AssembleRHSElementVect(const mfem::FiniteElement&, mfem::ElementTransformation&, mfem::Vector&)
+	{
+		MFEM_ABORT("only call on bdr faces");
+	}
+	void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, 
+		mfem::Vector &elvec);
+};

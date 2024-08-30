@@ -589,3 +589,184 @@ void DGVectorJumpJumpIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &e
 	}
 	elmat *= beta; 
 }
+
+void LDGTraceIntegrator::AssembleFaceMatrix(const mfem::FiniteElement &tr_fe1,
+	const mfem::FiniteElement &tr_fe2,
+	const mfem::FiniteElement &te_fe1, 
+	const mfem::FiniteElement &te_fe2,
+	mfem::FaceElementTransformations &T, 
+	mfem::DenseMatrix &elmat)
+{
+	int dim = tr_fe1.GetDim();
+	nor.SetSize(dim); 
+	int tr_ndof1, te_ndof1, tr_ndof2, te_ndof2, tr_ndofs, te_ndofs;
+	tr_ndof1 = tr_fe1.GetDof();
+	te_ndof1 = te_fe1.GetDof();
+	tr_shape1.SetSize(tr_ndof1); 
+	te_shape1.SetSize(te_ndof1); 
+
+	if (T.Elem2No >= 0)
+	{
+		tr_ndof2 = tr_fe2.GetDof();
+		te_ndof2 = te_fe2.GetDof();
+		tr_shape2.SetSize(tr_ndof2); 
+		te_shape2.SetSize(te_ndof2); 
+	}
+	else
+	{
+		tr_ndof2 = 0;
+		te_ndof2 = 0;
+	}
+
+	tr_ndofs = tr_ndof1 + tr_ndof2;
+	te_ndofs = te_ndof1 + te_ndof2;
+	elmat.SetSize(te_ndofs, tr_ndofs*dim);
+	elmat = 0.0;
+
+	const auto *ir = IntRule;
+	if (ir == NULL)
+	{
+		int order;
+		if (tr_ndof2)
+		{
+			order = std::max(tr_fe1.GetOrder(), tr_fe2.GetOrder()) 
+				+ std::max(te_fe1.GetOrder(), te_fe2.GetOrder());
+		}
+		else
+		{
+			order = tr_fe1.GetOrder() + te_fe1.GetOrder();
+		}
+		ir = &mfem::IntRules.Get(T.GetGeometryType(), order);
+	}
+
+	A11.SetSize(te_ndof1, tr_ndof1); 
+	A12.SetSize(te_ndof1, tr_ndof2); 
+	A21.SetSize(tr_ndof2, te_ndof1); 
+	A22.SetSize(te_ndof2, tr_ndof2); 
+
+	double w, sign;
+	for (int n=0; n<ir->GetNPoints(); n++)
+	{
+		const auto &ip = ir->IntPoint(n);
+		T.SetAllIntPoints(&ip);
+		const auto &eip1 = T.GetElement1IntPoint();
+		const auto &eip2 = T.GetElement2IntPoint();
+		if (dim == 1) {
+			nor(0) = 2*eip1.x - 1.0;
+		} else {
+			mfem::CalcOrtho(T.Jacobian(), nor);			
+		}
+		w = ip.weight;
+		if (tr_ndof2) { w /= 2; }
+		// set sign = sign(beta . normal)
+		// use factor of half in weight to get sign/2
+		if (beta and tr_ndof2) { sign = (*beta * nor >= 0 ? 1.0 : -1.0); }
+		else { sign = 0.0; }
+
+		if (limit > 0) {
+			double c = coef->Eval(*T.Elem1, eip1); 
+			if (tr_ndof2) {
+				c += coef->Eval(*T.Elem2, eip2); 
+				c /= 2; 
+			}
+			double k = kappa * T.Weight() / T.Elem1->Weight() * c; 
+			if (k < limit) {
+				sign = 0.0; 
+			}
+		}
+
+		tr_fe1.CalcShape(eip1, tr_shape1);
+		te_fe1.CalcShape(eip1, te_shape1);
+		mfem::MultVWt(te_shape1, tr_shape1, A11);
+		for (int d=0; d<dim; d++)
+		{
+			elmat.AddMatrix(w*nor(d)*(1.0 + sign), A11, 0, d*tr_ndof1);
+		}
+
+		if (tr_ndof2)
+		{
+			tr_fe2.CalcShape(eip2, tr_shape2);
+			te_fe2.CalcShape(eip2, te_shape2);
+			mfem::MultVWt(te_shape1, tr_shape2, A12);
+			mfem::MultVWt(te_shape2, tr_shape1, A21);
+			mfem::MultVWt(te_shape2, tr_shape2, A22);
+			for (int d=0; d<dim; d++)
+			{
+				elmat.AddMatrix(w*nor(d)*(1.0 - sign), A12, 0, dim*tr_ndof1 + d*tr_ndof2);
+				elmat.AddMatrix(-w*nor(d)*(1.0 + sign), A21, te_ndof1, d*tr_ndof1);
+				elmat.AddMatrix(w*nor(d)*(-1.0 + sign), A22, te_ndof1, dim*tr_ndof1 + d*tr_ndof2);
+			}
+		}
+	}
+}
+
+void BoundaryNormalFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, 
+	mfem::Vector &elvec) 
+{
+	const auto ndof = el.GetDof(); 
+	const auto dim = el.GetDim(); 
+	shape.SetSize(ndof); 
+	nor.SetSize(dim); 
+	elvec.SetSize(ndof*dim); 
+	elvec = 0.0; 
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		int intorder = oa * el.GetOrder() + ob;  
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), intorder);
+	}
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const mfem::IntegrationPoint &ip = ir->IntPoint(n); 
+		trans.SetAllIntPoints(&ip); 
+		const mfem::IntegrationPoint &eip = trans.GetElement1IntPoint(); 
+		if (dim>1) {
+			mfem::CalcOrtho(trans.Jacobian(), nor); 
+		}
+		else {
+			nor(0) = 1.0; 
+		}
+
+		double inf = inflow.Eval(trans, ip); 
+		el.CalcShape(eip, shape); 
+		for (int d=0; d<dim; d++) {
+			for (int i=0; i<ndof; i++) {
+				elvec(i + d*ndof) += shape(i) * nor(d) * ip.weight * inf; 
+			}
+		}
+	}
+}
+
+void VectorFEBoundaryNormalFaceLFIntegrator::AssembleRHSElementVect(
+	const mfem::FiniteElement &el, mfem::FaceElementTransformations &trans, mfem::Vector &elvec)
+{
+	const auto ndof = el.GetDof();
+	const auto dim = el.GetDim();
+	vshape.SetSize(ndof, dim);
+	nor.SetSize(dim);
+	elvec.SetSize(ndof);
+	elvec = 0.0;
+
+	const mfem::IntegrationRule *ir = IntRule;
+	if (ir == NULL)
+	{
+		int intorder = oa * el.GetOrder() + ob;  
+		ir = &mfem::IntRules.Get(trans.GetGeometryType(), intorder);
+	}
+
+	for (auto n=0; n<ir->GetNPoints(); n++) {
+		const auto &ip = ir->IntPoint(n);
+		trans.SetAllIntPoints(&ip);
+		const auto &eip = trans.GetElement1IntPoint();
+		if (dim > 1) {
+			mfem::CalcOrtho(trans.Jacobian(), nor);
+		} else {
+			nor(0) = 2*trans.GetElement1IntPoint().x - 1.0;
+		}
+		const auto val = inflow.Eval(trans, ip);
+
+		el.CalcVShape(trans.GetElement1Transformation(), vshape);
+		vshape.AddMult(nor, elvec, ip.weight * val);
+	}
+}
