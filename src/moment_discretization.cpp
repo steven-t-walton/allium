@@ -53,7 +53,7 @@ mfem::HypreParMatrix *H1DiffusionDiscretization::GetOperator() const
 	Kform.AddDomainIntegrator(bfi);
 	bfi = new mfem::BoundaryMassIntegrator(alpha_coef);
 	if (lump_face) bfi = new QuadratureLumpedIntegrator(bfi);
-	Kform.AddBdrFaceIntegrator(bfi);
+	Kform.AddBdrFaceIntegrator(bfi, marshak_bdr_attrs);
 	Kform.Assemble();
 	Kform.Finalize();
 	auto *K = Kform.ParallelAssemble();

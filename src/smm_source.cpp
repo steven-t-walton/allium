@@ -460,7 +460,7 @@ void IndependentSMMOperator::Mult(const mfem::Vector &psi, mfem::Vector &source)
 	mfem::RatioCoefficient neg_total_inv(-1.0, total);
 	mfem::ScalarVectorProductCoefficient divT_total(neg_total_inv, divT);
 
-	mfem::ParLinearForm fform(&fes, source.GetData()); 
+	mfem::ParLinearForm fform(&fes); 
 	mfem::ProductCoefficient bdr_coef_f(-1.0, beta); 
 	mfem::LinearFormIntegrator *lfi;
 	lfi = new ProjectedCoefBoundaryLFIntegrator(bdr_coef_f, *fes.FEColl(), 2, 1);
@@ -473,8 +473,8 @@ void IndependentSMMOperator::Mult(const mfem::Vector &psi, mfem::Vector &source)
 	if (lump_face) lfi = new QuadratureLumpedLFIntegrator(lfi);
 	fform.AddInteriorFaceIntegrator(lfi);
 	fform.Assemble(); 
-
 	fform += Q;
+	fform.ParallelAssemble(source);
 }
 
 IndependentBlockSMMOperator::IndependentBlockSMMOperator(

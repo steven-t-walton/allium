@@ -533,7 +533,7 @@ int main(int argc, char *argv[]) {
 	mfem::Vector psi(psi_size);
 	psi = 0.0; 
 	mfem::Vector moment_solution(moments_size), moment_solution_HO; 
-	mfem::ParGridFunction phi(&cfes), J(&vfes, moment_solution, phi_size);
+	mfem::ParGridFunction phi(&fes), J(&vfes, moment_solution, phi_size);
 
 	// initial guess 
 	D.Mult(psi, phi); 
@@ -858,7 +858,8 @@ int main(int argc, char *argv[]) {
 			auto *source_op = new IndependentSMMOperator(cfes, fes, *quad, psi_ext, energy, 
 				total, source, inflow, alpha, bc_map, lumping);
 
-			smm = std::make_unique<mfem::ProductOperator>(inner_solver.get(), source_op, false, true);
+			smm = std::make_unique<mfem::ProductOperator>(
+				inner_solver.get(), source_op, false, true);
 		}
 		else { MFEM_ABORT("acceleration type " << type << " not defined"); }
 
@@ -881,16 +882,16 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap; // end driver map 
 
 		// global scattering operator 
-		mfem::MixedBilinearForm Ms_form(phi.FESpace(), &fes);
-		// mfem::BilinearForm Ms_form(&fes); 
+		mfem::ParMixedBilinearForm Ms_form(phi.ParFESpace(), &fes);
 		if (IsMassLumped(lumping))
 			Ms_form.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(scattering)));
 		else
 			Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
 		Ms_form.Assemble(); 
 		Ms_form.Finalize();
+		auto Ms = std::unique_ptr<mfem::HypreParMatrix>(Ms_form.ParallelAssemble());
 
-		MomentMethodFixedPointOperator G(D, Linv, Ms_form, *smm, source_vec, psi); 
+		MomentMethodFixedPointOperator G(D, Linv, *Ms, *smm, source_vec, psi); 
 		outer_solver->SetOperator(G); 
 		io::SundialsUserCallbackData sundials_data(out, G, inner_it_solver); 
 		auto *sundials = dynamic_cast<mfem::SundialsSolver*>(outer_solver.get());
@@ -909,8 +910,9 @@ int main(int argc, char *argv[]) {
 		}
 
 		else {
-			mfem::Vector blank; 
-			outer_solver->Mult(blank, phi); 
+			mfem::Vector blank, x(phi.ParFESpace()->GetTrueVSize()); 
+			outer_solver->Mult(blank, x);
+			phi.Distribute(x); 
 			out << YAML::Key << "outer iterations" << YAML::Value << outer_solver->GetNumIterations();			
 		}
 		solve_timer.Stop(); 
