@@ -590,6 +590,7 @@ int main(int argc, char *argv[]) {
 
 	// store LO energy density 
 	mfem::ParGridFunction Elo(&fes);
+	mfem::GridFunctionCoefficient Elo_coef(&Elo);
 
 	// coefficients representing solution vectors 
 	mfem::GridFunctionCoefficient Tcoef(&T); 
@@ -938,15 +939,14 @@ int main(int argc, char *argv[]) {
 	lo_disc.SetPenaltyLowerBound(alpha/2); // <-- use "modified" penalty parameter 
 
 	// solver for low order system 
-	// mfem::GMRESSolver lo_solver(MPI_COMM_WORLD);
-	// lo_solver.SetAbsTol(1e-6);
-	// lo_solver.SetRelTol(1e-10);
-	// lo_solver.SetMaxIter(200);
-	// lo_solver.iterative_mode = false;
-	// mfem::HypreBoomerAMG amg;
-	// amg.SetPrintLevel(0);
-	// lo_solver.SetPreconditioner(amg);
-	SuperLUSolver lo_solver(MPI_COMM_WORLD);
+	mfem::GMRESSolver lo_solver(MPI_COMM_WORLD);
+	lo_solver.SetAbsTol(1e-6);
+	lo_solver.SetRelTol(1e-10);
+	lo_solver.SetMaxIter(200);
+	lo_solver.iterative_mode = false;
+	mfem::HypreBoomerAMG amg;
+	amg.SetPrintLevel(0);
+	lo_solver.SetPreconditioner(amg);
 
 	// --- solver for energy balance equation --- 
 	// local_meb_solver is applied on each element independently 
@@ -961,8 +961,7 @@ int main(int argc, char *argv[]) {
 
 	// working vectors for moment algorithm 
 	mfem::Vector em_source(fes.GetVSize()*G), em_source_gr(fes.GetVSize()), abs_source(fes.GetVSize()),
-		residual_T(fes.GetVSize()), source_T(fes.GetVSize()), source_phi(fes.GetVSize());
-	mfem::ParGridFunction That(&fes), That_prev(&fes), dThat(&fes);
+		residual_T(fes.GetVSize()), source_T(fes.GetVSize()), source_phi(fes.GetVSize()), dT(fes.GetVSize());
 
 	mfem::StopWatch cycle_timer; // times cost per time step 
 	// log events across time steps 
@@ -1012,24 +1011,31 @@ int main(int argc, char *argv[]) {
 			totalRinv.Project();
 
 			// form T residual 
-			meb_form.Mult(T, residual_T);
-			Mtot_gray.Mult(Eho, abs_source);
+			gr_emission_form.Mult(T, em_source_gr);
+			auto K = std::unique_ptr<mfem::HypreParMatrix>(lo_disc.GetOperator());
+			lo_solver.SetOperator(*K);
+			lo_solver.Mult(em_source_gr, source_phi);
+			add(Eho, -1.0, source_phi, source_phi);
+			Mtot_gray.Mult(source_phi, abs_source);
 			// add cv/dt T0 
-			add(abs_source, 1.0, T0, abs_source); // abs_source + 1.0 * T0 -> abs_source 
-			add(abs_source, -1.0, residual_T, residual_T); // abs_source - residual_T -> residual_T
+			add(abs_source, 1.0, T0, residual_T); 
 
-			std::cout << "||r|| = " << residual_T.Norml2() << std::endl; 
+			Elo = Eho;
 
 			int inner = 1;
 			double inner_norm;
-			That = 0.0;
-			dThat = 0.0;
 			while (true) {
-				That_prev = That;
+				mfem::ParGridFunction Tprev(T);
+				mfem::ParGridFunction Eloprev(Elo);
+
+				Mtot_gray.Mult(Elo, abs_source);
+				abs_source += residual_T;
+				meb_solver.Mult(abs_source, T);
+
 				// K -> K - dB (dBt)^-1 sigma 
 				auto K = std::unique_ptr<mfem::HypreParMatrix>(lo_disc.GetOperator());
-				const auto &dB = gr_emission_form.GetGradient(That);
-				auto &dBt_inv = meb_form.GetGradient(That);
+				const auto &dB = gr_emission_form.GetGradient(T);
+				auto &dBt_inv = meb_form.GetGradient(T);
 				dBt_inv.Invert();
 				auto product = Mult(dB, dBt_inv).AsSparseMatrix();
 				auto lin_emission = std::unique_ptr<mfem::SparseMatrix>(Mult(product, Mtot_gray.SpMat()));
@@ -1037,53 +1043,33 @@ int main(int argc, char *argv[]) {
 				K->GetDiag(diag);
 				diag.Add(-1.0, *lin_emission);
 
-				meb_form.Mult(That, source_T);
+				meb_form.Mult(T, source_T);
 				if (source_T.CheckFinite() > 0) MFEM_ABORT("inf T source");
 				add(residual_T, -1.0, source_T, source_T);
 				product.Mult(source_T, source_phi);
-				gr_emission_form.Mult(That, em_source_gr);
+				gr_emission_form.Mult(T, em_source_gr);
 				add(em_source_gr, 1.0, source_phi, source_phi);
 
 				if (source_phi.CheckFinite() > 0) MFEM_ABORT("inf phi source");
 
 				lo_solver.SetOperator(*K);
 				lo_solver.Mult(source_phi, Elo);
-				// if (!lo_solver.GetConverged()) {
-					// MFEM_ABORT("lo solver not converged. final norm = " << lo_solver.GetFinalNorm());
-				// }
 
-				Mtot_gray.Mult(Elo, abs_source);
-				add(source_T, 1.0, abs_source, abs_source);
-				dBt_inv.Mult(abs_source, dThat);
-				inner_norm = mfem::GlobalLpNorm(2.0, dThat.Norml2(), MPI_COMM_WORLD);
-				double denom = mfem::GlobalLpNorm(2.0, residual_T.Norml2(), MPI_COMM_WORLD);
-				std::cout << "   norm = " << inner_norm << std::endl; 
-				// inner_norm /= denom;
-				That += dThat;
+				const auto Tnorm = Tprev.ComputeL2Error(Tcoef);
+				const auto Elo_norm = Eloprev.ComputeL2Error(Elo_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Eloprev, Eloprev));
+				inner_norm = Tnorm + Elo_norm;
 
-				// if (inner_norm < 1e-8 or inner >= 40) break;
-				if (inner >= 1) break;
+				if (inner_norm < 1e-10 or inner >= 40) break;
 				inner++;
 			}
 			ValueLog.Log("inner norm", inner_norm);
-			std::cout << "   inner = " << inner << ", norm = " << inner_norm << std::endl; 
+			inner_sum += inner;
 
-			for (int i=0; i<T.Size(); i++) {
-				const auto Tnew = T(i) + That(i);
-				if (Tnew > 0.0) T(i) = Tnew;
-				else {
-					EventLog.Register("under relax T");
-					T(i) = 0.1 * T(i);
-				}
-			}
-			// std::cout << "|| That || = " << That.Normlinf() << std::endl; 
-			// std::cout << That.Max() << std::endl;
-			// T += That;
 			if (T.Min() < 0.0) MFEM_ABORT("negative temperature");
 			const double Enorm = Eprev.ComputeL2Error(Eho_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Eprev, Eprev));
 			const double Tnorm = Tprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tprev, Tprev));
 			norm = Enorm + Tnorm;
-			if (norm < 1e-6 or outer >= 20) break;
+			if (norm < 1e-4 or outer >= 50) break;
 			outer++;
 		}
 
@@ -1193,6 +1179,7 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
 			out << YAML::Key << "outer" << YAML::Value << outer;
 			out << YAML::Key << "norm" << YAML::Value << norm;
+			out << YAML::Key << "total inners" << YAML::Value << inner_sum;
 			io::ProcessGlobalLogs(out);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
