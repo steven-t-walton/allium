@@ -243,7 +243,7 @@ public:
 		{
 			col_offsets.SetSize(3);
 			col_offsets[0] = 0;
-			col_offsets[1] = disc.vfes.GetVSize();
+			col_offsets[1] = disc.vfes.GetTrueVSize();
 			col_offsets[2] = disc.fes.GetVSize();
 			col_offsets.PartialSum();
 

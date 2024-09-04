@@ -879,9 +879,12 @@ ProlongationOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	const mfem::BlockVector block_x(const_cast<mfem::Vector&>(x), col_offsets);
 	mfem::BlockVector block_y(y, row_offsets);
 
+
 	// J -> Jhat 
 	mfem::Array<int> vdofs, br_vdofs;
-	const auto &J = block_x.GetBlock(0);
+	const auto &Jtrue = block_x.GetBlock(0);
+	mfem::Vector J(vfes.GetVSize());
+	vfes.GetRestrictionMatrix()->MultTranspose(Jtrue, J);
 	auto &Jhat = block_y.GetBlock(0);
 	mfem::Array<bool> vdof_marker(vfes.GetVSize());
 	vdof_marker = false;
@@ -910,7 +913,7 @@ ProlongationOperator::MultTranspose(const mfem::Vector &x, mfem::Vector &y) cons
 
 	mfem::Array<int> vdofs, br_vdofs;
 	const auto &Jhat = block_x.GetBlock(0);
-	auto &J = block_y.GetBlock(0);
+	mfem::Vector J(vfes.GetVSize());
 	for (int e=0; e<vfes.GetNE(); e++) {
 		vfes.GetElementVDofs(e, vdofs);
 		rt_br_dofs.GetRow(e, br_vdofs);
@@ -920,6 +923,9 @@ ProlongationOperator::MultTranspose(const mfem::Vector &x, mfem::Vector &y) cons
 			else J(-1-vdof) = -Jhat(br_vdofs[i]);
 		}
 	}
+
+	auto &Jtrue = block_y.GetBlock(0);
+	vfes.GetRestrictionMatrix()->Mult(J, Jtrue);
 
 	block_y.GetBlock(1) = block_x.GetBlock(1);
 }

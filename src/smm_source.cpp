@@ -630,13 +630,13 @@ IndependentRTSMMOperator::IndependentRTSMMOperator(
 	  bc_map(bc_map), lumping(lumping)
 {
 	width = TotalExtent(psi_ext);
-	height = fes.GetVSize() + vfes.GetTrueVSize();
 
 	offsets.SetSize(3);
 	offsets[0] = 0;
 	offsets[1] = vfes.GetTrueVSize();
 	offsets[2] = fes.GetVSize();
 	offsets.PartialSum();
+	height = offsets.Last();
 
 	marshak_bdr_attrs = CreateBdrAttributeMarker<INFLOW>(bc_map);
 	reflect_bdr_attrs = CreateBdrAttributeMarker<REFLECTIVE>(bc_map);
