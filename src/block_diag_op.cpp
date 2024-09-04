@@ -503,7 +503,6 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 	r -= b; 
 	norm0 = norm = initial_norm = ::Norm(r); 
 	if (norm0/::Norm(b) < rel_tol) {
-		EventLog["skipping meb solve"]++;
 		converged = true; 
 		final_iter = 1;
 		final_norm = rel_tol;

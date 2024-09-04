@@ -25,17 +25,17 @@
 #include "smm_coef.hpp"
 #include "coefficient.hpp"
 
-class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
-{
+class IterationMonitor {
 public:
-	mfem::Array<int> iters; 
-	double max_norm = 0.0; 
-
-	ScallionInnerSolverMonitor() { iters.Reserve(50); }
-	void Reset() { iters.SetSize(0); max_norm = 0.0; }
-
+	mfem::Array<int> iters;
+	double max_norm = 0.0;
+	IterationMonitor() { iters.Reserve(50); }
+	void Register(int it, double norm) {
+		iters.Append(it); 
+		max_norm = std::max(norm, max_norm);
+	}
 	friend YAML::Emitter &operator<<(YAML::Emitter &out, 
-		const ScallionInnerSolverMonitor &monitor)
+		const IterationMonitor &monitor)
 	{
 		// for some reason mfem::Array::Sum isn't const... 
 		auto &iters = *const_cast<mfem::Array<int>*>(&monitor.iters); 
@@ -55,74 +55,6 @@ public:
 		return out; 
 	}
 };
-
-class InnerIterativeSolverMonitor : public ScallionInnerSolverMonitor
-{
-private:
-	const mfem::IterativeSolver &solver; 
-public:
-	InnerIterativeSolverMonitor(const mfem::IterativeSolver &s) : solver(s)
-	{ }
-	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
-		if (it==0) {
-			Reset(); 
-			// hack to fix poor design of call to monitor in mfem::NewtonSolver 
-			if (dynamic_cast<const mfem::NewtonSolver*>(iter_solver)) {
-				return; 
-			}
-		}
-		const auto iter = solver.GetNumIterations(); 
-		if (iter > 0) {
-			iters.Append(iter); 
-			max_norm = std::max(solver.GetFinalRelNorm(), max_norm); 
-		}
-	}
-};
-
-class BlockNonlinearSolverMonitor : public ScallionInnerSolverMonitor
-{
-private:
-	const DenseBlockDiagonalNonlinearSolver &solver; 
-public:
-	BlockNonlinearSolverMonitor(const DenseBlockDiagonalNonlinearSolver &s) 
-		: solver(s)
-	{ 
-	}
-	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
-		if (it==0) {
-			Reset(); 
-		}
-		const auto iter = solver.GetNumIterations(); 
-		if (iter >= 0) {
-			iters.Append(iter); 
-			max_norm = std::max(max_norm, solver.GetFinalRelNorm()); 		
-		}
-	}
-};
-
-struct KinsolCallbackData {
-	mfem::IterativeSolverMonitor *monitor = nullptr; 
-	int it = -1; 
-	double norm = -1.0; 
-
-	KinsolCallbackData(mfem::IterativeSolverMonitor *m) : monitor(m) { }
-};
-
-void KinsolCallbackFunction(const char *module, const char *function, char *msg, void *user_data)
-{
-	KinsolCallbackData *data = static_cast<KinsolCallbackData*>(user_data); 
-	if (!data) MFEM_ABORT("did not get callback data struct"); 
-	int it = 0; 
-	double norm = 0.0;
-	if (io::ParseKINSOLMessage(msg, it, norm)) {
-		data->it = it; 
-		data->norm = norm; 
-	}
-	if (data->monitor) {
-		mfem::Vector blank;
-		data->monitor->MonitorResidual(it-1, norm, blank, false); 
-	}
-}
 
 int main(int argc, char *argv[]) {
 	mfem::StopWatch wall_timer; 
@@ -1105,7 +1037,10 @@ int main(int argc, char *argv[]) {
 
 		// --- get new time step solution --- 
 		int outer = 1;
-		int inner_sum = 0;
+		double outer_norm;
+		IterationMonitor lo_monitor, meb_monitor;
+		std::unique_ptr<IterationMonitor> linear_monitor;
+		if (linear_it_solver) linear_monitor = std::make_unique<IterationMonitor>();
 		while (true) {
 			mfem::ParGridFunction Estar(E); // store previous energy density for stopping criterion
 
@@ -1140,6 +1075,7 @@ int main(int argc, char *argv[]) {
 			smm_source += moments0; // time source 
 			timing_log.Log("SMM source", mfem::toc());
 			int inner = 1;
+			double inner_norm;
 			while (true) {
 				mfem::ParGridFunction prev(E); // previous temperature for stopping criterion 
 				mfem::ParGridFunction Tprev(T);
@@ -1153,7 +1089,7 @@ int main(int argc, char *argv[]) {
 				// nonlinearly solve for T given E 
 				meb_solver.Mult(abs_source, T);
 				timing_log.Log("meb solve", mfem::toc());
-				ValueLog.Log("meb residual", meb_solver.GetFinalRelNorm());
+				meb_monitor.Register(meb_solver.GetNumIterations(), meb_solver.GetFinalRelNorm());
 
 				if (implicit_opacity) {
 					total.Project();
@@ -1207,6 +1143,9 @@ int main(int argc, char *argv[]) {
 				lo_solver->Mult(lo_source, moments); // uses preconditioned CG to invert Schur complement 
 				if (linear_it_solver and !linear_it_solver->GetConverged() and root)
 					EventLog.Register("linear solver not converged");
+				if (linear_it_solver) {
+					linear_monitor->Register(linear_it_solver->GetNumIterations(), linear_it_solver->GetFinalRelNorm());
+				}
 				if (floor_radE_LO) {
 					for (int i=0; i<E.Size(); i++) {
 						if (E(i) < 1e-10) {
@@ -1222,22 +1161,19 @@ int main(int argc, char *argv[]) {
 				// if (norm < 1e-8 or inner >= 10) break;
 				const auto norm = prev.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, prev, prev));
 				const auto Tnorm = Tprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tprev, Tprev));
-				if (norm + Tnorm < lo_solver_opts.reltol) break; 
+				inner_norm = norm + Tnorm;
+				if (inner_norm < lo_solver_opts.reltol) break; 
 				if (inner >= lo_solver_opts.max_iter) {
-					EventLog.Register("inner solve not converged");
+					if (root) EventLog.Register("inner solve not converged");
 					break;
 				}
 				inner++;
 			}
+			lo_monitor.Register(inner, inner_norm);
 			if (implicit_opacity)
 				Linv.AssembleLocalMatrices();
-			inner_sum += inner;	// count total inner iterations 
-			const double norm = Estar.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Estar, Estar));
-			if (norm < ho_solver_opts.reltol) break;
-			if (outer >= ho_solver_opts.max_iter) {
-				EventLog.Register("outer solver not converged");
-				break;
-			}
+			outer_norm = Estar.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Estar, Estar));
+			if (outer_norm < ho_solver_opts.reltol or outer >= ho_solver_opts.max_iter) break;
 			outer++;
 		}
 
@@ -1341,7 +1277,9 @@ int main(int argc, char *argv[]) {
 
 		// --- output progress to terminal --- 
 		log.Log("max outer", outer);
-		log.Log("max inner sum", inner_sum);
+		log.Log("max inner sum", lo_monitor.iters.Max());
+		if (linear_monitor)
+			log.Log("max linear iterations", linear_monitor->iters.Max());
 		const double radE_norm = sqrt(mfem::InnerProduct(MPI_COMM_WORLD, E, E)) / constants::SpeedOfLight; 
 		out << YAML::BeginMap; 
 			out << YAML::Key << "cycle" << YAML::Value << cycle; 
@@ -1349,7 +1287,11 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "time step size" << YAML::Value << time_step_old; 
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
 			out << YAML::Key << "outer" << YAML::Value << outer;
-			out << YAML::Key << "inner sum" << YAML::Value << inner_sum;
+			out << YAML::Key << "norm" << YAML::Value << outer_norm;
+			out << YAML::Key << "lo solve" << YAML::Value << lo_monitor;
+			if (linear_monitor)
+				out << YAML::Key << "linear solver" << YAML::Value << *linear_monitor;
+			out << YAML::Key << "energy balance solver" << YAML::Value << meb_monitor;
 			out << YAML::Key << "consistency" << YAML::Value << YAML::BeginMap;
 				out << YAML::Key << "energy density" << YAML::Value << io::FormatScientific(consistency_E);
 				out << YAML::Key << "flux" << YAML::Value << io::FormatScientific(consistency_F);
