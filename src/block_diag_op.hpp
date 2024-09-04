@@ -5,39 +5,49 @@
 // stores diagonal blocks in an array to avoid CSR indexing 
 // Mult loops through elements and applies the block 
 // associated with that element 
-class BlockDiagonalByElementOperator : public mfem::Operator
+class DenseBlockDiagonalOperator : public mfem::Operator
 {
-private:
-	const mfem::FiniteElementSpace &fes; 
-	mfem::Array<mfem::DenseMatrix*> data; 
+protected:
+	const mfem::Table *row_table, *col_table;
+	mfem::Array<mfem::DenseMatrix*> data;
 public:
-	BlockDiagonalByElementOperator(const mfem::FiniteElementSpace &f);
-	~BlockDiagonalByElementOperator(); 
-	const mfem::FiniteElementSpace *FESpace() const { return &fes; }
-	void SetElementMatrix(int elem, const mfem::DenseMatrix &elmat); 
-	const mfem::DenseMatrix &GetElementMatrix(int elem) const; 
-	mfem::DenseMatrix &GetElementMatrix(int elem); 
-
-	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
+	DenseBlockDiagonalOperator(const mfem::Table &row_table, const mfem::Table &col_table);
+	DenseBlockDiagonalOperator(const mfem::FiniteElementSpace &fes);
+	DenseBlockDiagonalOperator(const mfem::FiniteElementSpace &tr_fes, const mfem::FiniteElementSpace &te_fes);
+	int NumBlocks() const { return data.Size(); }
+	const mfem::Table &GetRowDofs() const { return *row_table; }
+	const mfem::Table &GetColDofs() const { return *col_table; }
+	const mfem::DenseMatrix &GetBlock(int block) const;
+	mfem::DenseMatrix &GetBlock(int block);
+	void SetBlock(int block, const mfem::DenseMatrix &elmat);
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const override;
+	void AddMult(const mfem::Vector &x, mfem::Vector &y, const double a=1.0) const override;
 
 	void Invert();
-	// assume RVO works... 
-	mfem::SparseMatrix AsSparseMatrix() const;
+	mfem::SparseMatrix *AsSparseMatrix() const;
 };
 
-// assume RVO works... 
-BlockDiagonalByElementOperator Mult(const BlockDiagonalByElementOperator &A, const BlockDiagonalByElementOperator &B);
+void add(double a, const DenseBlockDiagonalOperator &A, 
+	double b, const DenseBlockDiagonalOperator &B, DenseBlockDiagonalOperator &C);
+void Mult(const DenseBlockDiagonalOperator &A, const DenseBlockDiagonalOperator &B, 
+	DenseBlockDiagonalOperator &C);
+void Mult(const DenseBlockDiagonalOperator &A, const mfem::SparseMatrix &B, 
+	DenseBlockDiagonalOperator &C);
+mfem::SparseMatrix *Mult(const DenseBlockDiagonalOperator &A, const mfem::SparseMatrix &B);
+mfem::SparseMatrix *TripleProduct(const DenseBlockDiagonalOperator &A, const DenseBlockDiagonalOperator &B, 
+	const mfem::SparseMatrix &C);
+mfem::SparseMatrix *RAP(const DenseBlockDiagonalOperator &A, const mfem::SparseMatrix &P);
 
 // apply a linear solver to each element 
 // local solver is intended to be one of mfem::DenseMatrixInverse 
 // or DiagonalDenseMatrixInverse
-class BlockDiagonalByElementSolver : public mfem::Solver
+class DenseBlockDiagonalSolver : public mfem::Solver
 {
 private:
 	mfem::Solver &local_solver; 
-	const BlockDiagonalByElementOperator *op = nullptr; 
+	const DenseBlockDiagonalOperator *op = nullptr; 
 public:
-	BlockDiagonalByElementSolver(mfem::Solver &ls) 
+	DenseBlockDiagonalSolver(mfem::Solver &ls) 
 		: local_solver(ls), mfem::Solver(0, false)
 	{ }
 	void SetOperator(const mfem::Operator &op) override; 
@@ -58,30 +68,30 @@ public:
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
 };
 
-class BlockDiagonalByElementNonlinearForm : public mfem::NonlinearForm
+class DenseBlockDiagonalNonlinearForm : public mfem::NonlinearForm
 {
 private:
-	mutable BlockDiagonalByElementOperator *grad = nullptr;
+	mutable DenseBlockDiagonalOperator *grad = nullptr;
 public:
-	BlockDiagonalByElementNonlinearForm(mfem::FiniteElementSpace *f)
+	DenseBlockDiagonalNonlinearForm(mfem::FiniteElementSpace *f)
 		: mfem::NonlinearForm(f)
 	{ }
-	~BlockDiagonalByElementNonlinearForm(); 
+	~DenseBlockDiagonalNonlinearForm(); 
 	// reimplement to fix bug in mfem 
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
 	// reimplement to return block diagonal operator 
-	BlockDiagonalByElementOperator &GetGradient(const mfem::Vector &x) const override;
+	DenseBlockDiagonalOperator &GetGradient(const mfem::Vector &x) const override;
 
 	// restrict the global nonlinear form to a single element 
 	// facilitates element-local solves 
 	class LocalOperator : public mfem::Operator 
 	{
 	private:
-		const BlockDiagonalByElementNonlinearForm &form; 
+		const DenseBlockDiagonalNonlinearForm &form; 
 		int element;
 		mutable mfem::DenseMatrix grad; 
 	public:
-		LocalOperator(const BlockDiagonalByElementNonlinearForm &form, int e) 
+		LocalOperator(const DenseBlockDiagonalNonlinearForm &form, int e) 
 			: form(form), element(e)
 		{
 			height = width = form.fes->GetFE(element)->GetDof() * form.fes->GetVDim(); 
@@ -139,18 +149,18 @@ public:
 // collects convergence information from local solve 
 // reported statistics are the maximum values achieved across 
 // all elements 
-class BlockDiagonalByElementNonlinearSolver : public mfem::Solver
+class DenseBlockDiagonalNonlinearSolver : public mfem::Solver
 {
 private:
 	mfem::IterativeSolver &local_solver; 
-	const BlockDiagonalByElementNonlinearForm *form = nullptr; 
+	const DenseBlockDiagonalNonlinearForm *form = nullptr; 
 
 	// conform to mfem::IterativeSolver interface 
 	mutable bool converged = false; 
 	mutable int final_iter = -1;
 	mutable double final_rel_norm = -1.0, final_norm = -1.0; 
 public:
-	BlockDiagonalByElementNonlinearSolver(mfem::IterativeSolver &ls)
+	DenseBlockDiagonalNonlinearSolver(mfem::IterativeSolver &ls)
 		: local_solver(ls)
 	{ }
 	void SetOperator(const mfem::Operator &op) override;

@@ -548,3 +548,378 @@ mfem::BlockOperator *RTDiffusionDiscretization::GetOperator() const
 	op->owns_blocks = 1;
 	return op;
 }
+
+HybridizedRTDiffusionDiscretization::HybridizedRTDiffusionDiscretization(
+	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	mfem::ParFiniteElementSpace &ifes, mfem::Coefficient &total, 
+	mfem::Coefficient &absorption, const BoundaryConditionMap &bc_map, 
+	int lumping)
+	: ifes(ifes), BlockMomentDiscretization(fes, vfes, total, absorption, bc_map, lumping)
+{
+	rt_br_dofs.MakeI(fes.GetNE());
+	mfem::Array<int> vdofs, dofs;
+	for (int e=0; e<fes.GetNE(); e++) {
+		vfes.GetElementVDofs(e, vdofs);
+		rt_br_dofs.AddColumnsInRow(e, vdofs.Size());
+	}
+	rt_br_dofs.MakeJ();
+	int dof_count = 0;
+	for (int e=0; e<fes.GetNE(); e++) {
+		vfes.GetElementVDofs(e, vdofs);
+		for (int i=0; i<vdofs.Size(); i++) {
+			rt_br_dofs.AddConnection(e, dof_count++);
+		}
+	}
+	rt_br_dofs.ShiftUpI();
+
+	mfem::Array<int> ess_tdof_list;
+	vfes.GetEssentialTrueDofs(reflect_bdr_attrs, ess_tdof_list);
+	mfem::Array<int> tdof_marker_local(vfes.GetTrueVSize());
+	tdof_marker_local = 1;
+	for (int i=0; i<ess_tdof_list.Size(); i++) {
+		tdof_marker_local[ess_tdof_list[i]] = 0;
+	}
+
+	mfem::Array<int> tdof_marker(vfes.GetVSize());
+	vfes.Dof_TrueDof_Matrix()->BooleanMult(1, tdof_marker_local, 0, tdof_marker);
+
+	mfem::Array<int> br_vdofs;
+	br_tdof_marker.SetSize(dof_count);
+	br_tdof_marker = 0;
+	for (int e=0; e<fes.GetNE(); e++) {
+		vfes.GetElementVDofs(e, vdofs);
+		mfem::FiniteElementSpace::AdjustVDofs(vdofs);
+		rt_br_dofs.GetRow(e, br_vdofs);
+		for (int i=0; i<vdofs.Size(); i++) {
+			br_tdof_marker[br_vdofs[i]] = !tdof_marker[vdofs[i]];
+		}
+	}
+
+	offsets.SetSize(4);
+	offsets[0] = 0;
+	offsets[1] = dof_count;
+	offsets[2] = fes.GetVSize();
+	offsets[3] = ifes.GetVSize();
+	offsets.PartialSum();
+}
+
+mfem::BlockOperator *HybridizedRTDiffusionDiscretization::GetOperator() const
+{
+	const bool lump_mass = IsMassLumped(lumping);
+	const bool lump_grad = IsGradientLumped(lumping);
+	const bool lump_face = IsFaceLumped(lumping);
+
+	mfem::BilinearFormIntegrator *bfi;
+
+	mfem::ParBilinearForm Mtform(&vfes);
+	mfem::ProductCoefficient total3(3.0, total);
+	mfem::ConstantCoefficient marshak_coef(1.0/alpha);
+	bfi = new mfem::VectorFEMassIntegrator(total3);
+	if (lump_mass) bfi = new QuadratureLumpedIntegrator(bfi);
+	Mtform.AddDomainIntegrator(bfi);
+	bfi = new mfem::BoundaryMassIntegrator(marshak_coef);
+	if (lump_face) bfi = new QuadratureLumpedIntegrator(bfi);
+	Mtform.AddBoundaryIntegrator(bfi, marshak_bdr_attrs);
+
+	mfem::ParMixedBilinearForm Dform(&vfes, &fes);
+	bfi = new mfem::VectorFEDivergenceIntegrator;
+	if (lump_grad) bfi = new QuadratureLumpedIntegrator(bfi);
+	Dform.AddDomainIntegrator(bfi);
+
+	mfem::ParBilinearForm Maform(&fes);
+	bfi = new mfem::MassIntegrator(absorption);
+	if (lump_mass) bfi = new QuadratureLumpedIntegrator(bfi);
+	Maform.AddDomainIntegrator(bfi);
+
+	const auto &dg_dofs = fes.GetElementToDofTable();
+
+	auto *Mt = new DenseBlockDiagonalOperator(rt_br_dofs, rt_br_dofs);
+	auto *D = new DenseBlockDiagonalOperator(dg_dofs, rt_br_dofs);
+	auto *G = new DenseBlockDiagonalOperator(rt_br_dofs, dg_dofs);
+	auto *Ma = new DenseBlockDiagonalOperator(dg_dofs, dg_dofs);
+
+	mfem::DenseMatrix elmat;
+	for (int e=0; e<fes.GetNE(); e++) {
+		Mtform.ComputeElementMatrix(e, elmat);
+		Mt->SetBlock(e, elmat);		
+	}
+
+	auto &mesh = *vfes.GetParMesh();
+	for (int be=0; be<fes.GetNBE(); be++) {
+		Mtform.ComputeBdrElementMatrix(be, elmat);
+		int el, info, vdim = vfes.GetVDim();
+		mesh.GetBdrElementAdjacentElement(be, el, info);
+		mfem::Array<int> e2f(rt_br_dofs.RowSize(el)), lvdofs(elmat.Height());
+		e2f = -1;
+		vfes.FEColl()->SubDofOrder(mesh.GetElementBaseGeometry(el), mesh.Dimension()-1, info, lvdofs);
+		mfem::Ordering::DofsToVDofs<mfem::Ordering::byNODES>(e2f.Size()/vdim, vdim, lvdofs);
+		elmat.AdjustDofDirection(lvdofs);
+		mfem::FiniteElementSpace::AdjustVDofs(lvdofs);
+		for (int i=0; i<lvdofs.Size(); i++) {
+			e2f[lvdofs[i]] = i;
+		}
+		auto &mt = Mt->GetBlock(el);
+		for (int i=0; i<mt.Height(); i++) {
+			const auto fi = e2f[i]; 
+			if (fi < 0) continue;
+			for (int j=0; j<mt.Width(); j++) {
+				const auto fj = e2f[j];
+				if (fj < 0) continue;
+
+				mt(i,j) += elmat(fi,fj);
+			}
+		}
+	}
+
+	mfem::Array<int> br_vdofs;
+	for (int e=0; e<fes.GetNE(); e++) {
+		mfem::DenseMatrix ma, d;
+		auto &mt = Mt->GetBlock(e);
+		Dform.ComputeElementMatrix(e, d);
+		Maform.ComputeElementMatrix(e, ma);
+
+		// apply reflection condition 
+		rt_br_dofs.GetRow(e, br_vdofs);
+		for (int i=0; i<mt.Height(); i++) {
+			if (br_tdof_marker[br_vdofs[i]]) {
+				for (int j=0; j<mt.Width(); j++) {
+					mt(i,j) = 0.0;
+					mt(j,i) = 0.0;
+				}
+				mt(i,i) = 1.0;
+			}
+		}
+
+		for (int j=0; j<d.Width(); j++) {
+			if (br_tdof_marker[br_vdofs[j]]) {
+				for (int i=0; i<d.Height(); i++) {
+					d(i,j) = 0.0;
+				}
+			}
+		}
+
+		Mt->SetBlock(e, mt);
+		D->SetBlock(e, d);
+		Ma->SetBlock(e, ma);
+
+		mfem::DenseMatrix g(d, 'T');
+		g *= -1.0;
+		G->SetBlock(e, g);
+	}
+
+	mfem::NormalTraceJumpIntegrator constraint_bfi;
+	ifes.ExchangeFaceNbrData();
+	auto *Ct = new mfem::SparseMatrix(rt_br_dofs.Size_of_connections(), ifes.GetVSize());
+	mfem::Array<int> br_vdofs1, br_vdofs2, i_vdofs;
+	for (int f=0; f<mesh.GetNumFaces(); f++) {
+		const auto info = mesh.GetFaceInformation(f);
+		if (info.IsBoundary()) continue;
+		auto *trans = mesh.GetFaceElementTransformations(f);
+
+		rt_br_dofs.GetRow(trans->Elem1No, br_vdofs1);
+		const auto length1 = br_vdofs1.Size();
+		auto length2 = 0;
+		if (!info.IsShared()) {
+			rt_br_dofs.GetRow(trans->Elem2No, br_vdofs2);
+			length2 = br_vdofs2.Size();
+		}
+
+		br_vdofs.SetSize(length1 + length2);
+		for (int i=0; i<length1; i++) {
+			br_vdofs[i] = br_vdofs1[i];
+		}
+		if (length2) {
+			for (int i=0; i<length2; i++) {
+				br_vdofs[i+length1] = br_vdofs2[i];
+			}			
+		}
+		ifes.GetFaceVDofs(f, i_vdofs);
+
+		int elem2no = info.IsShared() ? trans->Elem1No : trans->Elem2No;
+		constraint_bfi.AssembleFaceMatrix(*ifes.GetFaceElement(f), 
+			*vfes.GetFE(trans->Elem1No), *vfes.GetFE(elem2no), *trans, elmat);
+		elmat.Threshold(1e-12 * elmat.MaxMaxNorm());
+		Ct->AddSubMatrix(br_vdofs, i_vdofs, elmat, 1);
+	}
+	Ct->Finalize();
+
+	auto *op = new mfem::BlockOperator(offsets);
+	op->SetBlock(0,0, Mt);
+	op->SetBlock(0,1, G);
+	op->SetBlock(1,0, D);
+	op->SetBlock(1,1, Ma);
+	op->SetBlock(2,0, new mfem::TransposeOperator(*Ct));
+	op->SetBlock(0,2, Ct);
+	op->owns_blocks = 1;
+	return op;
+}
+
+template<typename T>
+const T &GetBlock(const mfem::BlockOperator &op, int i, int j)
+{
+	const T *ptr = dynamic_cast<const T*>(&op.GetBlock(i,j));
+	if (!ptr) MFEM_ABORT("operator does not match type");
+	return *ptr;
+}
+
+void HybridizedRTDiffusionDiscretization::
+HatSolver::SetOperator(const mfem::Operator &op)
+{
+	block_op = dynamic_cast<const mfem::BlockOperator*>(&op);
+	if (!block_op) MFEM_ABORT("must be a block operator");
+
+	height = width = block_op->Height();
+
+	const auto &Mt = GetBlock<DenseBlockDiagonalOperator>(*block_op, 0, 0);
+	const auto &D = GetBlock<DenseBlockDiagonalOperator>(*block_op, 1, 0);
+	const auto &G = GetBlock<DenseBlockDiagonalOperator>(*block_op, 0, 1);
+	const auto &Ma = GetBlock<DenseBlockDiagonalOperator>(*block_op, 1, 1);
+	const auto &Ct = GetBlock<mfem::SparseMatrix>(*block_op, 0, 2);
+
+	const auto &rt_br_dofs = Mt.GetRowDofs();
+	const auto &dg_dofs = Ma.GetRowDofs();
+
+	mfem::DenseMatrix A;
+	auto *W = new DenseBlockDiagonalOperator(rt_br_dofs, rt_br_dofs);
+	auto *X = new DenseBlockDiagonalOperator(rt_br_dofs, dg_dofs);
+	auto *Y = new DenseBlockDiagonalOperator(dg_dofs, rt_br_dofs);
+	auto *Z = new DenseBlockDiagonalOperator(dg_dofs, dg_dofs);
+	for (int e=0; e<Mt.NumBlocks(); e++) {
+		const auto &mt = Mt.GetBlock(e);
+		const auto &d = D.GetBlock(e);
+		const auto &g = G.GetBlock(e);
+		const auto &ma = Ma.GetBlock(e);
+
+		const auto Jsize = mt.Height();
+		const auto phi_size = ma.Height();
+
+		A.SetSize(Jsize + phi_size);
+		A.SetSubMatrix(0,0, mt);
+		A.SetSubMatrix(0,Jsize, g);
+		A.SetSubMatrix(Jsize,0, d);
+		A.SetSubMatrix(Jsize, Jsize, ma);
+		A.Invert();
+
+		auto &w = W->GetBlock(e);
+		auto &x = X->GetBlock(e);
+		auto &y = Y->GetBlock(e);
+		auto &z = Z->GetBlock(e);
+		A.GetSubMatrix(0,Jsize, w);
+		A.GetSubMatrix(0,Jsize, Jsize, Jsize+phi_size, x);
+		A.GetSubMatrix(Jsize,Jsize+phi_size, 0, Jsize, y);
+		A.GetSubMatrix(Jsize,Jsize+phi_size, z);
+	}
+
+	Ainv = std::make_unique<mfem::BlockOperator>(block_op->RowOffsets());
+	Ainv->SetBlock(0,0, W);
+	Ainv->SetBlock(0,1, X);
+	Ainv->SetBlock(1,0, Y);
+	Ainv->SetBlock(1,1, Z);
+	Ainv->owns_blocks = 1;
+
+	mfem::SparseMatrix *H_tmp = RAP(*W, Ct);
+	auto *Hlocal = new mfem::SparseMatrix(H_tmp->Height());
+	{
+		auto *I = H_tmp->GetI();
+		auto *J = H_tmp->GetJ();
+		auto *data = H_tmp->GetData();
+		for (int row=0; row<H_tmp->Height(); row++) {
+			for (int i=I[row]; i<I[row+1]; i++) {
+				const auto col = J[i]; 
+				const auto d = data[i];
+				Hlocal->Set(row, col, d);
+			}
+		}
+	}
+	Hlocal->Finalize(1, true);
+	delete H_tmp;
+
+	mfem::HypreParMatrix pH_local(ifes.GetComm(), ifes.GlobalVSize(), ifes.GetDofOffsets(), Hlocal);
+	pH_local.SetOwnerFlags(true, true, true);
+	H.reset(mfem::RAP(&pH_local, ifes.Dof_TrueDof_Matrix()));
+
+	schur_solver.SetOperator(*H);
+}
+
+void HybridizedRTDiffusionDiscretization::
+HatSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
+{
+	mfem::BlockVector block_x(x, block_op->RowOffsets());
+	auto &Jhat = block_x.GetBlock(0);
+	auto &phi = block_x.GetBlock(1);
+	auto &lam = block_x.GetBlock(2);
+
+	const auto &Ct = GetBlock<mfem::SparseMatrix>(*block_op, 0, 2);
+
+	mfem::BlockVector Ainv_b(Ainv->RowOffsets());
+	Ainv_b = 0.0;
+	mfem::Vector C_Ainv_b(Ct.Width()), C_Ainv_b_true(ifes.GetTrueVSize()), lam_true(ifes.GetTrueVSize());
+	Ainv->Mult(b, Ainv_b);
+
+	Ct.MultTranspose(Ainv_b.GetBlock(0), C_Ainv_b);
+	ifes.GetProlongationMatrix()->MultTranspose(C_Ainv_b, C_Ainv_b_true);
+
+	schur_solver.Mult(C_Ainv_b_true, lam_true);
+	ifes.GetProlongationMatrix()->Mult(lam_true, lam);
+
+	mfem::Vector Ct_lam(Ct.Height());
+	Ct.Mult(lam, Ct_lam);
+	Ainv->GetBlock(0,0).Mult(Ct_lam, Jhat);
+	add(Ainv_b.GetBlock(0), -1.0, Jhat, Jhat);
+
+	Ainv->GetBlock(1,0).Mult(Ct_lam, phi);
+	add(Ainv_b.GetBlock(1), -1.0, phi, phi);
+}
+
+void HybridizedRTDiffusionDiscretization::
+ProlongationOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
+{
+	assert(x.Size() == Width()); 
+	assert(y.Size() == Height());
+	const mfem::BlockVector block_x(const_cast<mfem::Vector&>(x), col_offsets);
+	mfem::BlockVector block_y(y, row_offsets);
+
+	// J -> Jhat 
+	mfem::Array<int> vdofs, br_vdofs;
+	const auto &J = block_x.GetBlock(0);
+	auto &Jhat = block_y.GetBlock(0);
+	mfem::Array<bool> vdof_marker(vfes.GetVSize());
+	vdof_marker = false;
+	mfem::Vector elvec;
+	for (int e=0; e<vfes.GetNE(); e++) {
+		vfes.GetElementVDofs(e, vdofs);
+		rt_br_dofs.GetRow(e, br_vdofs);
+		J.GetSubVector(vdofs, elvec);
+		for (int i=0; i<vdofs.Size(); i++) {
+			const auto vdof = mfem::FiniteElementSpace::DecodeDof(vdofs[i]);
+			if (vdof_marker[vdof]) { elvec(i) = 0.0; }
+			else vdof_marker[vdof] = true;
+		}
+		Jhat.SetSubVector(br_vdofs, elvec);
+	}
+
+	block_y.GetBlock(1) = block_x.GetBlock(1);
+	block_y.GetBlock(2) = 0.0;
+}
+
+void HybridizedRTDiffusionDiscretization::
+ProlongationOperator::MultTranspose(const mfem::Vector &x, mfem::Vector &y) const
+{
+	const mfem::BlockVector block_x(const_cast<mfem::Vector&>(x), row_offsets);
+	mfem::BlockVector block_y(y, col_offsets);
+
+	mfem::Array<int> vdofs, br_vdofs;
+	const auto &Jhat = block_x.GetBlock(0);
+	auto &J = block_y.GetBlock(0);
+	for (int e=0; e<vfes.GetNE(); e++) {
+		vfes.GetElementVDofs(e, vdofs);
+		rt_br_dofs.GetRow(e, br_vdofs);
+		for (int i=0; i<vdofs.Size(); i++) {
+			const auto vdof = vdofs[i];
+			if (vdof >= 0) J(vdof) = Jhat(br_vdofs[i]);
+			else J(-1-vdof) = -Jhat(br_vdofs[i]);
+		}
+	}
+
+	block_y.GetBlock(1) = block_x.GetBlock(1);
+}

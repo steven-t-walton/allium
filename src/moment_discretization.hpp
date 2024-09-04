@@ -2,6 +2,7 @@
 
 #include "mfem.hpp"
 #include "bdr_conditions.hpp"
+#include "block_diag_op.hpp"
 
 class MomentDiscretization
 {
@@ -195,4 +196,94 @@ public:
 		mfem::Coefficient &total, mfem::Coefficient &absorption, 
 		const BoundaryConditionMap &bc_map, int lumping);
 	mfem::BlockOperator *GetOperator() const override;	
+};
+
+class HybridizedRTDiffusionDiscretization : public BlockMomentDiscretization {
+private:
+	mfem::ParFiniteElementSpace &ifes;
+	mfem::Array<int> br_tdof_marker;
+	mfem::Table rt_br_dofs;
+public:
+	HybridizedRTDiffusionDiscretization(
+		mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+		mfem::ParFiniteElementSpace &ifes, mfem::Coefficient &total, 
+		mfem::Coefficient &absorption, const BoundaryConditionMap &bc_map, 
+		int lumping);
+	mfem::BlockOperator *GetOperator() const override;
+
+	class HatSolver : public mfem::Solver
+	{
+	private:
+		mfem::ParFiniteElementSpace &ifes;
+		mfem::Solver &schur_solver;
+
+		mfem::Array<int> offsets;
+		const mfem::BlockOperator *block_op = nullptr;
+		HypreParMatrixPtr H;
+		std::unique_ptr<mfem::BlockOperator> Ainv;
+	public:
+		HatSolver(mfem::ParFiniteElementSpace &ifes, mfem::Solver &schur_solver)
+			: ifes(ifes), schur_solver(schur_solver)
+		{ }
+		void SetOperator(const mfem::Operator &op) override;
+		void Mult(const mfem::Vector &b, mfem::Vector &x) const override;
+	};
+
+	// maps [J,phi] -> [Jhat, phi, lambda] with Mult 
+	// and [Jhat, phi, lambda] -> [J,phi] with MultTranspose
+	class ProlongationOperator : public mfem::Operator
+	{
+	private:
+		mfem::ParFiniteElementSpace &vfes;
+		const mfem::Table &rt_br_dofs;
+		mfem::Array<int> row_offsets, col_offsets;
+	public:
+		ProlongationOperator(const HybridizedRTDiffusionDiscretization &disc)
+			: vfes(disc.vfes), rt_br_dofs(disc.rt_br_dofs)
+		{
+			col_offsets.SetSize(3);
+			col_offsets[0] = 0;
+			col_offsets[1] = disc.vfes.GetVSize();
+			col_offsets[2] = disc.fes.GetVSize();
+			col_offsets.PartialSum();
+
+			row_offsets.SetSize(4);
+			row_offsets[0] = 0;
+			row_offsets[1] = disc.rt_br_dofs.Size_of_connections();
+			row_offsets[2] = disc.fes.GetVSize();
+			row_offsets[3] = disc.ifes.GetVSize();
+			row_offsets.PartialSum();
+
+			height = row_offsets.Last();
+			width = col_offsets.Last();
+		}
+		const mfem::Array<int> &RowOffsets() const { return row_offsets; }
+		const mfem::Array<int> &ColOffsets() const { return col_offsets; }
+		void Mult(const mfem::Vector &x, mfem::Vector &y) const override;
+		void MultTranspose(const mfem::Vector &x, mfem::Vector &y) const override;
+	};
+
+	class Solver : public mfem::Solver
+	{
+	private:
+		HatSolver solver;
+		ProlongationOperator P;
+		std::unique_ptr<mfem::RAPOperator> rap;
+	public:
+		Solver(const HybridizedRTDiffusionDiscretization &disc, mfem::Solver &schur_solver)
+			: solver(disc.ifes, schur_solver), P(disc)
+		{
+		}
+		const mfem::Array<int> &GetOffsets() const { return P.ColOffsets(); }
+		void SetOperator(const mfem::Operator &op) override
+		{
+			solver.SetOperator(op);
+			rap = std::make_unique<mfem::RAPOperator>(P, solver, P);
+			height = width = rap->Height();
+		}
+		void Mult(const mfem::Vector &b, mfem::Vector &x) const override
+		{
+			rap->Mult(b, x);
+		}
+	};
 };

@@ -402,6 +402,9 @@ int main(int argc, char *argv[]) {
 	mfem::RT_FECollection rtfec(fe_order, dim);
 	mfem::ParFiniteElementSpace rtfes(&mesh, &rtfec);
 
+	mfem::DG_Interface_FECollection ifec(fe_order, dim);
+	mfem::ParFiniteElementSpace ifes(&mesh, &ifec);
+
 	// piecewise constant used for plotting and storing cross section data 
 	mfem::L2_FECollection fec0(0, dim); 
 	mfem::ParFiniteElementSpace fes0(&mesh, &fec0); 
@@ -879,7 +882,31 @@ int main(int argc, char *argv[]) {
 			block_x.Update(offsets);
 			auto *block_extract = new SubBlockExtractionOperator(block_x, 1);
 			smm = std::make_unique<TripleProductOperator>(
-				block_extract, inner_solver.get(), source_op, true, false, true); 
+				block_extract, inner_solver.get(), source_op, true, false, true); 			
+		}
+		else if (type == "HRTSMM") {
+			J.SetSpace(&rtfes);
+			auto *disc = new HybridizedRTDiffusionDiscretization(fes, rtfes, ifes, total, absorption, bc_map, lumping);
+			disc->SetAlpha(alpha);
+			lo_op.reset(disc->GetOperator());
+
+			if (inner_it_solver) {
+				amg = std::make_unique<mfem::HypreBoomerAMG>();
+				inner_it_solver->SetPreconditioner(*amg);
+			}
+
+			auto *hyb_solver = new HybridizedRTDiffusionDiscretization::Solver(*disc, *inner_solver);
+			hyb_solver->SetOperator(*lo_op);
+
+			auto energy = MultiGroupEnergyGrid::MakeGray(0,1.0);
+			auto *source_op = new IndependentRTSMMOperator(fes, rtfes, *quad, psi_ext, energy, 
+				source, inflow, alpha, bc_map, lumping);
+
+			offsets = hyb_solver->GetOffsets();
+			block_x.Update(offsets);
+			auto *block_extract = new SubBlockExtractionOperator(block_x, 1);
+			smm = std::make_unique<TripleProductOperator>(
+				block_extract, hyb_solver, source_op, true, true, true); 
 		}
 		else { MFEM_ABORT("acceleration type " << type << " not defined"); }
 

@@ -69,9 +69,8 @@ public:
 		weight.Eval(weight_eval, trans, ip);
 		const auto denom = weight_eval.Sum(); 
 		const auto numer = sigma_eval*weight_eval;
-		assert(denom > 0.0);
-		assert(numer >= 0.0);
-		return numer / denom;
+		if (numer == 0.0) return 0.0;
+		else return numer/denom;
 	}
 };
 

@@ -82,9 +82,9 @@ public:
 class BlockNonlinearSolverMonitor : public ScallionInnerSolverMonitor
 {
 private:
-	const BlockDiagonalByElementNonlinearSolver &solver; 
+	const DenseBlockDiagonalNonlinearSolver &solver; 
 public:
-	BlockNonlinearSolverMonitor(const BlockDiagonalByElementNonlinearSolver &s) 
+	BlockNonlinearSolverMonitor(const DenseBlockDiagonalNonlinearSolver &s) 
 		: solver(s)
 	{ 
 	}
@@ -786,7 +786,7 @@ int main(int argc, char *argv[]) {
 	// energy balance nonlinear form 
 	// cv/dt + sigma B(T)
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
-	BlockDiagonalByElementNonlinearForm meb_form(&fes);
+	DenseBlockDiagonalNonlinearForm meb_form(&fes);
 	if (implicit_opacity)
 		meb_form.AddDomainIntegrator(
 			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
@@ -800,7 +800,7 @@ int main(int argc, char *argv[]) {
 	PlanckEmissionNonlinearForm emission_form(fes, phi_ext, planck_int, IsMassLumped(lump));
 
 	// gray emission 
-	BlockDiagonalByElementNonlinearForm gr_emission_form(&fes);
+	DenseBlockDiagonalNonlinearForm gr_emission_form(&fes);
 	if (implicit_opacity)
 		gr_emission_form.AddDomainIntegrator(
 			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
@@ -928,7 +928,7 @@ int main(int argc, char *argv[]) {
 	EnergyBalanceNewtonSolver local_meb_solver;
 	io::SetIterativeSolverOptions(meb_solver_table, local_meb_solver);
 	local_meb_solver.SetPreconditioner(*local_mat_inv);
-	BlockDiagonalByElementNonlinearSolver meb_solver(local_meb_solver);
+	DenseBlockDiagonalNonlinearSolver meb_solver(local_meb_solver);
 	meb_solver.SetOperator(meb_form); // solves meb_form = (cv/dt + B(.))T 
 	out << YAML::Key << "meb solver" << YAML::Value << meb_solver_table;
 
@@ -1078,6 +1078,7 @@ int main(int argc, char *argv[]) {
 	// working vectors for moment algorithm 
 	mfem::Vector em_source(fes.GetVSize()*G), em_source_gr(fes.GetVSize()), abs_source(fes.GetVSize());
 	mfem::BlockVector smm_source(lo_disc->GetOffsets()), lo_source(lo_disc->GetOffsets());
+	DenseBlockDiagonalOperator dB_dBt_inv(fes);
 
 	mfem::StopWatch cycle_timer; // times cost per time step 
 	// log events across time steps 
@@ -1177,9 +1178,9 @@ int main(int argc, char *argv[]) {
 				const auto &dB = gr_emission_form.GetGradient(T); // gradient of emission
 				auto &dBt_inv = meb_form.GetGradient(T); // gradient of energy balance equation
 				dBt_inv.Invert(); // <-- for lumping >0, this is diagonal, could save work with a diagonal inverse
-				auto product = Mult(dB, dBt_inv).AsSparseMatrix(); // element-wise multiplication of dB and dBt_inv 
+				Mult(dB, dBt_inv, dB_dBt_inv);
 				// triple product: dB dBt_inv Mtot 
-				auto lin_emission = std::unique_ptr<mfem::SparseMatrix>(Mult(product, Mtot_gray.SpMat())); 
+				auto lin_emission = std::unique_ptr<mfem::SparseMatrix>(Mult(dB_dBt_inv, Mtot_gray.SpMat())); 
 				// add linearized portion to K_{2,2} to get schur complement 
 				// of Jacobian 
 				// lin_emission is all on-processor => add directly to "diagonal" (aka on processor) 
@@ -1195,7 +1196,7 @@ int main(int argc, char *argv[]) {
 				add(em_source_gr, 1.0, smm_source.GetBlock(1), lo_source.GetBlock(1));
 				meb_form.Mult(T, em_source_gr);
 				add(T0, -1.0, em_source_gr, em_source_gr);
-				product.AddMult(em_source_gr, lo_source.GetBlock(1));
+				dB_dBt_inv.AddMult(em_source_gr, lo_source.GetBlock(1));
 				// add in opacity correction and SMM source
 				add(smm_source.GetBlock(0), 3.0, opac_corr_form, lo_source.GetBlock(0));
 				timing_log.Log("LO assembly", mfem::toc());
