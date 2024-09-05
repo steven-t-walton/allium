@@ -25,23 +25,23 @@
 #include "smm_coef.hpp"
 #include "coefficient.hpp"
 
-class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
-{
+class IterationMonitor {
 public:
-	mfem::Array<int> iters; 
-	double max_norm = 0.0; 
-
-	ScallionInnerSolverMonitor() { iters.Reserve(50); }
-	void Reset() { iters.SetSize(0); max_norm = 0.0; }
-
+	mfem::Array<int> iters;
+	double max_norm = 0.0;
+	IterationMonitor() { iters.Reserve(50); }
+	void Register(int it, double norm) {
+		iters.Append(it); 
+		max_norm = std::max(norm, max_norm);
+	}
 	friend YAML::Emitter &operator<<(YAML::Emitter &out, 
-		const ScallionInnerSolverMonitor &monitor)
+		const IterationMonitor &monitor)
 	{
 		// for some reason mfem::Array::Sum isn't const... 
 		auto &iters = *const_cast<mfem::Array<int>*>(&monitor.iters); 
 		const int sum = iters.Sum(); 
 		const double avg = (double)sum/iters.Size(); 
-		out << YAML::BeginMap; 
+		// out << YAML::BeginMap; 
 			out << YAML::Key << "it" << YAML::Value << YAML::Flow << YAML::BeginMap; 
 				out << YAML::Key << "max" << YAML::Value << iters.Max(); 
 				out << YAML::Key << "min" << YAML::Value << iters.Min(); 
@@ -51,78 +51,10 @@ public:
 				out << YAML::Key << "total" << YAML::Value << sum; 
 			out << YAML::EndMap; 
 			out << YAML::Key << "max norm" << YAML::Key << monitor.max_norm; 
-		out << YAML::EndMap; 
+		// out << YAML::EndMap; 
 		return out; 
 	}
 };
-
-class InnerIterativeSolverMonitor : public ScallionInnerSolverMonitor
-{
-private:
-	const mfem::IterativeSolver &solver; 
-public:
-	InnerIterativeSolverMonitor(const mfem::IterativeSolver &s) : solver(s)
-	{ }
-	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
-		if (it==0) {
-			Reset(); 
-			// hack to fix poor design of call to monitor in mfem::NewtonSolver 
-			if (dynamic_cast<const mfem::NewtonSolver*>(iter_solver)) {
-				return; 
-			}
-		}
-		const auto iter = solver.GetNumIterations(); 
-		if (iter > 0) {
-			iters.Append(iter); 
-			max_norm = std::max(solver.GetFinalRelNorm(), max_norm); 
-		}
-	}
-};
-
-class BlockNonlinearSolverMonitor : public ScallionInnerSolverMonitor
-{
-private:
-	const BlockDiagonalByElementNonlinearSolver &solver; 
-public:
-	BlockNonlinearSolverMonitor(const BlockDiagonalByElementNonlinearSolver &s) 
-		: solver(s)
-	{ 
-	}
-	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) {
-		if (it==0) {
-			Reset(); 
-		}
-		const auto iter = solver.GetNumIterations(); 
-		if (iter >= 0) {
-			iters.Append(iter); 
-			max_norm = std::max(max_norm, solver.GetFinalRelNorm()); 		
-		}
-	}
-};
-
-struct KinsolCallbackData {
-	mfem::IterativeSolverMonitor *monitor = nullptr; 
-	int it = -1; 
-	double norm = -1.0; 
-
-	KinsolCallbackData(mfem::IterativeSolverMonitor *m) : monitor(m) { }
-};
-
-void KinsolCallbackFunction(const char *module, const char *function, char *msg, void *user_data)
-{
-	KinsolCallbackData *data = static_cast<KinsolCallbackData*>(user_data); 
-	if (!data) MFEM_ABORT("did not get callback data struct"); 
-	int it = 0; 
-	double norm = 0.0;
-	if (io::ParseKINSOLMessage(msg, it, norm)) {
-		data->it = it; 
-		data->norm = norm; 
-	}
-	if (data->monitor) {
-		mfem::Vector blank;
-		data->monitor->MonitorResidual(it-1, norm, blank, false); 
-	}
-}
 
 int main(int argc, char *argv[]) {
 	mfem::StopWatch wall_timer; 
@@ -759,7 +691,7 @@ int main(int argc, char *argv[]) {
 	// energy balance nonlinear form 
 	// cv/dt + sigma B(T)
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
-	BlockDiagonalByElementNonlinearForm meb_form(&fes);
+	DenseBlockDiagonalNonlinearForm meb_form(&fes);
 	meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
 	// meb_form.AddDomainIntegrator(
 		// new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
@@ -771,7 +703,7 @@ int main(int argc, char *argv[]) {
 	PlanckEmissionNonlinearForm emission_form(fes, phi_ext, planck_int, IsMassLumped(lump));
 
 	// gray emission 
-	BlockDiagonalByElementNonlinearForm gr_emission_form(&fes);
+	DenseBlockDiagonalNonlinearForm gr_emission_form(&fes);
 	gr_emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
 	// gr_emission_form.AddDomainIntegrator(
 		// new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
@@ -939,11 +871,11 @@ int main(int argc, char *argv[]) {
 	lo_disc.SetPenaltyLowerBound(alpha/2); // <-- use "modified" penalty parameter 
 
 	// solver for low order system 
-	mfem::GMRESSolver lo_solver(MPI_COMM_WORLD);
+	mfem::CGSolver lo_solver(MPI_COMM_WORLD);
 	lo_solver.SetAbsTol(1e-6);
 	lo_solver.SetRelTol(1e-10);
 	lo_solver.SetMaxIter(200);
-	lo_solver.iterative_mode = false;
+	lo_solver.iterative_mode = true;
 	mfem::HypreBoomerAMG amg;
 	amg.SetPrintLevel(0);
 	lo_solver.SetPreconditioner(amg);
@@ -956,12 +888,13 @@ int main(int argc, char *argv[]) {
 	local_meb_solver.SetMaxIter(100);
 	local_meb_solver.SetPreconditioner(*local_mat_inv);
 	local_meb_solver.iterative_mode = true;
-	BlockDiagonalByElementNonlinearSolver meb_solver(local_meb_solver);
+	DenseBlockDiagonalNonlinearSolver meb_solver(local_meb_solver);
 	meb_solver.SetOperator(meb_form); // solves meb_form = (cv/dt + B(.))T 
 
 	// working vectors for moment algorithm 
 	mfem::Vector em_source(fes.GetVSize()*G), em_source_gr(fes.GetVSize()), abs_source(fes.GetVSize()),
 		residual_T(fes.GetVSize()), source_T(fes.GetVSize()), source_phi(fes.GetVSize()), dT(fes.GetVSize());
+	DenseBlockDiagonalOperator dB_dBt_inv(fes);
 
 	mfem::StopWatch cycle_timer; // times cost per time step 
 	// log events across time steps 
@@ -984,8 +917,7 @@ int main(int argc, char *argv[]) {
 		// --- get new time step solution --- 
 		int outer = 1;
 		double norm;
-		int inner_sum = 0;
-		double res0 = -1.0;
+		IterationMonitor lo_monitor, meb_monitor, linear_monitor;
 		while (true) {
 			mfem::ParGridFunction Tprev(T), Eprev(Eho);
 
@@ -1019,8 +951,13 @@ int main(int argc, char *argv[]) {
 			Mtot_gray.Mult(source_phi, abs_source);
 			// add cv/dt T0 
 			add(abs_source, 1.0, T0, residual_T); 
+			for (int i=0; i<residual_T.Size(); i++) {
+				if (residual_T(i) <= 0.0) {
+					EventLog.Register("negative residual");
+				}
+			}
 
-			Elo = Eho;
+			// Elo = Eho;
 
 			int inner = 1;
 			double inner_norm;
@@ -1030,15 +967,21 @@ int main(int argc, char *argv[]) {
 
 				Mtot_gray.Mult(Elo, abs_source);
 				abs_source += residual_T;
+				for (int i=0; i<abs_source.Size(); i++) {
+					if (abs_source(i) <= 0.0) {
+						EventLog.Register("negative meb source");
+					}
+				}
 				meb_solver.Mult(abs_source, T);
+				meb_monitor.Register(meb_solver.GetNumIterations(), meb_solver.GetFinalRelNorm());
 
 				// K -> K - dB (dBt)^-1 sigma 
 				auto K = std::unique_ptr<mfem::HypreParMatrix>(lo_disc.GetOperator());
 				const auto &dB = gr_emission_form.GetGradient(T);
 				auto &dBt_inv = meb_form.GetGradient(T);
 				dBt_inv.Invert();
-				auto product = Mult(dB, dBt_inv).AsSparseMatrix();
-				auto lin_emission = std::unique_ptr<mfem::SparseMatrix>(Mult(product, Mtot_gray.SpMat()));
+				Mult(dB, dBt_inv, dB_dBt_inv);
+				auto lin_emission = std::unique_ptr<mfem::SparseMatrix>(Mult(dB_dBt_inv, Mtot_gray.SpMat())); 
 				mfem::SparseMatrix diag;
 				K->GetDiag(diag);
 				diag.Add(-1.0, *lin_emission);
@@ -1046,7 +989,7 @@ int main(int argc, char *argv[]) {
 				meb_form.Mult(T, source_T);
 				if (source_T.CheckFinite() > 0) MFEM_ABORT("inf T source");
 				add(residual_T, -1.0, source_T, source_T);
-				product.Mult(source_T, source_phi);
+				dB_dBt_inv.Mult(source_T, source_phi);
 				gr_emission_form.Mult(T, em_source_gr);
 				add(em_source_gr, 1.0, source_phi, source_phi);
 
@@ -1054,6 +997,7 @@ int main(int argc, char *argv[]) {
 
 				lo_solver.SetOperator(*K);
 				lo_solver.Mult(source_phi, Elo);
+				linear_monitor.Register(lo_solver.GetNumIterations(), lo_solver.GetFinalRelNorm());
 
 				const auto Tnorm = Tprev.ComputeL2Error(Tcoef);
 				const auto Elo_norm = Eloprev.ComputeL2Error(Elo_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Eloprev, Eloprev));
@@ -1063,7 +1007,7 @@ int main(int argc, char *argv[]) {
 				inner++;
 			}
 			ValueLog.Log("inner norm", inner_norm);
-			inner_sum += inner;
+			lo_monitor.Register(inner, inner_norm);
 
 			if (T.Min() < 0.0) MFEM_ABORT("negative temperature");
 			const double Enorm = Eprev.ComputeL2Error(Eho_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Eprev, Eprev));
@@ -1177,9 +1121,15 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
 			out << YAML::Key << "time step size" << YAML::Value << time_step_old; 
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
-			out << YAML::Key << "outer" << YAML::Value << outer;
+			out << YAML::Key << "it" << YAML::Value << outer;
 			out << YAML::Key << "norm" << YAML::Value << norm;
-			out << YAML::Key << "total inners" << YAML::Value << inner_sum;
+			out << YAML::Key << "lo solver" << YAML::Value << YAML::BeginMap;
+				out << lo_monitor;
+				out << YAML::Key << "linear solver" << YAML::Value 
+					<< YAML::BeginMap << linear_monitor << YAML::EndMap;
+				out << YAML::Key << "meb solver" << YAML::Value 
+					<< YAML::BeginMap << meb_monitor << YAML::EndMap;
+			out << YAML::EndMap;
 			io::ProcessGlobalLogs(out);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
