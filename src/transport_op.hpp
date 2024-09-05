@@ -62,7 +62,7 @@ class MomentMethodFixedPointOperator : public mfem::Operator {
 private:
 	const mfem::Operator &D, &Linv, &S, &moment; 
 	const mfem::Vector &source;  
-	mutable mfem::Vector psi;
+	mutable mfem::Vector psi, tmp;
 	mutable mfem::StopWatch total_timer, sweep_timer, moment_timer; 
 public:
 	MomentMethodFixedPointOperator(const mfem::Operator &_D, const mfem::Operator &_Linv, 
@@ -70,11 +70,12 @@ public:
 		: D(_D), Linv(_Linv), S(_S), moment(_moment), source(_source), mfem::Operator(_moment.Height())
 	{
 		psi.MakeRef(_psi, 0, _psi.Size()); 
+		tmp.SetSize(S.Height());
 	}
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const {
 		total_timer.Clear(); total_timer.Start(); 
-		S.Mult(x, y); 
-		D.MultTranspose(y, psi); 
+		S.Mult(x, tmp); 
+		D.MultTranspose(tmp, psi); 
 		psi += source; 
 
 		sweep_timer.Clear(); sweep_timer.Start(); 

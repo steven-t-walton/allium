@@ -79,8 +79,8 @@ TEST(Linal, BlockLDUInverse) {
 	};
 	FunctionGrayCoefficient qmms_coef(qmms); 
 	FunctionGrayCoefficient inflow_coef(inflow_mms); 
-	mfem::Array<double> energy_grid(2); 
-	FormTransportSource(fes, quad, energy_grid, qmms_coef, inflow_coef, source_view);
+	auto energy = MultiGroupEnergyGrid::MakeGray(0.0, 1.0);
+	FormTransportSource(fes, quad, energy.Bounds(), qmms_coef, inflow_coef, source_view);
 
 	mfem::ParBilinearForm Ms_form(&fes); 
 	Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 

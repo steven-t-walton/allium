@@ -1,110 +1,221 @@
 #include "block_diag_op.hpp"
 #include "log.hpp"
 
-BlockDiagonalByElementOperator::BlockDiagonalByElementOperator(const mfem::FiniteElementSpace &f)
-	: fes(f), mfem::Operator(f.GetVSize())
+DenseBlockDiagonalOperator::DenseBlockDiagonalOperator(
+	const mfem::Table &_row_table, const mfem::Table &_col_table)
+	: row_table(&_row_table), col_table(&_col_table)
 {
-	data.SetSize(fes.GetNE()); 
-	for (int e=0; e<data.Size(); e++) {
-		data[e] = nullptr; 
+	data.SetSize(row_table->Size());
+	for (int block=0; block<data.Size(); block++) {
+		data[block] = new mfem::DenseMatrix(row_table->RowSize(block), col_table->RowSize(block));
+		(*data[block]) = 0.0;
 	}
+
+	height = row_table->Size_of_connections();
+	width = col_table->Size_of_connections();
 }
 
-BlockDiagonalByElementOperator::~BlockDiagonalByElementOperator()
+DenseBlockDiagonalOperator::DenseBlockDiagonalOperator(const mfem::FiniteElementSpace &fes)
 {
-	for (auto *ptr : data) {
-		delete ptr; 
-	}
-}
-
-void BlockDiagonalByElementOperator::SetElementMatrix(int elem, const mfem::DenseMatrix &elmat) 
-{
-	if (data[elem]) delete data[elem]; 
-	data[elem] = new mfem::DenseMatrix(elmat); 
-}
-
-const mfem::DenseMatrix &BlockDiagonalByElementOperator::GetElementMatrix(int elem) const 
-{
-	assert(data[elem]); 
-	return *data[elem]; 
-}
-
-mfem::DenseMatrix &BlockDiagonalByElementOperator::GetElementMatrix(int elem)
-{
-	if (!data[elem]) {
-		mfem::Array<int> vdofs; 
-		fes.GetElementVDofs(elem, vdofs); 
-		data[elem] = new mfem::DenseMatrix(vdofs.Size()); 
-		(*data[elem]) = 0.0; 
-	}
-	return *data[elem]; 
-}
-
-void BlockDiagonalByElementOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const 
-{
-	mfem::Array<int> vdofs; 
-	mfem::Vector subx, suby; 
-	for (int e=0; e<fes.GetNE(); e++) {
-		const mfem::DenseMatrix *elmat = data[e]; 
-		if (!elmat) continue; 
-		fes.GetElementVDofs(e, vdofs); 
-		x.GetSubVector(vdofs, subx); 
-		suby.SetSize(subx.Size()); 
-		elmat->Mult(subx, suby);
-		y.SetSubVector(vdofs, suby);  
-	}
-}
-
-void BlockDiagonalByElementOperator::Invert()
-{
-	for (int e=0; e<fes.GetNE(); e++) {
-		auto &elmat = *data[e];
-		elmat.Invert();
-	}
-}
-
-mfem::SparseMatrix BlockDiagonalByElementOperator::AsSparseMatrix() const
-{
-	mfem::SparseMatrix A(height, width);
 	mfem::Array<int> vdofs;
-	for (int e=0; e<fes.GetNE(); e++) {
-		fes.GetElementVDofs(e, vdofs);
-		const auto &elmat = GetElementMatrix(e);
-		A.AddSubMatrix(vdofs, vdofs, elmat);
+	fes.GetElementVDofs(0, vdofs); // <-- ensure dof table built 
+	row_table = col_table = &fes.GetElementToDofTable();
+	data.SetSize(row_table->Size());
+	for (int block=0; block<data.Size(); block++) {
+		data[block] = new mfem::DenseMatrix(row_table->RowSize(block), col_table->RowSize(block));
+		(*data[block]) = 0.0;
 	}
-	A.Finalize();
+
+	height = width = row_table->Size_of_connections();
+}
+
+DenseBlockDiagonalOperator::DenseBlockDiagonalOperator(
+	const mfem::FiniteElementSpace &tr_fes, const mfem::FiniteElementSpace &te_fes)
+{
+	assert(tr_fes.GetNE() == te_fes.GetNE());
+	mfem::Array<int> vdofs;
+	tr_fes.GetElementVDofs(0, vdofs); // <-- ensure dof tables built 
+	te_fes.GetElementVDofs(0, vdofs);
+	row_table = &te_fes.GetElementToDofTable();
+	col_table = &tr_fes.GetElementToDofTable();
+	data.SetSize(row_table->Size());
+	for (int block=0; block<data.Size(); block++) {
+		data[block] = new mfem::DenseMatrix(row_table->RowSize(block), col_table->RowSize(block));
+		(*data[block]) = 0.0;
+	}
+
+	height = row_table->Size_of_connections();
+	width = col_table->Size_of_connections();
+}
+
+const mfem::DenseMatrix &DenseBlockDiagonalOperator::GetBlock(int block) const 
+{
+	assert(block >= 0 and block < data.Size());
+	return *data[block];
+}
+
+mfem::DenseMatrix &DenseBlockDiagonalOperator::GetBlock(int block) 
+{
+	assert(block >= 0 and block < data.Size());
+	return *data[block];
+}
+
+void DenseBlockDiagonalOperator::SetBlock(int block, const mfem::DenseMatrix &elmat)
+{
+	assert(block >= 0 and block < data.Size());
+	assert(data[block]);
+	auto &my_elmat = *data[block];
+	assert(my_elmat.Height() == elmat.Height() and my_elmat.Width() == elmat.Width());
+	my_elmat = elmat;
+}
+
+void DenseBlockDiagonalOperator::Invert() 
+{
+	assert(height == width);
+	for (int b=0; b<data.Size(); b++) {
+		data[b]->Invert();
+	}
+}
+
+void add(double a, const DenseBlockDiagonalOperator &A, 
+	double b, const DenseBlockDiagonalOperator &B, DenseBlockDiagonalOperator &C)
+{
+	assert(A.NumBlocks() == B.NumBlocks() and A.NumBlocks() == C.NumBlocks());
+	for (int block=0; block<A.NumBlocks(); block++) {
+		const auto &Amat = A.GetBlock(block);
+		const auto &Bmat = B.GetBlock(block);
+		auto &Cmat = C.GetBlock(block);
+		mfem::Add(a, Amat, b, Bmat, Cmat);
+	}
+}
+
+void Mult(const DenseBlockDiagonalOperator &A, const DenseBlockDiagonalOperator &B, 
+	DenseBlockDiagonalOperator &C)
+{
+	assert(A.NumBlocks() == B.NumBlocks() and A.NumBlocks() == C.NumBlocks());
+	for (int block=0; block<A.NumBlocks(); block++) {
+		const auto &Amat = A.GetBlock(block);
+		const auto &Bmat = B.GetBlock(block);
+		auto &Cmat = C.GetBlock(block);
+		mfem::Mult(Amat, Bmat, Cmat);
+	}
+}
+
+void Mult(const DenseBlockDiagonalOperator &A, const mfem::SparseMatrix &B, 
+	DenseBlockDiagonalOperator &C)
+{
+	assert(A.NumBlocks() == C.NumBlocks());
+	assert(A.Width() == B.Height());
+	const auto &row_table = A.GetRowDofs();
+	const auto &col_table = A.GetColDofs();
+	mfem::Array<int> row_dofs, col_dofs;
+	mfem::DenseMatrix Bmat;
+	for (int block=0; block<A.NumBlocks(); block++) {
+		col_table.GetRow(block, col_dofs);
+		row_table.GetRow(block, row_dofs);
+		Bmat.SetSize(row_dofs.Size(), col_dofs.Size());
+		B.GetSubMatrix(row_dofs, col_dofs, Bmat);
+		const auto &Amat = A.GetBlock(block);
+		auto &Cmat = C.GetBlock(block);
+		mfem::Mult(Amat, Bmat, Cmat);
+	}
+}
+
+mfem::SparseMatrix *Mult(const DenseBlockDiagonalOperator &A, const mfem::SparseMatrix &B)
+{
+	auto *Asp = A.AsSparseMatrix(); 
+	auto *mult = mfem::Mult(*Asp, B);
+	delete Asp;
+	return mult;
+}
+
+mfem::SparseMatrix *TripleProduct(const DenseBlockDiagonalOperator &A, const DenseBlockDiagonalOperator &B, 
+	const mfem::SparseMatrix &C)
+{
+	DenseBlockDiagonalOperator D(A.GetRowDofs(), A.GetColDofs());
+	Mult(A, B, D);
+	return Mult(D, C);
+}
+
+mfem::SparseMatrix *RAP(const DenseBlockDiagonalOperator &A, const mfem::SparseMatrix &P)
+{
+	auto *Asp = A.AsSparseMatrix();
+	auto *rap = mfem::RAP(P, *Asp, P);
+	delete Asp;
+	return rap;
+}
+
+void DenseBlockDiagonalOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
+{
+	assert(x.Size() == width);
+	assert(y.Size() == height);
+	mfem::Array<int> x_dofs, y_dofs;
+	mfem::Vector sub_x, sub_y;
+	for (int b=0; b<data.Size(); b++) {
+		col_table->GetRow(b, x_dofs);
+		sub_x.SetSize(x_dofs.Size());
+		x.GetSubVector(x_dofs, sub_x);
+
+		row_table->GetRow(b, y_dofs);
+		sub_y.SetSize(y_dofs.Size());
+		data[b]->Mult(sub_x, sub_y);
+
+		y.SetSubVector(y_dofs, sub_y);
+	}
+}
+
+void DenseBlockDiagonalOperator::AddMult(const mfem::Vector &x, mfem::Vector &y, const double a) const
+{
+	assert(x.Size() == width);
+	assert(y.Size() == height);
+	mfem::Array<int> x_dofs, y_dofs;
+	mfem::Vector sub_x, sub_y, product;
+	for (int b=0; b<data.Size(); b++) {
+		col_table->GetRow(b, x_dofs);
+		row_table->GetRow(b, y_dofs);
+
+		x.GetSubVector(x_dofs, sub_x);
+		product.SetSize(y_dofs.Size());
+		data[b]->Mult(sub_x, product);
+
+		y.GetSubVector(y_dofs, sub_y);
+		add(product, a, sub_y, sub_y);
+
+		y.SetSubVector(y_dofs, sub_y);
+	}
+}
+
+mfem::SparseMatrix *DenseBlockDiagonalOperator::AsSparseMatrix() const
+{
+	auto *A = new mfem::SparseMatrix(height, width);
+	mfem::Array<int> row_dofs, col_dofs;
+	for (int b=0; b<data.Size(); b++) {
+		row_table->GetRow(b, row_dofs);
+		col_table->GetRow(b, col_dofs);
+
+		const auto &elmat = GetBlock(b);
+		A->AddSubMatrix(row_dofs, col_dofs, elmat);
+	}
+	A->Finalize();
 	return A;
 }
 
-BlockDiagonalByElementOperator Mult(const BlockDiagonalByElementOperator &A, const BlockDiagonalByElementOperator &B)
+void DenseBlockDiagonalSolver::SetOperator(const mfem::Operator &_op)
 {
-	const auto &fes = *A.FESpace();
-	BlockDiagonalByElementOperator r(fes);
-	for (int e=0; e<fes.GetNE(); e++) {
-		const auto &a = A.GetElementMatrix(e);
-		const auto &b = B.GetElementMatrix(e);
-		auto &c = r.GetElementMatrix(e);
-		Mult(a, b, c);
-	}
-	return r;
-}
-
-void BlockDiagonalByElementSolver::SetOperator(const mfem::Operator &_op)
-{
-	op = dynamic_cast<const BlockDiagonalByElementOperator*>(&_op); 
-	if (!op) MFEM_ABORT("operator must be a BlockDiagonalByElementOperator"); 
+	op = dynamic_cast<const DenseBlockDiagonalOperator*>(&_op); 
+	if (!op) MFEM_ABORT("operator must be a DenseBlockDiagonalOperator"); 
 	height = width = op->Height(); 
 }
 
-void BlockDiagonalByElementSolver::Mult(const mfem::Vector &x, mfem::Vector &y) const
+void DenseBlockDiagonalSolver::Mult(const mfem::Vector &x, mfem::Vector &y) const
 {
 	assert(op); 
 	mfem::Array<int> vdofs; 
 	mfem::Vector subx, suby;
-	auto *fes = op->FESpace(); 
-	for (int e=0; e<fes->GetNE(); e++) {
-		const auto &elmat = op->GetElementMatrix(e); 
-		fes->GetElementVDofs(e, vdofs); 
+	const auto &dof_table = op->GetRowDofs();
+	for (int e=0; e<op->NumBlocks(); e++) {
+		const auto &elmat = op->GetBlock(e); 
+		dof_table.GetRow(e, vdofs);
 		x.GetSubVector(vdofs, subx); 
 		suby.SetSize(subx.Size()); 
 		local_solver.SetOperator(elmat); 
@@ -140,12 +251,12 @@ void DiagonalDenseMatrixInverse::Mult(const mfem::Vector &x, mfem::Vector &y) co
 	}
 }
 
-BlockDiagonalByElementNonlinearForm::~BlockDiagonalByElementNonlinearForm()
+DenseBlockDiagonalNonlinearForm::~DenseBlockDiagonalNonlinearForm()
 {
 	delete grad; 
 }
 
-void BlockDiagonalByElementNonlinearForm::Mult(const mfem::Vector &x, mfem::Vector &y) const
+void DenseBlockDiagonalNonlinearForm::Mult(const mfem::Vector &x, mfem::Vector &y) const
 {
 	using namespace mfem; 
 	Array<int> vdofs;
@@ -198,10 +309,10 @@ void BlockDiagonalByElementNonlinearForm::Mult(const mfem::Vector &x, mfem::Vect
 	if (bfnfi.Size()) { MFEM_ABORT("bdr face nonlinear form integrators not supported"); }
 }
 
-BlockDiagonalByElementOperator &BlockDiagonalByElementNonlinearForm::GetGradient(const mfem::Vector &x) const 
+DenseBlockDiagonalOperator &DenseBlockDiagonalNonlinearForm::GetGradient(const mfem::Vector &x) const 
 {
 	using namespace mfem; 
-	if (!grad) grad = new BlockDiagonalByElementOperator(*fes); 
+	if (!grad) grad = new DenseBlockDiagonalOperator(*fes); 
 
 	Array<int> vdofs;
 	Vector el_x;
@@ -233,7 +344,7 @@ BlockDiagonalByElementOperator &BlockDiagonalByElementNonlinearForm::GetGradient
 			const int attr = mesh->GetAttribute(i);
 			if (attr_marker[attr-1] == 0) { continue; }
 
-			auto &grad_mat = grad->GetElementMatrix(i); 
+			auto &grad_mat = grad->GetBlock(i); 
 			grad_mat = 0.0; 
 			fe = fes->GetFE(i);
 			doftrans = fes->GetElementVDofs(i, vdofs);
@@ -257,7 +368,7 @@ BlockDiagonalByElementOperator &BlockDiagonalByElementNonlinearForm::GetGradient
 	return *grad; 
 }
 
-void BlockDiagonalByElementNonlinearForm::AssembleLocalResidual(int element, 
+void DenseBlockDiagonalNonlinearForm::AssembleLocalResidual(int element, 
 	const mfem::Vector &x, mfem::Vector &y) const
 {
 	using namespace mfem; 
@@ -309,7 +420,7 @@ void BlockDiagonalByElementNonlinearForm::AssembleLocalResidual(int element,
 	if (bfnfi.Size()) { MFEM_ABORT("bdr face nonlinear form integrators not supported"); }
 }
 
-void BlockDiagonalByElementNonlinearForm::AssembleLocalGradient(
+void DenseBlockDiagonalNonlinearForm::AssembleLocalGradient(
 	int element, const mfem::Vector &x, mfem::DenseMatrix &A) const 
 {
 	using namespace mfem; 
@@ -392,7 +503,6 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 	r -= b; 
 	norm0 = norm = initial_norm = ::Norm(r); 
 	if (norm0/::Norm(b) < rel_tol) {
-		EventLog["skipping meb solve"]++;
 		converged = true; 
 		final_iter = 1;
 		final_norm = rel_tol;
@@ -446,14 +556,14 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 	final_norm = norm;
 }
 
-void BlockDiagonalByElementNonlinearSolver::SetOperator(const mfem::Operator &op) 
+void DenseBlockDiagonalNonlinearSolver::SetOperator(const mfem::Operator &op) 
 {
-	form = dynamic_cast<const BlockDiagonalByElementNonlinearForm*>(&op); 
-	if (!form) MFEM_ABORT("must supply BlockDiagonalByElementNonlinearForm"); 
+	form = dynamic_cast<const DenseBlockDiagonalNonlinearForm*>(&op); 
+	if (!form) MFEM_ABORT("must supply DenseBlockDiagonalNonlinearForm"); 
 	height = width = form->Height(); 
 }
 
-void BlockDiagonalByElementNonlinearSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
+void DenseBlockDiagonalNonlinearSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
 {
 	assert(form); 
 	const bool have_b = b.Size() > 0; 
@@ -472,7 +582,7 @@ void BlockDiagonalByElementNonlinearSolver::Mult(const mfem::Vector &b, mfem::Ve
 		if (have_b)
 			b.GetSubVector(vdofs, sub_b); 
 		x.GetSubVector(vdofs, sub_x); // get for initial guess
-		BlockDiagonalByElementNonlinearForm::LocalOperator local_op(*form, e); 
+		DenseBlockDiagonalNonlinearForm::LocalOperator local_op(*form, e); 
 		local_solver.SetOperator(local_op); 
 		local_solver.Mult(sub_b, sub_x); 
 		x.SetSubVector(vdofs, sub_x); 

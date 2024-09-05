@@ -41,8 +41,8 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
 	};
 	FunctionGrayCoefficient qmms_coef(qmms); 
 	FunctionGrayCoefficient inflow_coef(inflow_mms); 
-	mfem::Array<double> energy_grid(2); 
-	FormTransportSource(fes, quad, energy_grid, qmms_coef, inflow_coef, source_view);
+	auto energy = MultiGroupEnergyGrid::MakeGray(0.0, 1.0);
+	FormTransportSource(fes, quad, energy.Bounds(), qmms_coef, inflow_coef, source_view);
 
 	GrayMGCoefficient total_coef(total, 1);
 	BoundaryConditionMap bc_map;

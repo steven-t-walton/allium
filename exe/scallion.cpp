@@ -79,9 +79,9 @@ public:
 class BlockNonlinearSolverMonitor : public ScallionInnerSolverMonitor
 {
 private:
-	const BlockDiagonalByElementNonlinearSolver &solver; 
+	const DenseBlockDiagonalNonlinearSolver &solver; 
 public:
-	BlockNonlinearSolverMonitor(const BlockDiagonalByElementNonlinearSolver &s) 
+	BlockNonlinearSolverMonitor(const DenseBlockDiagonalNonlinearSolver &s) 
 		: solver(s)
 	{ 
 	}
@@ -709,7 +709,7 @@ int main(int argc, char *argv[]) {
 	// energy balance nonlinear form 
 	// cv/dt + sigma B(T)
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
-	BlockDiagonalByElementNonlinearForm meb_form(&fes);
+	DenseBlockDiagonalNonlinearForm meb_form(&fes);
 	if (IsMassLumped(lump)) {
 		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total))); 
 		meb_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
@@ -756,8 +756,8 @@ int main(int argc, char *argv[]) {
 	io::ValidateOption<std::string>("solver type", solver_type, {"picard", "linearized", "newton"}, root); 
 	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver, local_meb_solver, global_meb_solver,
 		linear_solver;
-	std::unique_ptr<BlockDiagonalByElementNonlinearSolver> meb_solver;
-	std::unique_ptr<BlockDiagonalByElementSolver> linearized_meb_solver;
+	std::unique_ptr<DenseBlockDiagonalNonlinearSolver> meb_solver;
+	std::unique_ptr<DenseBlockDiagonalSolver> linearized_meb_solver;
 	std::unique_ptr<mfem::Solver> dsa_solver;
 	std::unique_ptr<MomentDiscretization> Kform; 
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
@@ -782,7 +782,7 @@ int main(int argc, char *argv[]) {
 			meb_solver_table["type"], {"newton", "local newton"}, root); 
 		mfem::Solver *meb_solver_ptr;
 		if (meb_type == "newton") {
-			linearized_meb_solver = std::make_unique<BlockDiagonalByElementSolver>(*local_mat_inv);
+			linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
 			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
 			global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
 			global_meb_solver->SetOperator(meb_form); 
@@ -792,7 +792,7 @@ int main(int argc, char *argv[]) {
 			local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
 			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
 			local_meb_solver->SetPreconditioner(*local_mat_inv);
-			meb_solver = std::make_unique<BlockDiagonalByElementNonlinearSolver>(*local_meb_solver); 			
+			meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver); 			
 			meb_solver->SetOperator(meb_form); 
 			inner_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver); 
 			meb_solver_ptr = meb_solver.get();
@@ -873,7 +873,7 @@ int main(int argc, char *argv[]) {
 		}
 		out << YAML::Key << "transport solver" << YAML::Value << transport_solve_table; 
 
-		linearized_meb_solver = std::make_unique<BlockDiagonalByElementSolver>(*local_mat_inv);
+		linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
 		inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
 		nonlinear_solver->SetMonitor(*inner_monitor); 				
 		linearized_op = std::make_unique<LinearizedTRTOperator>(
@@ -887,7 +887,7 @@ int main(int argc, char *argv[]) {
 				meb_solver_table["type"], {"newton", "local newton"}, root); 
 			mfem::Solver *meb_solver_ptr;
 			if (meb_type == "newton") {
-				linearized_meb_solver = std::make_unique<BlockDiagonalByElementSolver>(*local_mat_inv);
+				linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
 				global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
 				global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
 				global_meb_solver->SetOperator(meb_form); 
@@ -896,7 +896,7 @@ int main(int argc, char *argv[]) {
 				local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
 				io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
 				local_meb_solver->SetPreconditioner(*local_mat_inv);
-				meb_solver = std::make_unique<BlockDiagonalByElementNonlinearSolver>(*local_meb_solver); 			
+				meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver); 			
 				meb_solver->SetOperator(meb_form); 
 				meb_solver_ptr = meb_solver.get();
 			}				

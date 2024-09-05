@@ -63,6 +63,14 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MP
 // set common iterative solver settings such as 
 // tolerances, max iterations, print level, iterative mode, etc 
 void SetIterativeSolverOptions(sol::table &table, mfem::IterativeSolver &solver); 
+struct IterativeSolverOptions
+{
+	int print_level = 0;
+	double abstol = 0.0, reltol = 0.0;
+	int max_iter = 50;
+	bool iterative_mode = false;
+};
+IterativeSolverOptions GetIterativeSolverOptions(sol::table &table);
 
 // --- helper functions for creating meshes --- 
 // creates a mesh from lua input either from a mesh file 
@@ -144,6 +152,27 @@ T GetAndValidateOption(sol::table &table, std::string key, std::initializer_list
 	}
 	else {
 		return def; 
+	}
+}
+
+template<typename T>
+T GetAndValidateOption(sol::table &table, std::string key, std::initializer_list<T> options, bool root=true)
+{
+	sol::optional<T> avail = table[key];
+	if (avail) {
+		const T res = avail.value();
+		ValidateOption<T>(key, res, options, root);
+		return res;
+	}
+
+	else {
+		std::stringstream ss; 
+		ss << "\"" << key << "\" is required. Valid options are:"; 
+		for (const auto &opt : options) {
+			ss << " \"" << opt << "\"";
+		}
+		MFEM_ABORT(ss.str()); 
+		return *options.begin();
 	}
 }
 

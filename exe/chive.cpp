@@ -396,6 +396,15 @@ int main(int argc, char *argv[]) {
 	mfem::ParFiniteElementSpace vfes(&mesh, &fec, dim); // vector finite element space, dim copies of fes 
 	fes.ExchangeFaceNbrData(); // create parallel degree of freedom maps used in sweep 
 
+	mfem::H1_FECollection cfec(fe_order, dim);
+	mfem::ParFiniteElementSpace cfes(&mesh, &cfec);
+
+	mfem::RT_FECollection rtfec(fe_order, dim);
+	mfem::ParFiniteElementSpace rtfes(&mesh, &rtfec);
+
+	mfem::DG_Interface_FECollection ifec(fe_order, dim);
+	mfem::ParFiniteElementSpace ifes(&mesh, &ifec);
+
 	// piecewise constant used for plotting and storing cross section data 
 	mfem::L2_FECollection fec0(0, dim); 
 	mfem::ParFiniteElementSpace fes0(&mesh, &fec0); 
@@ -526,15 +535,6 @@ int main(int argc, char *argv[]) {
 		out << YAML::EndMap; 
 
 	// --- sweep setup --- 
-	// global scattering operator 
-	mfem::BilinearForm Ms_form(&fes); 
-	if (IsMassLumped(lumping))
-		Ms_form.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(scattering)));
-	else
-		Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
-	Ms_form.Assemble(); 
-	Ms_form.Finalize();
-
 	// allocate transport vector + views 
 	mfem::Vector psi(psi_size);
 	psi = 0.0; 
@@ -578,6 +578,15 @@ int main(int argc, char *argv[]) {
 		std::unique_ptr<DiffusionSyntheticAccelerationOperator> prec;
 		std::unique_ptr<mfem::Operator> dsa_op, dsa_op_extract;
 		std::unique_ptr<mfem::HypreBoomerAMG> amg;
+
+		// global scattering operator 
+		mfem::BilinearForm Ms_form(&fes); 
+		if (IsMassLumped(lumping))
+			Ms_form.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(scattering)));
+		else
+			Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
+		Ms_form.Assemble(); 
+		Ms_form.Finalize();
 
 		// build preconditioner from input spec 
 		if (prec_avail) {
@@ -758,7 +767,7 @@ int main(int argc, char *argv[]) {
 				source_op = new ConsistentLDGSMMOperator(disc, *quad, psi_ext, source_vec);
 			} else {
 				int source_lumping = accel["source_lumping"].get_or(0);
-				source_op = new IndependentSMMOperator(fes, vfes, *quad, psi_ext, source, inflow, 
+				source_op = new IndependentBlockSMMOperator(fes, vfes, *quad, psi_ext, source, inflow, 
 					alpha, bc_map, source_lumping);
 			}
 
@@ -804,7 +813,7 @@ int main(int argc, char *argv[]) {
 				source_op = new ConsistentIPSMMOperator(disc, total, *quad, psi_ext, source_vec);
 			else {
 				const int source_lumping = accel["source_lumping"].get_or(0);
-				source_op = new IndependentSMMOperator(fes, vfes, *quad, psi_ext, source, inflow, 
+				source_op = new IndependentBlockSMMOperator(fes, vfes, *quad, psi_ext, source, inflow, 
 					alpha, bc_map, source_lumping);
 			}
 
@@ -838,6 +847,67 @@ int main(int argc, char *argv[]) {
 			smm = std::make_unique<TripleProductOperator>(block_extract, inner_solver.get(), source_op, true, false, true); 
 			out << YAML::Key << "consistent" << YAML::Value << true; 
 		} 
+		else if (type == "CGSMM") {
+			phi.SetSpace(&cfes);
+			H1DiffusionDiscretization disc(cfes, total, absorption, bc_map, lumping);
+			disc.SetAlpha(alpha);
+			lo_op.reset(disc.GetOperator());
+			// iterative solve
+			if (inner_it_solver) {
+				amg = std::make_unique<mfem::HypreBoomerAMG>();
+				inner_it_solver->SetPreconditioner(*amg); 				
+			} 
+
+			inner_solver->SetOperator(*lo_op);
+
+			auto energy = MultiGroupEnergyGrid::MakeGray(0,1.0);
+			auto *source_op = new IndependentSMMOperator(cfes, fes, *quad, psi_ext, energy, 
+				total, source, inflow, alpha, bc_map, lumping);
+
+			smm = std::make_unique<mfem::ProductOperator>(
+				inner_solver.get(), source_op, false, true);
+		}
+		else if (type == "RTSMM") {
+			J.SetSpace(&rtfes);
+			RTDiffusionDiscretization disc(fes, rtfes, total, absorption, bc_map, lumping);
+			disc.SetAlpha(alpha);
+			lo_op.reset(disc.GetOperator());
+
+			inner_solver->SetOperator(*lo_op);
+			auto energy = MultiGroupEnergyGrid::MakeGray(0,1.0);
+			auto *source_op = new IndependentRTSMMOperator(fes, rtfes, *quad, psi_ext, energy, 
+				source, inflow, alpha, bc_map, lumping);
+
+			offsets = disc.GetOffsets();
+			block_x.Update(offsets);
+			auto *block_extract = new SubBlockExtractionOperator(block_x, 1);
+			smm = std::make_unique<TripleProductOperator>(
+				block_extract, inner_solver.get(), source_op, true, false, true); 			
+		}
+		else if (type == "HRTSMM") {
+			J.SetSpace(&rtfes);
+			auto *disc = new HybridizedRTDiffusionDiscretization(fes, rtfes, ifes, total, absorption, bc_map, lumping);
+			disc->SetAlpha(alpha);
+			lo_op.reset(disc->GetOperator());
+
+			if (inner_it_solver) {
+				amg = std::make_unique<mfem::HypreBoomerAMG>();
+				inner_it_solver->SetPreconditioner(*amg);
+			}
+
+			auto *hyb_solver = new HybridizedRTDiffusionDiscretization::Solver(*disc, *inner_solver);
+			hyb_solver->SetOperator(*lo_op);
+
+			auto energy = MultiGroupEnergyGrid::MakeGray(0,1.0);
+			auto *source_op = new IndependentRTSMMOperator(fes, rtfes, *quad, psi_ext, energy, 
+				source, inflow, alpha, bc_map, lumping);
+
+			offsets = hyb_solver->GetOffsets();
+			block_x.Update(offsets);
+			auto *block_extract = new SubBlockExtractionOperator(block_x, 1);
+			smm = std::make_unique<TripleProductOperator>(
+				block_extract, hyb_solver, source_op, true, true, true); 
+		}
 		else { MFEM_ABORT("acceleration type " << type << " not defined"); }
 
 		// set AMG object 
@@ -858,7 +928,17 @@ int main(int argc, char *argv[]) {
 		if (diffusion_solve) out << YAML::Key << "diffusion solve" << YAML::Value << diffusion_solve << YAML::Newline; 
 		out << YAML::EndMap; // end driver map 
 
-		MomentMethodFixedPointOperator G(D, Linv, Ms_form, *smm, source_vec, psi); 
+		// global scattering operator 
+		mfem::ParMixedBilinearForm Ms_form(phi.ParFESpace(), &fes);
+		if (IsMassLumped(lumping))
+			Ms_form.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(scattering)));
+		else
+			Ms_form.AddDomainIntegrator(new mfem::MassIntegrator(scattering)); 
+		Ms_form.Assemble(); 
+		Ms_form.Finalize();
+		auto Ms = std::unique_ptr<mfem::HypreParMatrix>(Ms_form.ParallelAssemble());
+
+		MomentMethodFixedPointOperator G(D, Linv, *Ms, *smm, source_vec, psi); 
 		outer_solver->SetOperator(G); 
 		io::SundialsUserCallbackData sundials_data(out, G, inner_it_solver); 
 		auto *sundials = dynamic_cast<mfem::SundialsSolver*>(outer_solver.get());
@@ -877,8 +957,9 @@ int main(int argc, char *argv[]) {
 		}
 
 		else {
-			mfem::Vector blank; 
-			outer_solver->Mult(blank, phi); 
+			mfem::Vector blank, x(phi.ParFESpace()->GetTrueVSize()); 
+			outer_solver->Mult(blank, x);
+			phi.Distribute(x); 
 			out << YAML::Key << "outer iterations" << YAML::Value << outer_solver->GetNumIterations();			
 		}
 		solve_timer.Stop(); 
@@ -903,23 +984,25 @@ int main(int argc, char *argv[]) {
 
 		// compute "consistency" between SN and moment solution 
 		// for scalar flux and current 
-		J = block_x.GetBlock(0);
-		moment_solution_HO.SetSize(moments_size);  
-		Dlin_aniso.Mult(psi, moment_solution_HO); 
-		mfem::ParGridFunction phi_sn(&fes, moment_solution_HO, 0); 
-		mfem::ParGridFunction J_sn(&vfes, moment_solution_HO, fes.GetVSize()); 
-		mfem::GridFunctionCoefficient phi_snc(&phi_sn); 
-		double consistency_phi = phi.ComputeL2Error(phi_snc); 
-		mfem::GridFunctionCoefficient J_snc(&J_sn); 
-		double consistency_J = J.ComputeL2Error(J_snc); 
-		std::stringstream ss; 
-		out << YAML::Key << "consistency" << YAML::Value << YAML::BeginMap; 
-			ss << std::setprecision(3) << std::scientific << consistency_phi; 
-			out << YAML::Key << "scalar flux" << YAML::Value << ss.str(); 
-			ss.str(""); 
-			ss << consistency_J; 
-			out << YAML::Key << "current" << YAML::Value << ss.str(); 
-		out << YAML::EndMap; 
+		if (block_x.Size()) {
+			J.Distribute(block_x.GetBlock(0));
+			moment_solution_HO.SetSize(moments_size);  
+			Dlin_aniso.Mult(psi, moment_solution_HO); 
+			mfem::ParGridFunction phi_sn(&fes, moment_solution_HO, 0); 
+			mfem::ParGridFunction J_sn(&vfes, moment_solution_HO, fes.GetVSize()); 
+			mfem::GridFunctionCoefficient phi_snc(&phi_sn); 
+			double consistency_phi = phi.ComputeL2Error(phi_snc); 
+			mfem::VectorGridFunctionCoefficient J_snc(&J_sn); 
+			double consistency_J = J.ComputeL2Error(J_snc); 
+			std::stringstream ss; 
+			out << YAML::Key << "consistency" << YAML::Value << YAML::BeginMap; 
+				ss << std::setprecision(3) << std::scientific << consistency_phi; 
+				out << YAML::Key << "scalar flux" << YAML::Value << ss.str(); 
+				ss.str(""); 
+				ss << consistency_J; 
+				out << YAML::Key << "current" << YAML::Value << ss.str(); 
+			out << YAML::EndMap; 
+		}
 	}
 
 	// --- clean up hanging pointers --- 

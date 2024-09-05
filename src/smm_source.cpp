@@ -400,7 +400,85 @@ void ConsistentIPSMMOperator::Mult(const mfem::Vector &psi, mfem::Vector &source
 	Ma->Mult(1.0, phi, 1.0, source_phi);
 }
 
-IndependentSMMOperator::IndependentSMMOperator(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+IndependentSMMOperator::IndependentSMMOperator(
+	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &tfes, 
+	const AngularQuadrature &quad, const TransportVectorExtents &psi_ext, 
+	const MultiGroupEnergyGrid &energy, mfem::Coefficient &total, 
+	PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
+	double alpha, const BoundaryConditionMap &bc_map, int lumping)
+	: fes(fes), tfes(tfes), quad(quad), psi_ext(psi_ext), total(total), source_coef(source_coef), 
+	  inflow_coef(inflow_coef), alpha(alpha), bc_map(bc_map), lumping(lumping)
+{
+	width = TotalExtent(psi_ext);
+	height = fes.GetTrueVSize();
+
+	marshak_bdr_attrs = CreateBdrAttributeMarker<INFLOW>(bc_map);
+	reflect_bdr_attrs = CreateBdrAttributeMarker<REFLECTIVE>(bc_map);
+
+	Q.SetSize(fes.GetVSize());
+	Q = 0.0;
+
+	for (int g=0; g<energy.Size(); g++) {
+		source_coef.SetEnergy(energy.LowerBound(g), energy.UpperBound(g), energy.MeanEnergy(g));
+		for (auto a=0; a<quad.Size(); a++) {
+			const auto &Omega = quad.GetOmega(a);
+			source_coef.SetAngle(Omega);
+			mfem::LinearForm fform(&fes);
+			fform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef));
+			mfem::VectorConstantCoefficient Omega_coef(Omega); 
+			mfem::RatioCoefficient source_total(source_coef, total);
+			mfem::ScalarVectorProductCoefficient Omega_source(source_total, Omega_coef);
+			fform.AddDomainIntegrator(new mfem::DomainLFGradIntegrator(Omega_source));
+			fform.Assemble();
+			Q.Add(quad.GetWeight(a), fform);
+		}		
+	}
+
+	InflowPartialCurrentCoefficient Jin_mg(inflow_coef, quad, energy); 
+	VectorComponentSumCoefficient Jin(Jin_mg);
+	mfem::ProductCoefficient Jin2(2.0, Jin); 
+	mfem::LinearForm fform(&fes); 
+	if (IsFaceLumped(lumping))
+		fform.AddBdrFaceIntegrator(
+			new QuadratureLumpedLFIntegrator(new ProjectedCoefBoundaryLFIntegrator(Jin2, *tfes.FEColl(), 2, 1))); 
+	else		
+		fform.AddBdrFaceIntegrator(new ProjectedCoefBoundaryLFIntegrator(Jin2, *tfes.FEColl(), 2, 1)); 
+	fform.Assemble(); 
+	Q.Add(-1.0, fform); 
+}
+
+void IndependentSMMOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const
+{
+	const bool lump_mass = IsMassLumped(lumping);
+	const bool lump_grad = IsGradientLumped(lumping);
+	const bool lump_face = IsFaceLumped(lumping);
+
+	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 
+	SMMCorrectionTensorCoefficient T(tfes, quad, psi_view); 
+	SMMBdrCorrectionFactorCoefficient beta(tfes, quad, psi_view, alpha);
+	MatrixDivergenceGridFunctionCoefficient divT(T);
+	mfem::RatioCoefficient neg_total_inv(-1.0, total);
+	mfem::ScalarVectorProductCoefficient divT_total(neg_total_inv, divT);
+
+	mfem::ParLinearForm fform(&fes); 
+	mfem::ProductCoefficient bdr_coef_f(-1.0, beta); 
+	mfem::LinearFormIntegrator *lfi;
+	lfi = new ProjectedCoefBoundaryLFIntegrator(bdr_coef_f, *fes.FEColl(), 2, 1);
+	if (lump_face) lfi = new QuadratureLumpedLFIntegrator(lfi);
+	fform.AddBdrFaceIntegrator(lfi, marshak_bdr_attrs);
+	lfi = new mfem::DomainLFGradIntegrator(divT_total);
+	if (lump_grad) lfi = new QuadratureLumpedLFIntegrator(lfi);
+	fform.AddDomainIntegrator(lfi);
+	lfi = new GradAverageTensorJumpLFIntegrator(total, T, 2, 1);
+	if (lump_face) lfi = new QuadratureLumpedLFIntegrator(lfi);
+	fform.AddInteriorFaceIntegrator(lfi);
+	fform.Assemble(); 
+	fform += Q;
+	fform.ParallelAssemble(source);
+}
+
+IndependentBlockSMMOperator::IndependentBlockSMMOperator(
+	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 	const AngularQuadrature &quad, const TransportVectorExtents &psi_ext, 
 	PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
 	double alpha, const BoundaryConditionMap &bc_map, int lumping)
@@ -448,7 +526,8 @@ IndependentSMMOperator::IndependentSMMOperator(mfem::ParFiniteElementSpace &fes,
 	Q1 *= 3.0; 		
 }
 
-IndependentSMMOperator::IndependentSMMOperator(mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+IndependentBlockSMMOperator::IndependentBlockSMMOperator(
+	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
 	const AngularQuadrature &quad, const MultiGroupEnergyGrid &energy, const TransportVectorExtents &psi_ext, 
 	PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
 	double alpha, const BoundaryConditionMap &bc_map, int lumping)
@@ -500,7 +579,7 @@ IndependentSMMOperator::IndependentSMMOperator(mfem::ParFiniteElementSpace &fes,
 	Q1 *= 3.0; 		
 }
 
-void IndependentSMMOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
+void IndependentBlockSMMOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const 
 {
 	const bool lump_mass = IsMassLumped(lumping);
 	const bool lump_grad = IsGradientLumped(lumping);
@@ -539,4 +618,102 @@ void IndependentSMMOperator::Mult(const mfem::Vector &psi, mfem::Vector &source)
 
 	fform += Q0; 
 	gform += Q1; 
+}
+
+IndependentRTSMMOperator::IndependentRTSMMOperator(
+	mfem::ParFiniteElementSpace &fes, mfem::ParFiniteElementSpace &vfes, 
+	const AngularQuadrature &quad, const TransportVectorExtents &psi_ext,
+	const MultiGroupEnergyGrid &energy, PhaseSpaceCoefficient &source_coef, 
+	PhaseSpaceCoefficient &inflow_coef, double alpha, 
+	const BoundaryConditionMap &bc_map, int lumping)
+	: fes(fes), vfes(vfes), quad(quad), psi_ext(psi_ext), alpha(alpha), 
+	  bc_map(bc_map), lumping(lumping)
+{
+	width = TotalExtent(psi_ext);
+
+	offsets.SetSize(3);
+	offsets[0] = 0;
+	offsets[1] = vfes.GetTrueVSize();
+	offsets[2] = fes.GetVSize();
+	offsets.PartialSum();
+	height = offsets.Last();
+
+	marshak_bdr_attrs = CreateBdrAttributeMarker<INFLOW>(bc_map);
+	reflect_bdr_attrs = CreateBdrAttributeMarker<REFLECTIVE>(bc_map);
+	vfes.GetEssentialTrueDofs(reflect_bdr_attrs, reflect_tdofs);
+
+	Q0.SetSize(fes.GetVSize()); 
+	Q0 = 0.0; 
+	Q1.SetSize(vfes.GetVSize()); 
+	Q1 = 0.0; 
+
+	for (auto g=0; g<energy.Size(); g++) {
+		source_coef.SetEnergy(energy.LowerBound(g), energy.UpperBound(g), energy.MeanEnergy(g));
+		for (auto a=0; a<quad.Size(); a++) {
+			const auto &Omega = quad.GetOmega(a); 
+			source_coef.SetAngle(Omega); 
+			mfem::LinearForm fform(&fes); 
+			fform.AddDomainIntegrator(new mfem::DomainLFIntegrator(source_coef)); 
+			fform.Assemble(); 
+
+			mfem::VectorConstantCoefficient Omega_coef(Omega); 
+			mfem::ScalarVectorProductCoefficient Omega_source(source_coef, Omega_coef);
+			mfem::LinearForm gform(&vfes); 
+			gform.AddDomainIntegrator(new mfem::VectorFEDomainLFIntegrator(Omega_source)); 
+			gform.Assemble();  
+
+			Q0.Add(quad.GetWeight(a), fform); 
+			Q1.Add(quad.GetWeight(a), gform); 
+		}		
+	}
+
+	InflowPartialCurrentCoefficient Jin_mg(inflow_coef, quad, energy); 
+	VectorComponentSumCoefficient Jin(Jin_mg);
+	mfem::ProductCoefficient bdr_coef(2.0/3.0/alpha, Jin); 
+	mfem::LinearForm gform(&vfes); 
+	mfem::LinearFormIntegrator *lfi = new VectorFEBoundaryNormalFaceLFIntegrator(bdr_coef, 2, 1);
+	if (IsFaceLumped(lumping)) lfi = new QuadratureLumpedLFIntegrator(lfi);
+	gform.AddBdrFaceIntegrator(lfi);
+	gform.Assemble(); 
+	Q1 += gform;
+	Q1 *= 3.0;
+}
+
+void IndependentRTSMMOperator::Mult(const mfem::Vector &psi, mfem::Vector &source) const
+{
+	mfem::BlockVector block_source(source, offsets);
+	const bool lump_mass = IsMassLumped(lumping);
+	const bool lump_grad = IsGradientLumped(lumping);
+	const bool lump_face = IsFaceLumped(lumping);
+
+	ConstTransportVectorView psi_view(psi.GetData(), psi_ext); 
+	SMMCorrectionTensorCoefficient T(fes, quad, psi_view); 
+	MatrixDivergenceGridFunctionCoefficient divT(T);
+	mfem::ScalarVectorProductCoefficient neg_divT(-1.0, divT);
+	SMMBdrCorrectionFactorCoefficient beta(fes, quad, psi_view, alpha);
+	mfem::ProductCoefficient bdr_coef(1.0/3.0/alpha, beta);
+
+	mfem::ParLinearForm gform(&vfes);
+	mfem::LinearFormIntegrator *lfi;
+	// v . div(T) 
+	lfi = new mfem::VectorFEDomainLFIntegrator(neg_divT);
+	if (lump_grad) lfi = new QuadratureLumpedLFIntegrator(lfi);
+	gform.AddDomainIntegrator(lfi);
+
+	// - {v} . [Tn]
+	lfi = new VectorFEAvgTensorJumpLFIntegrator(T);
+	if (lump_face) lfi = new QuadratureLumpedLFIntegrator(lfi); 
+	gform.AddInteriorFaceIntegrator(lfi);
+
+	// v.n beta / 3 / alpha 
+	lfi = new VectorFEBoundaryNormalFaceLFIntegrator(bdr_coef, 2, 1);
+	if (lump_face) lfi = new QuadratureLumpedLFIntegrator(lfi);
+	gform.AddBdrFaceIntegrator(lfi);
+	gform.Assemble();
+	gform *= 3.0;
+	gform += Q1;
+
+	gform.ParallelAssemble(block_source.GetBlock(0));
+	block_source.GetBlock(0).SetSubVector(reflect_tdofs, 0.0);
+	block_source.GetBlock(1) = Q0;
 }
