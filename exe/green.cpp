@@ -1291,7 +1291,7 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
 			out << YAML::Key << "time step size" << YAML::Value << time_step_old; 
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
-			out << YAML::Key << "outer" << YAML::Value << outer;
+			out << YAML::Key << "it" << YAML::Value << outer;
 			out << YAML::Key << "norm" << YAML::Value << outer_norm;
 			out << YAML::Key << "lo solve" << YAML::Value << YAML::BeginMap;
 				out << lo_monitor;
