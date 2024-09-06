@@ -75,28 +75,38 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table)
 	out << YAML::EndMap; 
 }
 
-void ProcessGlobalLogs(YAML::Emitter &out)
+LogMap<double,SUM,MAX> TimingLogPersistent;
+LogMap<int,SUM> EventLogPersistent;
+void ProcessGlobalLogs(YAML::Emitter &out, int verbose)
 {
 	EventLog.Synchronize();
 	TimingLog.Synchronize();
-	ValueLog.Synchronize();
 
-	if (EventLog.size() or TimingLog.size() or ValueLog.size()) {
-		out << YAML::Key << "logs" << YAML::Value << YAML::BeginMap; 
-			if (EventLog.size())
-				out << YAML::Key << "event" << EventLog;
-			if (TimingLog.size()) {
-				out << YAML::Key << "timing" << YAML::Value;
-				PrintTimingMap(out, TimingLog);
-			}
-			if (ValueLog.size())
-				out << YAML::Key << "value" << ValueLog;
-		out << YAML::EndMap;
+	const bool print_events = EventLog.size() and (verbose & 1);
+	const bool print_timing = TimingLog.size() and (verbose & 2);
+
+	if (print_events) {
+		out << YAML::Key << "event log" << YAML::Value << EventLog;
+	}
+
+	if (print_timing) {
+		out << YAML::Key << "timing log" << YAML::Value; 
+		io::PrintTimingMap(out, TimingLog);
+	}
+
+	if (TimingLog.size()) {
+		for (const auto &it : TimingLog) {
+			TimingLogPersistent.Log(it.first, it.second);
+		}
+	}
+	if (EventLog.size()) {
+		for (const auto &it : EventLog) {
+			EventLogPersistent.Log(it.first, it.second);
+		}
 	}
 
 	EventLog.clear();
 	TimingLog.clear();
-	ValueLog.clear();
 }
 
 mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 

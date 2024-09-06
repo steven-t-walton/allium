@@ -552,6 +552,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 	timer.Stop();
 	TimingLog.Log("sweep", timer.RealTime());
+
+	if (rank==0) EventLog.Register("sweeps");
 }
 
 void InverseAdvectionOperator::AssembleLocalMatrices() 

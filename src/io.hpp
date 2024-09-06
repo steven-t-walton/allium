@@ -40,6 +40,15 @@ void PrintTimingMap(YAML::Emitter &out, const T &map)
 	out << YAML::EndMap;
 }
 template<typename T>
+void PrintMapScientific(YAML::Emitter &out, const T &map, int precision=3)
+{
+	out << YAML::BeginMap; 
+	for (const auto &it : map) {
+		out << YAML::Key << it.first << YAML::Value << FormatScientific(it.second, precision);
+	}
+	out << YAML::EndMap;
+}
+template<typename T>
 void PrintArray(YAML::Emitter &out, const mfem::Array<T> &x)
 {
 	out << YAML::BeginSeq; 
@@ -50,7 +59,9 @@ void PrintArray(YAML::Emitter &out, const mfem::Array<T> &x)
 }
 
 // synchronize parallel logs, print to YAML, clear 
-void ProcessGlobalLogs(YAML::Emitter &out);
+extern LogMap<double,SUM,MAX> TimingLogPersistent;
+extern LogMap<int,SUM> EventLogPersistent;
+void ProcessGlobalLogs(YAML::Emitter &out, int verbose=3);
 
 // create a data collection based on string description 
 mfem::DataCollection *CreateDataCollection(std::string type, std::string output_root, 

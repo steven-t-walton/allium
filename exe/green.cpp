@@ -41,17 +41,15 @@ public:
 		auto &iters = *const_cast<mfem::Array<int>*>(&monitor.iters); 
 		const int sum = iters.Sum(); 
 		const double avg = (double)sum/iters.Size(); 
-		out << YAML::BeginMap; 
-			out << YAML::Key << "it" << YAML::Value << YAML::Flow << YAML::BeginMap; 
-				out << YAML::Key << "max" << YAML::Value << iters.Max(); 
-				out << YAML::Key << "min" << YAML::Value << iters.Min(); 
-				std::stringstream ss; 
-				ss << std::fixed << std::setw(3) << std::setprecision(2) << avg; 
-				out << YAML::Key << "avg" << YAML::Value << ss.str();  
-				out << YAML::Key << "total" << YAML::Value << sum; 
-			out << YAML::EndMap; 
-			out << YAML::Key << "max norm" << YAML::Key << monitor.max_norm; 
+		out << YAML::Key << "it" << YAML::Value << YAML::Flow << YAML::BeginMap; 
+			out << YAML::Key << "max" << YAML::Value << iters.Max(); 
+			out << YAML::Key << "min" << YAML::Value << iters.Min(); 
+			std::stringstream ss; 
+			ss << std::fixed << std::setw(3) << std::setprecision(2) << avg; 
+			out << YAML::Key << "avg" << YAML::Value << ss.str();  
+			out << YAML::Key << "total" << YAML::Value << sum; 
 		out << YAML::EndMap; 
+		out << YAML::Key << "max norm" << YAML::Key << monitor.max_norm; 
 		return out; 
 	}
 };
@@ -359,6 +357,7 @@ int main(int argc, char *argv[]) {
 
 	// --- load algorithmic parameters --- 
 	sol::table driver = lua["driver"]; 
+	const int log_verbosity = driver["log_verbosity"].get_or(1);
 	const int fe_order = driver["fe_order"]; 
 	const int sigma_fe_order = driver["sigma_fe_order"].get_or(fe_order); 
 	const int gray_sigma_fe_order = driver["gray_sigma_fe_order"].get_or(sigma_fe_order);
@@ -929,7 +928,11 @@ int main(int argc, char *argv[]) {
 			// only save initial condition if restart mode is off 
 			else {
 				dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
+				E *= 1.0/constants::SpeedOfLight;
+				Enu *= 1.0/constants::SpeedOfLight;
 				dc->Save(); 
+				E *= constants::SpeedOfLight;
+				Enu *= constants::SpeedOfLight;
 			}
 
 			out << YAML::Key << "visualization" << YAML::Value << YAML::BeginMap; 
@@ -965,6 +968,8 @@ int main(int argc, char *argv[]) {
 			tracer_dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
 			tracer_dc->RegisterField("sigmaE", &totalE.GetGridFunction());
 			tracer_dc->RegisterField("sigmaP", &totalP.GetGridFunction());
+			tracer_dc->RegisterField("cv", &cvgf); 
+			tracer_dc->RegisterField("density", &density_gf); 
 			if (restart_mode)
 				tracer_dc->UseRestartMode(true);
 			else {
@@ -1019,7 +1024,7 @@ int main(int argc, char *argv[]) {
 	// reduction 
 	LogMap<int,MAX> log;
 	LogMap<double,MAX> value_log;
-	LogMap<double,SUM,MAX> timing_log(MPI_COMM_WORLD);
+	// LogMap<double,SUM,MAX> timing_log(MPI_COMM_WORLD);
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
 	while (true) {
 		cycle_timer.Restart(); 
@@ -1049,7 +1054,7 @@ int main(int argc, char *argv[]) {
 			D.MultTranspose(em_source, psi); // phi -> psi 
 			psi += psi0; // add in time, fixed source 
 			Linv.Mult(psi, psi); // sweep, in place to avoid extra memory
-			timing_log.Log("sweep", mfem::toc());
+			TimingLog.Log("sweep", mfem::toc());
 
 			// compute gray moments of psi 
 			Dlin.Mult(psi, moments_nu);
@@ -1062,7 +1067,7 @@ int main(int argc, char *argv[]) {
 			Mtot_gray = 0.0; // set all entries to zero 
 			// assemble into existing sparsity pattern 
 			Mtot_gray.Assemble(); 
-			timing_log.Log("sigmaE", mfem::toc());
+			TimingLog.Log("sigmaE", mfem::toc());
 
 			totalR.Project();
 			totalRinv.Project();
@@ -1073,7 +1078,7 @@ int main(int argc, char *argv[]) {
 			mfem::tic();
 			source_op.Mult(psi, smm_source);
 			smm_source += moments0; // time source 
-			timing_log.Log("SMM source", mfem::toc());
+			TimingLog.Log("SMM source", mfem::toc());
 			int inner = 1;
 			double inner_norm;
 			while (true) {
@@ -1088,7 +1093,7 @@ int main(int argc, char *argv[]) {
 				add(abs_source, 1.0, T0, abs_source); // abs_source + 1.0 * T0 -> abs_source 
 				// nonlinearly solve for T given E 
 				meb_solver.Mult(abs_source, T);
-				timing_log.Log("meb solve", mfem::toc());
+				TimingLog.Log("meb solve", mfem::toc());
 				meb_monitor.Register(meb_solver.GetNumIterations(), meb_solver.GetFinalRelNorm());
 
 				if (implicit_opacity) {
@@ -1106,7 +1111,7 @@ int main(int argc, char *argv[]) {
 				// term in opacity correction 
 				mfem::tic();
 				opac_corr_form.Assemble();
-				timing_log.Log("opac correction", mfem::toc());
+				TimingLog.Log("opac correction", mfem::toc());
 
 				// form schur complement of jacobian 
 				mfem::tic();
@@ -1135,7 +1140,7 @@ int main(int argc, char *argv[]) {
 				dB_dBt_inv.AddMult(em_source_gr, lo_source.GetBlock(1));
 				// add in opacity correction and SMM source
 				add(smm_source.GetBlock(0), 3.0, opac_corr_form, lo_source.GetBlock(0));
-				timing_log.Log("LO assembly", mfem::toc());
+				TimingLog.Log("LO assembly", mfem::toc());
 
 				// solve linearized LO system 
 				mfem::tic();
@@ -1154,7 +1159,7 @@ int main(int argc, char *argv[]) {
 						}
 					}					
 				}
-				timing_log.Log("LO solve", mfem::toc());
+				TimingLog.Log("LO solve", mfem::toc());
 
 				// stopping criterion 
 				// const auto norm = prev.ComputeL2Error(Tcoef);
@@ -1221,7 +1226,7 @@ int main(int argc, char *argv[]) {
 			restart_dc->SetTime(time); restart_dc->SetTimeStep(time_step);
 			restart_dc->Write(x);
 		}
-		timing_log.Log("write", mfem::toc());
+		TimingLog.Log("write", mfem::toc());
 
 		// check for new time step size 
 		bool time_step_changed = false; 
@@ -1259,7 +1264,7 @@ int main(int argc, char *argv[]) {
 			lo_disc->SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
 
 			assembly_timer.Stop(); 
-			timing_log.Log("assembly time", assembly_timer.RealTime());
+			TimingLog.Log("assembly time", assembly_timer.RealTime());
 		}
 
 		fixup_monitor = 0.0;
@@ -1288,15 +1293,20 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
 			out << YAML::Key << "outer" << YAML::Value << outer;
 			out << YAML::Key << "norm" << YAML::Value << outer_norm;
-			out << YAML::Key << "lo solve" << YAML::Value << lo_monitor;
-			if (linear_monitor)
-				out << YAML::Key << "linear solver" << YAML::Value << *linear_monitor;
-			out << YAML::Key << "energy balance solver" << YAML::Value << meb_monitor;
+			out << YAML::Key << "lo solve" << YAML::Value << YAML::BeginMap;
+				out << lo_monitor;
+				if (linear_monitor) {
+					out << YAML::Key << "linear solver" << YAML::Value << YAML::BeginMap
+						<< *linear_monitor << YAML::EndMap;
+				}
+				out << YAML::Key << "energy balance solver" << YAML::Value << YAML::BeginMap 
+					<< meb_monitor << YAML::EndMap;
+			out << YAML::EndMap;
 			out << YAML::Key << "consistency" << YAML::Value << YAML::BeginMap;
 				out << YAML::Key << "energy density" << YAML::Value << io::FormatScientific(consistency_E);
 				out << YAML::Key << "flux" << YAML::Value << io::FormatScientific(consistency_F);
 			out << YAML::EndMap;
-			io::ProcessGlobalLogs(out);
+			io::ProcessGlobalLogs(out, log_verbosity);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
 
@@ -1321,14 +1331,17 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (value_log.size()) {
-		out << YAML::Key << "value log" << YAML::Value << value_log;
+		out << YAML::Key << "value log" << YAML::Value;
+		io::PrintMapScientific(out, value_log);
 	}
 
-	// print the timing log to YAML map 
-	timing_log.Synchronize(); // <-- get times in parallel 
-	if (timing_log.size()) {
-		out << YAML::Key << "timing log" << YAML::Value;
-		io::PrintTimingMap(out, timing_log);
+	// print logs persistent across all time steps 
+	if (io::TimingLogPersistent.size()) {
+		out << YAML::Key << "timings" << YAML::Value;
+		io::PrintTimingMap(out, io::TimingLogPersistent);
+	}
+	if (io::EventLogPersistent.size()) {
+		out << YAML::Key << "event log" << YAML::Value << io::EventLogPersistent;
 	}
 
 	// --- clean up hanging pointers --- 

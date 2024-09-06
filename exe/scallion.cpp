@@ -424,6 +424,7 @@ int main(int argc, char *argv[]) {
 
 	// --- load algorithmic parameters --- 
 	sol::table driver = lua["driver"]; 
+	const int log_verbosity = driver["log_verbosity"].get_or(1);
 	const int fe_order = driver["fe_order"]; 
 	const int sigma_fe_order = driver["sigma_fe_order"].get_or(fe_order); 
 	const int gray_sigma_fe_order = driver["gray_sigma_fe_order"].get_or(sigma_fe_order);
@@ -990,10 +991,13 @@ int main(int argc, char *argv[]) {
 			tracer_dc->SetPrefixPath(output_root); 
 			tracer_dc->SetPrecision(precision); 
 			tracer_dc->RegisterField("E", &E); 
+			tracer_dc->RegisterField("F", &F);
 			tracer_dc->RegisterField("T", &T); 
 			tracer_dc->RegisterField("Tpwc", &Tpw); 
 			tracer_dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
 			tracer_dc->RegisterField("sigmaE", &totalE.GetGridFunction());
+			tracer_dc->RegisterField("cv", &cvgf); 
+			tracer_dc->RegisterField("density", &density_gf); 
 			if (restart_mode)
 				tracer_dc->UseRestartMode(true);
 			else {
@@ -1038,7 +1042,6 @@ int main(int argc, char *argv[]) {
 
 	mfem::StopWatch cycle_timer; 
 	LogMap<int,MAX> log;
-	LogMap<double,SUM,MAX> timing_log;
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
 	while (true) {
 		cycle_timer.Restart(); 
@@ -1173,7 +1176,7 @@ int main(int argc, char *argv[]) {
 				log.Log("max DSA iterations", dsa_monitor->iters.Max());
 				out << YAML::Key << "dsa solver" << YAML::Value << *dsa_monitor;
 			}
-			io::ProcessGlobalLogs(out);
+			io::ProcessGlobalLogs(out, log_verbosity);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
 
@@ -1190,9 +1193,13 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "log" << YAML::Value << log;
 	}
 
-	if (timing_log.size()) {
-		out << YAML::Key << "timing log" << YAML::Value; 
-		io::PrintTimingMap(out, timing_log);
+	// print logs persistent across all time steps 
+	if (io::TimingLogPersistent.size()) {
+		out << YAML::Key << "timings" << YAML::Value;
+		io::PrintTimingMap(out, io::TimingLogPersistent);
+	}
+	if (io::EventLogPersistent.size()) {
+		out << YAML::Key << "event log" << YAML::Value << io::EventLogPersistent;
 	}
 
 	// --- clean up hanging pointers --- 

@@ -138,4 +138,3 @@ public:
 
 extern LogMap<double,SUM,MAX> TimingLog; 
 extern LogMap<int,SUM> EventLog; 
-extern LogMap<double,MAX> ValueLog;

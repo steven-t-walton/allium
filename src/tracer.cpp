@@ -34,13 +34,19 @@ struct FixedWidthFormatter {
 	}
 	void operator()(std::ostream &out, double value, bool start=false) {
 		if (!start) out << ","; 
-		out << std::scientific << std::setprecision(precision) << std::setw(width) << value; 
+		out << std::scientific << std::setfill(' ') << std::setprecision(precision) << std::setw(width) << value; 
+	}
+	template<typename T>
+	void operator()(std::ostream &out, const T &value, bool start=false) {
+		if (!start) out << ",";
+		out << std::setfill(' ') << std::setprecision(precision) << std::setw(width) << value;
 	}
 };
 
 void TracerDataCollection::Save()
 {
 	if (first) {
+		std::array<std::string,3> vec_suffix = {"x", "y", "z"};
 		const auto err = create_directory(GetPrefixPath(), GetMesh(), myid);
 		int count = 0; 
 		for (int n=0; n<elem_ids.Size(); n++) {
@@ -58,10 +64,12 @@ void TracerDataCollection::Save()
 					out.open(fname_ss.str(), std::ios::out); 
 					out << "cycle,time,time step,x,y,z";
 					for (auto &field : field_map) {
-						if (field.second->VectorDim()>1) {
-							out << "," << field.first << "_x,"
-								<< field.first << "_y," 
-								<< field.first << "_z"; 
+						const auto vdim = field.second->VectorDim();
+						if (vdim>1) {
+							for (int d=0; d<vdim; d++) {
+								out << "," << field.first << "_" << vec_suffix[d];
+							}
+							out << "," << "|" << field.first << "|";
 						}
 						else {
 							out << "," << field.first; 						
@@ -73,7 +81,6 @@ void TracerDataCollection::Save()
 		}
 		first = false; 
 	}
-
 	const auto width = precision + 3; 
 	FixedWidthFormatter f(precision, width); 
 
@@ -97,17 +104,18 @@ void TracerDataCollection::Save()
 		auto &trans = *mesh->GetElementTransformation(e); 
 		const auto &ip = ips[n]; 
 		for (auto &field : field_map) {
-			if (field.second->VectorDim() == 1) {
+			const auto vdim = field.second->VectorDim();
+			if (vdim == 1) {
 				mfem::GridFunctionCoefficient coef(field.second); 
 				const double val = coef.Eval(trans, ip); 
 				f(out, val); 				
 			} else {
 				mfem::VectorGridFunctionCoefficient coef(field.second); 
 				coef.Eval(vec_val, trans, ip); 
-				vec_val.SetSize(3); 
 				for (const auto &v : vec_val) {
 					f(out, v); 
 				}
+				f(out, vec_val.Norml2());
 			}
 		}
 		out << std::endl; // <-- use endl to force flush 
