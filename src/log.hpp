@@ -113,18 +113,7 @@ public:
 				for (int i=0; i<nbr_count-1; i++) {
 					std::string key(nbr_key_data + nbr_key_offsets[i], nbr_key_offsets[i+1] - nbr_key_offsets[i]); 
 					const T &nbr = nbr_value_data[i]; 
-					auto it = this->find(key); 
-					if (it == this->end()) {
-						this->operator[](key) = 0; 
-					}
-					T &my_value = this->at(key); 
-					if constexpr (ParOp == LogOperation::SUM) {
-						my_value += nbr; 
-					} else if constexpr (ParOp == LogOperation::MIN) {
-						my_value = std::min(my_value, nbr); 
-					} else if constexpr (ParOp == LogOperation::MAX) {
-						my_value = std::max(my_value, nbr); 
-					} 
+					::Log<ParOp>(*this, key, nbr);
 				}
 
 				delete[] nbr_key_data; 
