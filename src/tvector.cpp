@@ -1,5 +1,6 @@
 #include "tvector.hpp"
 #include "multigroup.hpp"
+#include "lumping.hpp"
 
 ZerothMomentCoefficient::ZerothMomentCoefficient(
 	const mfem::FiniteElementSpace &fes, const MomentVectorExtents &phi_ext, const mfem::Vector &data)
@@ -64,11 +65,11 @@ SNTimeMassMatrix::SNTimeMassMatrix(const mfem::FiniteElementSpace &fes,
 	mfem::Array<int> dofs; 
 	mfem::MassIntegrator mi; 
 	for (int e=0; e<fes.GetNE(); e++) {
-		fes.GetElementDofs(e, dofs); 
-		mats[e] = new mfem::DenseMatrix(dofs.Size()); 
-		mi.AssembleElementMatrix(*fes.GetFE(e), *fes.GetElementTransformation(e), *mats[e]); 
-		if (lump)
-			mats[e]->Lump(); 
+		auto &trans = *fes.GetElementTransformation(e);
+		LumpedIntegrationRule lumped_ir(trans.GetGeometryType()); 
+		if (lump) mi.SetIntegrationRule(lumped_ir);
+		mats[e] = new mfem::DenseMatrix;
+		mi.AssembleElementMatrix(*fes.GetFE(e), trans, *mats[e]); 
 	}
 }
 
