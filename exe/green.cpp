@@ -794,7 +794,7 @@ int main(int argc, char *argv[]) {
 
 	ProjectedCoefficient *first_moment_opac;
 	if (sigmaF_type == "flux") first_moment_opac = &totalF;
-	else if (sigmaF_type == "rosseland") first_moment_opac = &totalR;
+	else if (sigmaF_type == "rosseland") first_moment_opac = &totalRinv;
 	// source term 
 	TransportVectorExtents psi_ext_gr(1, quad->Size(), fes.GetVSize());
 	mfem::Vector source_vec_gr(TotalExtent(psi_ext_gr));
@@ -802,6 +802,7 @@ int main(int argc, char *argv[]) {
 	if (lo_type == "ldg") {
 		auto *ptr = new BlockLDGDiscretization(fes, vfes, *first_moment_opac, 
 			totalE, bc_map, lump);
+		ptr->SetAlpha(alpha);
 		if (consistent)
 			gr_source_op = std::make_unique<ConsistentLDGSMMOperator>(
 				*ptr, *quad, psi_ext_gr, source_vec_gr);
@@ -823,6 +824,7 @@ int main(int argc, char *argv[]) {
 	else if (lo_type == "p1") {
 		auto *ptr = new P1Discretization(fes, vfes, *first_moment_opac, 
 			totalE, bc_map, lump);
+		ptr->SetAlpha(alpha);
 		if (!consistent) MFEM_ABORT("only consistent supported for P1");
 		gr_source_op = std::make_unique<ConsistentP1SMMOperator>(
 			*ptr, *quad, psi_ext_gr, source_vec_gr);
@@ -832,7 +834,6 @@ int main(int argc, char *argv[]) {
 	}
 	lo_disc->SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
 	lo_disc->SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
-	lo_disc->SetAlpha(alpha);
 
 	// NOTE: product operator has temporary storage the size of 
 	// one group of psi 
