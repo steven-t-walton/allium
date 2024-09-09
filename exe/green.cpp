@@ -616,7 +616,7 @@ int main(int argc, char *argv[]) {
 	PlanckSpectrumMGCoefficient planck_coef(energy_grid.Bounds(), Tcoef);
 	OpacityGroupCollapseCoefficient sigmaP_coef(total, planck_coef);
 	// flux collapse
-	RowL2NormVectorCoefficient flux_collapse_coef(Fnu_coef);
+	RowL1NormVectorCoefficient flux_collapse_coef(Fnu_coef);
 	OpacityGroupCollapseCoefficient sigmaF_coef(total, flux_collapse_coef);
 	// second derivative weighted 
 	PlanckSecondDerivativeSpectrumMGCoefficient planck2_coef(energy_grid.Bounds(), Tcoef);
@@ -713,6 +713,8 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "consistent" << YAML::Value << consistent;
 		out << YAML::Key << "implicit opacity" << YAML::Value << implicit_opacity;
 		out << YAML::Key << "sigmaF weight" << YAML::Value << sigmaF_type;
+		out << YAML::Key << "floor radE" << YAML::Value << floor_radE_LO;
+		out << YAML::Key << "reset to ho" << YAML::Value << reset_to_ho;
 
 	// energy balance nonlinear form 
 	// cv/dt + sigma B(T)
@@ -1018,13 +1020,13 @@ int main(int argc, char *argv[]) {
 	DenseBlockDiagonalOperator dB_dBt_inv(fes);
 
 	mfem::StopWatch cycle_timer; // times cost per time step 
+	mfem::StopWatch timer;
 	// log events across time steps 
 	// such as number of outer iterations 
 	// assumed to be data that does not require parallel 
 	// reduction 
 	LogMap<int,MAX> log;
 	LogMap<double,MAX> value_log;
-	// LogMap<double,SUM,MAX> timing_log(MPI_COMM_WORLD);
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
 	while (true) {
 		cycle_timer.Restart(); 
@@ -1049,25 +1051,23 @@ int main(int argc, char *argv[]) {
 		while (true) {
 			mfem::ParGridFunction Estar(E); // store previous energy density for stopping criterion
 
-			mfem::tic();
 			emission_form.Mult(T, em_source); // comute emission term 
 			D.MultTranspose(em_source, psi); // phi -> psi 
 			psi += psi0; // add in time, fixed source 
 			Linv.Mult(psi, psi); // sweep, in place to avoid extra memory
-			TimingLog.Log("sweep", mfem::toc());
 
 			// compute gray moments of psi 
 			Dlin.Mult(psi, moments_nu);
 			to_gray_op_moments.Mult(moments_nu, moments_ho);
 
 			// compute E_HO-weighted opacity 
-			mfem::tic(); 
+			timer.Restart(); 
 			totalE.Project();
 			// re-assemble mass matrix 
 			Mtot_gray = 0.0; // set all entries to zero 
 			// assemble into existing sparsity pattern 
 			Mtot_gray.Assemble(); 
-			TimingLog.Log("sigmaE", mfem::toc());
+			TimingLog.Log("sigmaE", timer.RealTime());
 
 			totalR.Project();
 			totalRinv.Project();
@@ -1075,17 +1075,17 @@ int main(int argc, char *argv[]) {
 			totalF.Project();
 
 			// compute SMM closure 
-			mfem::tic();
+			timer.Restart();
 			source_op.Mult(psi, smm_source);
 			smm_source += moments0; // time source 
-			TimingLog.Log("SMM source", mfem::toc());
+			TimingLog.Log("SMM source", timer.RealTime());
 			int inner = 1;
 			double inner_norm;
 			while (true) {
 				mfem::ParGridFunction prev(E); // previous temperature for stopping criterion 
 				mfem::ParGridFunction Tprev(T);
 
-				mfem::tic();
+				timer.Restart();
 				// nonlinearly eliminate temperature 
 				// compute sigma c E term 
 				Mtot_gray.Mult(E, abs_source); 
@@ -1093,7 +1093,7 @@ int main(int argc, char *argv[]) {
 				add(abs_source, 1.0, T0, abs_source); // abs_source + 1.0 * T0 -> abs_source 
 				// nonlinearly solve for T given E 
 				meb_solver.Mult(abs_source, T);
-				TimingLog.Log("meb solve", mfem::toc());
+				TimingLog.Log("meb solve", timer.RealTime());
 				meb_monitor.Register(meb_solver.GetNumIterations(), meb_solver.GetFinalRelNorm());
 
 				if (implicit_opacity) {
@@ -1109,12 +1109,12 @@ int main(int argc, char *argv[]) {
 
 				// compute rosseland opacity-dependent 
 				// term in opacity correction 
-				mfem::tic();
+				timer.Restart();
 				opac_corr_form.Assemble();
-				TimingLog.Log("opac correction", mfem::toc());
+				TimingLog.Log("opac correction", timer.RealTime());
 
 				// form schur complement of jacobian 
-				mfem::tic();
+				timer.Restart();
 				auto K = std::unique_ptr<mfem::BlockOperator>(lo_disc->GetOperator());
 				const auto &dB = gr_emission_form.GetGradient(T); // gradient of emission
 				auto &dBt_inv = meb_form.GetGradient(T); // gradient of energy balance equation
@@ -1140,10 +1140,10 @@ int main(int argc, char *argv[]) {
 				dB_dBt_inv.AddMult(em_source_gr, lo_source.GetBlock(1));
 				// add in opacity correction and SMM source
 				add(smm_source.GetBlock(0), 3.0, opac_corr_form, lo_source.GetBlock(0));
-				TimingLog.Log("LO assembly", mfem::toc());
+				TimingLog.Log("LO assembly", timer.RealTime());
 
 				// solve linearized LO system 
-				mfem::tic();
+				timer.Restart();
 				lo_solver->SetOperator(*K); // <-- requires AMG setup 
 				lo_solver->Mult(lo_source, moments); // uses preconditioned CG to invert Schur complement 
 				if (linear_it_solver and !linear_it_solver->GetConverged() and root)
@@ -1159,7 +1159,7 @@ int main(int argc, char *argv[]) {
 						}
 					}					
 				}
-				TimingLog.Log("LO solve", mfem::toc());
+				TimingLog.Log("LO solve", timer.RealTime());
 
 				// stopping criterion 
 				// const auto norm = prev.ComputeL2Error(Tcoef);
@@ -1201,7 +1201,7 @@ int main(int argc, char *argv[]) {
 
 		// --- output to file --- 
 		// write data collection to file 
-		mfem::tic();
+		timer.Restart();
 		bool done = time >= final_time - 1e-14 or cycle >= max_cycles; 
 		if (dc and (cycle % output_freq == 0 or done)) {
 			output_cycle++;
@@ -1226,7 +1226,7 @@ int main(int argc, char *argv[]) {
 			restart_dc->SetTime(time); restart_dc->SetTimeStep(time_step);
 			restart_dc->Write(x);
 		}
-		TimingLog.Log("write", mfem::toc());
+		TimingLog.Log("write", timer.RealTime());
 
 		// check for new time step size 
 		bool time_step_changed = false; 
