@@ -399,10 +399,15 @@ int main(int argc, char *argv[]) {
 	mfem::H1_FECollection cfec(fe_order, dim);
 	mfem::ParFiniteElementSpace cfes(&mesh, &cfec);
 
-	mfem::RT_FECollection rtfec(fe_order, dim);
-	mfem::ParFiniteElementSpace rtfes(&mesh, &rtfec);
+	std::unique_ptr<mfem::FiniteElementCollection> rtfec;
+	if (dim == 1) {
+		rtfec = std::make_unique<mfem::H1_FECollection>(fe_order, dim);
+	} else {
+		rtfec = std::make_unique<mfem::RT_FECollection>(fe_order, dim);
+	}
+	mfem::ParFiniteElementSpace rtfes(&mesh, rtfec.get());
 
-	mfem::DG_Interface_FECollection ifec(fe_order, dim);
+	mfem::DG_Interface_FECollection ifec(fe_order, std::max(dim,2));
 	mfem::ParFiniteElementSpace ifes(&mesh, &ifec);
 
 	// piecewise constant used for plotting and storing cross section data 
