@@ -893,7 +893,8 @@ int main(int argc, char *argv[]) {
 
 	// working vectors for moment algorithm 
 	mfem::Vector em_source(fes.GetVSize()*G), em_source_gr(fes.GetVSize()), abs_source(fes.GetVSize()),
-		residual_T(fes.GetVSize()), source_T(fes.GetVSize()), source_phi(fes.GetVSize()), dT(fes.GetVSize());
+		residual_T(fes.GetVSize()), source_T(fes.GetVSize()), residual_phi(fes.GetVSize()),
+		source_phi(fes.GetVSize()), dT(fes.GetVSize());
 	DenseBlockDiagonalOperator dB_dBt_inv(fes);
 
 	mfem::StopWatch cycle_timer; // times cost per time step 
@@ -944,20 +945,10 @@ int main(int argc, char *argv[]) {
 
 			// form T residual 
 			gr_emission_form.Mult(T, em_source_gr);
-			auto K = std::unique_ptr<mfem::HypreParMatrix>(lo_disc.GetOperator());
-			lo_solver.SetOperator(*K);
-			lo_solver.Mult(em_source_gr, source_phi);
-			add(Eho, -1.0, source_phi, source_phi);
-			Mtot_gray.Mult(source_phi, abs_source);
-			// add cv/dt T0 
-			add(abs_source, 1.0, T0, residual_T); 
-			for (int i=0; i<residual_T.Size(); i++) {
-				if (residual_T(i) <= 0.0) {
-					EventLog.Register("negative residual");
-				}
-			}
-
-			// Elo = Eho;
+			auto *K2 = lo_disc.GetOperator();
+			K2->Mult(Eho, source_phi);
+			delete K2;
+			add(source_phi, -1.0, em_source_gr, residual_phi);
 
 			int inner = 1;
 			double inner_norm;
@@ -966,7 +957,7 @@ int main(int argc, char *argv[]) {
 				mfem::ParGridFunction Eloprev(Elo);
 
 				Mtot_gray.Mult(Elo, abs_source);
-				abs_source += residual_T;
+				abs_source += T0;
 				for (int i=0; i<abs_source.Size(); i++) {
 					if (abs_source(i) <= 0.0) {
 						EventLog.Register("negative meb source");
@@ -988,10 +979,11 @@ int main(int argc, char *argv[]) {
 
 				meb_form.Mult(T, source_T);
 				if (source_T.CheckFinite() > 0) MFEM_ABORT("inf T source");
-				add(residual_T, -1.0, source_T, source_T);
+				add(T0, -1.0, source_T, source_T);
 				dB_dBt_inv.Mult(source_T, source_phi);
 				gr_emission_form.Mult(T, em_source_gr);
 				add(em_source_gr, 1.0, source_phi, source_phi);
+				add(source_phi, 1.0, residual_phi, source_phi);
 
 				if (source_phi.CheckFinite() > 0) MFEM_ABORT("inf phi source");
 
