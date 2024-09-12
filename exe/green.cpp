@@ -702,7 +702,7 @@ int main(int argc, char *argv[]) {
 	const bool floor_radE_LO = solver["floor_E"].get_or(false);
 	const bool reset_to_ho = solver["reset_to_ho"].get_or(false);
 	const std::string sigmaF_type = io::GetAndValidateOption<std::string>(solver, "sigmaF_weight", 
-		{"flux", "rosseland"}, "flux", root);
+		{"flux", "rosseland", "rosseland inv"}, "flux", root);
 	sol::table linear_solver_table = solver["solver"];
 	sol::table ho_solver_table = solver["ho_solver"];
 	sol::table lo_solver_table = solver["lo_solver"];
@@ -794,7 +794,8 @@ int main(int argc, char *argv[]) {
 
 	ProjectedCoefficient *first_moment_opac;
 	if (sigmaF_type == "flux") first_moment_opac = &totalF;
-	else if (sigmaF_type == "rosseland") first_moment_opac = &totalRinv;
+	else if (sigmaF_type == "rosseland") first_moment_opac = &totalR;
+	else if (sigmaF_type == "rosseland inv") first_moment_opac = &totalRinv;
 	// source term 
 	TransportVectorExtents psi_ext_gr(1, quad->Size(), fes.GetVSize());
 	mfem::Vector source_vec_gr(TotalExtent(psi_ext_gr));
