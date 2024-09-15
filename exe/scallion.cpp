@@ -12,6 +12,7 @@
 #include "trt_integrators.hpp"
 #include "trt_picard.hpp"
 #include "trt_linearized.hpp"
+#include "trt_ndsa.hpp"
 #include "lumping.hpp"
 #include "tracer.hpp"
 #include "block_diag_op.hpp"
@@ -47,7 +48,7 @@ public:
 				out << YAML::Key << "avg" << YAML::Value << ss.str();  
 				out << YAML::Key << "total" << YAML::Value << sum; 
 			out << YAML::EndMap; 
-			out << YAML::Key << "max norm" << YAML::Key << monitor.max_norm; 
+			out << YAML::Key << "max norm" << YAML::Key << io::FormatScientific(monitor.max_norm); 
 		out << YAML::EndMap; 
 		return out; 
 	}
@@ -640,11 +641,19 @@ int main(int argc, char *argv[]) {
 	ProjectedCoefficient totalE(gray_sigma_fes, sigmaE);
 	totalE.Project();
 
+	// planck weighted 
+	PlanckSpectrumMGCoefficient planck_coef(energy_grid.Bounds(), Tcoef);
+	OpacityGroupCollapseCoefficient sigmaP(total, planck_coef);
+	ProjectedCoefficient totalP(gray_sigma_fes, sigmaP);
+
 	// rosseland weighted 
 	RosselandSpectrumMGCoefficient rosseland_coef(energy_grid.Bounds(), Tcoef);
 	OpacityGroupCollapseCoefficient sigmaR(total, rosseland_coef);
+	InverseOpacityGroupCollapseCoefficient sigmaRinv(total, rosseland_coef);
 	ProjectedCoefficient totalR(gray_sigma_fes, sigmaR);
+	ProjectedCoefficient totalRinv(gray_sigma_fes, sigmaRinv);
 	totalR.Project();
+	totalRinv.Project();
 
 	// collapse to gray with rosseland spectrum 
 	WeightedGroupCollapseOperator to_gray_ross_op(fes, phi_ext, rosseland_coef);
@@ -711,13 +720,18 @@ int main(int argc, char *argv[]) {
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	DenseBlockDiagonalNonlinearForm meb_form(&fes);
 	if (IsMassLumped(lump)) {
-		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total))); 
+		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
+		// meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP))); 
 		meb_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
 	}
 	else {
 		meb_form.AddDomainIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total, 2, 2 + sigma_fe_order)); 
 		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}
+
+	DenseBlockDiagonalNonlinearForm gr_emission_form(&fes);
+	// gr_emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
+	gr_emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
 
 	// emission nonlinear form 
 	// sigma_g B_g(T) 
@@ -736,6 +750,16 @@ int main(int argc, char *argv[]) {
 	// computes sum_g sigma_g phi_g 
 	mfem::ProductOperator Mtot_collapse(&to_gray_op, &Mtot, false, false);
 
+	mfem::BilinearForm Mtot_gray(&fes);
+	if (IsMassLumped(lump)) {
+		Mtot_gray.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(totalE)));
+	} else {
+		Mtot_gray.AddDomainIntegrator(new mfem::MassIntegrator(totalE));
+	}
+	Mtot_gray.UsePrecomputedSparsity();
+	Mtot_gray.Assemble();
+	Mtot_gray.Finalize();
+
 	// solver for local dense matrices 
 	// assume diagonal if mass lumped
 	std::unique_ptr<mfem::Solver> local_mat_inv; 
@@ -753,9 +777,9 @@ int main(int argc, char *argv[]) {
 	sol::table solver = driver["solver"]; 
 	if (!solver.valid()) MFEM_ABORT("must supply solver options"); 
 	const std::string solver_type = solver["type"]; 
-	io::ValidateOption<std::string>("solver type", solver_type, {"picard", "linearized", "newton"}, root); 
+	io::ValidateOption<std::string>("solver type", solver_type, {"picard", "linearized", "ndsa"}, root); 
 	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver, local_meb_solver, global_meb_solver,
-		linear_solver;
+		linear_solver, lo_solver;
 	std::unique_ptr<DenseBlockDiagonalNonlinearSolver> meb_solver;
 	std::unique_ptr<DenseBlockDiagonalSolver> linearized_meb_solver;
 	std::unique_ptr<mfem::Solver> dsa_solver;
@@ -763,9 +787,10 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
 	std::unique_ptr<PARSolver> lmfg_solver;
 	std::unique_ptr<InverseMomentDiscretization> dsa_inv;
-	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor; 
+	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor, meb_monitor; 
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
 	std::unique_ptr<LinearizedTRTOperator> linearized_op;
+	std::unique_ptr<NonlinearDSATRTOperator> ndsa_op;
 	std::unique_ptr<mfem::Operator> stepper; 	
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
 	out << YAML::Key << "type" << YAML::Value << solver_type; 
@@ -817,7 +842,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "energy balance solver" << YAML::Value << meb_solver_table; 
 	} 
 
-	else if (solver_type == "newton" or solver_type == "linearized") {
+	else if (solver_type == "linearized") {
 		// create nonlinear solver 
 		sol::table nonlin_solve_table = solver["nonlinear_solver"]; 
 		io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
@@ -910,6 +935,79 @@ int main(int argc, char *argv[]) {
 		stepper.reset(step_ptr);
 
 		out << YAML::Key << "implicit opacity" << YAML::Value << implicit_opac;
+	}
+
+	else if (solver_type == "ndsa") {
+		sol::table nonlin_solve_table = solver["outer_solver"];
+		if (!nonlin_solve_table.valid()) MFEM_ABORT("must supply outer_solver"); 
+		io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
+			{"fp", "kinsol"}, root); 
+		nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
+		out << YAML::Key << "outer solver" << YAML::Value << nonlin_solve_table;
+
+		sol::table meb_solver_table = solver["energy_balance_solver"]; 
+		if (!meb_solver_table.valid()) MFEM_ABORT("must supply solver for energy balance"); 
+		const std::string meb_type = meb_solver_table["type"]; 
+		io::ValidateOption<std::string>("energy balance solver", 
+			meb_solver_table["type"], {"newton", "local newton"}, root); 
+		mfem::Solver *meb_solver_ptr;
+		if (meb_type == "newton") {
+			linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
+			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
+			global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
+			global_meb_solver->SetOperator(meb_form); 
+			meb_monitor = std::make_unique<InnerIterativeSolverMonitor>(*global_meb_solver); 
+			meb_solver_ptr = global_meb_solver.get();
+		} else if (meb_type == "local newton") {
+			local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
+			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
+			local_meb_solver->SetPreconditioner(*local_mat_inv);
+			meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver); 			
+			meb_solver->SetOperator(meb_form); 
+			meb_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver); 
+			meb_solver_ptr = meb_solver.get();
+		}
+		out << YAML::Key << "energy balance solver" << YAML::Value << meb_solver_table;
+
+		sol::table lo_solver_table = solver["inner_solver"];
+		if (!lo_solver_table.valid()) MFEM_ABORT("must supply lo solver");
+		lo_solver.reset(io::CreateIterativeSolver(lo_solver_table, MPI_COMM_WORLD));
+		inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*lo_solver); 
+		nonlinear_solver->SetMonitor(*inner_monitor); 
+		out << YAML::Key << "inner solver" << YAML::Value << lo_solver_table;		
+
+		sol::table linear_solver_table = solver["linear_solver"];
+		if (!linear_solver_table.valid()) MFEM_ABORT("must supply linear solver");
+		dsa_solver.reset(io::CreateSolver(linear_solver_table, MPI_COMM_WORLD));
+		auto *it_solver = dynamic_cast<mfem::IterativeSolver*>(dsa_solver.get());
+		if (it_solver) {
+			amg = std::make_unique<mfem::HypreBoomerAMG>();
+			amg->SetPrintLevel(0);
+			it_solver->SetPreconditioner(*amg);		
+			dsa_monitor = std::make_unique<InnerIterativeSolverMonitor>(*it_solver); 
+			lo_solver->SetMonitor(*dsa_monitor);
+		}
+		out << YAML::Key << "linear solver" << YAML::Value << linear_solver_table;
+
+		const auto lo_type = io::GetAndValidateOption<std::string>(solver, "lo_type", {"ldg", "mip"}, "mip", root);
+		if (lo_type == "mip") {
+			auto *disc = new InteriorPenaltyDiscretization(fes, totalRinv, totalE, bc_map, lump);
+			disc->SetPenaltyLowerBound(alpha/2);
+			disc->SetKappa(pow(fe_order+1,2));
+			Kform.reset(disc);
+		} else if (lo_type == "ldg") {
+			auto *disc = new LDGDiscretization(fes, totalRinv, totalE, bc_map, lump);
+			Kform.reset(disc);
+		}
+		Kform->SetAlpha(alpha);
+		Kform->SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
+		out << YAML::Key << "lo type" << YAML::Value << lo_type;
+
+		ndsa_op = std::make_unique<NonlinearDSATRTOperator>(offsets, Linv, D, to_gray_op,
+			emission_form, gr_emission_form, meb_form, Mtot_gray, 
+			*Kform, *dsa_solver, *lo_solver, *meb_solver, Enu, E);
+		ndsa_op->SetGrayOpacities(totalE, totalP, totalRinv);
+		stepper = std::make_unique<FixedPointSolverWrapper>(*ndsa_op, *nonlinear_solver);
 	}
 	out << YAML::EndMap; // end solver output
 	out << YAML::EndMap; // end driver output 
@@ -1110,6 +1208,7 @@ int main(int argc, char *argv[]) {
 			// recompute opacities 
 			total.Project(); 
 			totalR.Project();
+			totalRinv.Project();
 			totalE.Project();
 
 			// recompute sweep data 
@@ -1123,6 +1222,9 @@ int main(int argc, char *argv[]) {
 			// depends on sigma and dt 
 			Mtot.Assemble(); 
 			Mtot.Finalize();
+
+			Mtot_gray = 0.0;
+			Mtot_gray.Assemble();
 
 			// DSA matrix depends on sigma and dt 
 			if (Kform) {
@@ -1156,9 +1258,9 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "it" << YAML::Value << nonlinear_solver->GetNumIterations(); 
 				out << YAML::Key << "norm" << YAML::Value; 
 				if (kinsol_data) 
-					out << kinsol_data->norm; 
+					out << io::FormatScientific(kinsol_data->norm); 
 				else 
-					out << nonlinear_solver->GetFinalRelNorm(); 
+					out << io::FormatScientific(nonlinear_solver->GetFinalRelNorm()); 
 			}
 			if (inner_monitor) {
 				out << YAML::Key << "inner solver" << YAML::Value << *inner_monitor;
@@ -1166,7 +1268,7 @@ int main(int argc, char *argv[]) {
 				log.Log("max transport iterations", linear_solver->GetNumIterations());
 				out << YAML::Key << "linear solver" << YAML::Value << YAML::BeginMap; 
 					out << YAML::Key << "it" << YAML::Value << linear_solver->GetNumIterations(); 
-					out << YAML::Key << "norm" << YAML::Value << linear_solver->GetFinalRelNorm(); 
+					out << YAML::Key << "norm" << YAML::Value << io::FormatScientific(linear_solver->GetFinalRelNorm()); 
 				out << YAML::EndMap; 
 			}
 			if (dsa_monitor) {
