@@ -953,7 +953,7 @@ int main(int argc, char *argv[]) {
 			int inner = 1;
 			double inner_norm;
 			while (true) {
-				mfem::ParGridFunction Tprev(T);
+				mfem::ParGridFunction Tloprev(T);
 				mfem::ParGridFunction Eloprev(Elo);
 
 				Mtot_gray.Mult(Elo, abs_source);
@@ -991,7 +991,7 @@ int main(int argc, char *argv[]) {
 				lo_solver.Mult(source_phi, Elo);
 				linear_monitor.Register(lo_solver.GetNumIterations(), lo_solver.GetFinalRelNorm());
 
-				const auto Tnorm = Tprev.ComputeL2Error(Tcoef);
+				const auto Tnorm = Tloprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tloprev, Tloprev));
 				const auto Elo_norm = Eloprev.ComputeL2Error(Elo_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Eloprev, Eloprev));
 				inner_norm = Tnorm + Elo_norm;
 
