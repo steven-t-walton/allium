@@ -920,7 +920,7 @@ int main(int argc, char *argv[]) {
 		double norm;
 		IterationMonitor lo_monitor, meb_monitor, linear_monitor;
 		while (true) {
-			mfem::ParGridFunction Tprev(T), Eprev(Eho);
+			mfem::Vector Tprev(T), Eprev(Eho);
 
 			mfem::tic();
 			emission_form.Mult(T, em_source); // comute emission term 
@@ -953,8 +953,8 @@ int main(int argc, char *argv[]) {
 			int inner = 1;
 			double inner_norm;
 			while (true) {
-				mfem::ParGridFunction Tloprev(T);
-				mfem::ParGridFunction Eloprev(Elo);
+				mfem::Vector Tloprev(T);
+				mfem::Vector Eloprev(Elo);
 
 				Mtot_gray.Mult(Elo, abs_source);
 				abs_source += T0;
@@ -991,9 +991,13 @@ int main(int argc, char *argv[]) {
 				lo_solver.Mult(source_phi, Elo);
 				linear_monitor.Register(lo_solver.GetNumIterations(), lo_solver.GetFinalRelNorm());
 
-				const auto Tnorm = Tloprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tloprev, Tloprev));
-				const auto Elo_norm = Eloprev.ComputeL2Error(Elo_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Eloprev, Eloprev));
-				inner_norm = Tnorm + Elo_norm;
+				Tloprev -= T;
+				Eloprev -= Elo;
+				const auto Tnorm = mfem::GlobalLpNorm(2.0, Tloprev.Norml2(), MPI_COMM_WORLD) 
+					/ mfem::GlobalLpNorm(2.0, T.Norml2(), MPI_COMM_WORLD);
+				const auto Enorm = mfem::GlobalLpNorm(2.0, Eloprev.Norml2(), MPI_COMM_WORLD) 
+					/ mfem::GlobalLpNorm(2.0, Elo.Norml2(), MPI_COMM_WORLD);
+				inner_norm = Tnorm + Enorm;
 
 				if (inner_norm < 1e-10 or inner >= 40) break;
 				inner++;
@@ -1001,9 +1005,13 @@ int main(int argc, char *argv[]) {
 			lo_monitor.Register(inner, inner_norm);
 
 			if (T.Min() < 0.0) MFEM_ABORT("negative temperature");
-			const double Enorm = Eprev.ComputeL2Error(Eho_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Eprev, Eprev));
-			const double Tnorm = Tprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tprev, Tprev));
-			norm = Enorm + Tnorm;
+			Eprev -= Eho;
+			Tprev -= T;
+			const auto Tnorm = mfem::GlobalLpNorm(2.0, Tprev.Norml2(), MPI_COMM_WORLD) 
+				/ mfem::GlobalLpNorm(2.0, T.Norml2(), MPI_COMM_WORLD);
+			const auto Enorm = mfem::GlobalLpNorm(2.0, Eprev.Norml2(), MPI_COMM_WORLD) 
+				/ mfem::GlobalLpNorm(2.0, Elo.Norml2(), MPI_COMM_WORLD);
+			norm = Tnorm + Enorm;
 			if (norm < 1e-6 or outer >= 50) break;
 			outer++;
 		}
@@ -1139,15 +1147,13 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "log" << YAML::Value << log;
 	}
 
-	if (value_log.size()) {
-		out << YAML::Key << "value log" << YAML::Value << value_log;
+	// print logs persistent across all time steps 
+	if (io::TimingLogPersistent.size()) {
+		out << YAML::Key << "timings" << YAML::Value;
+		io::PrintTimingMap(out, io::TimingLogPersistent);
 	}
-
-	// print the timing log to YAML map 
-	timing_log.Synchronize(); // <-- get times in parallel 
-	if (timing_log.size()) {
-		out << YAML::Key << "timing log" << YAML::Value;
-		io::PrintTimingMap(out, timing_log);
+	if (io::EventLogPersistent.size()) {
+		out << YAML::Key << "event log" << YAML::Value << io::EventLogPersistent;
 	}
 
 	// --- clean up hanging pointers --- 

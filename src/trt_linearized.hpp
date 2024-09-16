@@ -180,7 +180,8 @@ private:
 	const mfem::Operator &D, &B, &Bt, &sigma;
 	mfem::IterativeSolver &schur_solver; 
 	mfem::Solver &meb_grad_inv; 
-	const mfem::Solver *dsa_solver = nullptr; 
+	InverseMomentDiscretization *dsa_solver = nullptr; 
+	mfem::Array<ProjectedCoefficient*> opacities;
 
 	mutable mfem::Vector temp_resid, dT, em_source, phi_source, abs_source, phi, t1; 
 	mfem::Solver *rebalance_solver = nullptr; 
@@ -197,7 +198,7 @@ public:
 		); 
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
 
-	void SetDSAPreconditioner(const mfem::Solver &dsa)
+	void SetDSAPreconditioner(InverseMomentDiscretization &dsa)
 	{
 		dsa_solver = &dsa;
 	}
@@ -205,6 +206,16 @@ public:
 	// if set, solves local temperature equation in case Newton did not converge 
 	// or a fix up is used 
 	void SetRebalanceSolver(mfem::Solver &op) { rebalance_solver = &op; }
+
+	template<typename... Args>
+	void SetGrayOpacities(Args&... args) 
+	{
+		std::array<mfem::Coefficient*,sizeof...(args)> coefs{&args...};
+		for (auto *coef : coefs) {
+			auto *ptr = dynamic_cast<ProjectedCoefficient*>(coef);
+			if (ptr) opacities.Append(ptr);
+		}
+	}
 
 	friend class NewtonTRTOperator;
 };
@@ -218,68 +229,4 @@ public:
 		: T(T), Cvdt(Cvdt), sigma(sigma)
 	{ }
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
-};
-
-class NewtonTRTOperator : public mfem::Operator
-{
-private:
-	LinearizedTRTOperator &op;
-	mfem::IterativeSolver &solver;
-
-	ProjectedVectorCoefficient *opacity = nullptr;
-	MultiGroupBilinearForm *Mtot = nullptr;
-	InverseMomentDiscretization *dsa = nullptr;
-public:
-	NewtonTRTOperator(LinearizedTRTOperator &op, mfem::IterativeSolver &solver)
-		: op(op), solver(solver)
-	{
-		height = width = op.Height();
-	}
-	void Mult(const mfem::Vector &x, mfem::Vector &y) const override
-	{
-		FixedPointOperator fp(op, x, y, dsa, opacity, Mtot);
-		solver.SetOperator(fp);
-		mfem::Vector blank;
-		mfem::Vector y1(y, op.offsets[1], op.offsets[2] - op.offsets[1]);
-		solver.Mult(blank, y1);
-	}
-	void UseImplicitOpacity(ProjectedVectorCoefficient &opac, MultiGroupBilinearForm &M)
-	{
-		opacity = &opac;
-		Mtot = &M;
-	}
-	void SetDSAPreconditioner(InverseMomentDiscretization &d)
-	{
-		dsa = &d;
-	}
-	class FixedPointOperator : public mfem::Operator
-	{
-	private:
-		LinearizedTRTOperator &op;
-		const mfem::Vector &source;
-		mfem::Vector &solution;
-		InverseMomentDiscretization *dsa;
-		ProjectedVectorCoefficient *opacity;
-		MultiGroupBilinearForm *Mtot;
-	public:
-		FixedPointOperator(LinearizedTRTOperator &op, const mfem::Vector &source, 
-			mfem::Vector &solution, InverseMomentDiscretization *dsa, 
-			ProjectedVectorCoefficient *opacity, MultiGroupBilinearForm *Mtot)
-			: op(op), source(source), solution(solution), dsa(dsa), opacity(opacity), Mtot(Mtot)
-		{
-			height = width = op.offsets[2] - op.offsets[1];
-		}
-		void Mult(const mfem::Vector &x, mfem::Vector &y) const override
-		{
-			if (dsa) op.SetDSAPreconditioner(dsa->GetSolver());
-			y = x;
-			op.Mult(source, solution);
-			if (opacity) {
-				opacity->Project();
-				op.Linv.AssembleLocalMatrices();
-				Mtot->Assemble();
-				Mtot->Finalize();
-			}
-		}
-	};
 };

@@ -28,6 +28,7 @@ class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
 public:
 	mfem::Array<int> iters; 
 	double max_norm = 0.0; 
+	double max_rel_norm = 0.0;
 
 	ScallionInnerSolverMonitor() { iters.Reserve(50); }
 	void Reset() { iters.SetSize(0); max_norm = 0.0; }
@@ -48,7 +49,10 @@ public:
 				out << YAML::Key << "avg" << YAML::Value << ss.str();  
 				out << YAML::Key << "total" << YAML::Value << sum; 
 			out << YAML::EndMap; 
-			out << YAML::Key << "max norm" << YAML::Key << io::FormatScientific(monitor.max_norm); 
+			out << YAML::Key << "max norm" << YAML::Value << YAML::Flow << YAML::BeginMap
+				<< YAML::Key << "absolute" << YAML::Value << io::FormatScientific(monitor.max_norm)
+				<< YAML::Key << "relative" << YAML::Value << io::FormatScientific(monitor.max_rel_norm);
+			out << YAML::EndMap;
 		out << YAML::EndMap; 
 		return out; 
 	}
@@ -72,7 +76,8 @@ public:
 		const auto iter = solver.GetNumIterations(); 
 		if (iter > 0) {
 			iters.Append(iter); 
-			max_norm = std::max(solver.GetFinalRelNorm(), max_norm); 
+			max_rel_norm = std::max(solver.GetFinalRelNorm(), max_rel_norm); 
+			max_norm = std::max(solver.GetFinalNorm(), max_norm);
 		}
 	}
 };
@@ -93,7 +98,8 @@ public:
 		const auto iter = solver.GetNumIterations(); 
 		if (iter >= 0) {
 			iters.Append(iter); 
-			max_norm = std::max(max_norm, solver.GetFinalRelNorm()); 		
+			max_norm = std::max(max_norm, solver.GetFinalNorm()); 		
+			max_rel_norm = std::max(max_rel_norm, solver.GetFinalRelNorm()); 		
 		}
 	}
 };
@@ -647,6 +653,7 @@ int main(int argc, char *argv[]) {
 	PlanckSpectrumMGCoefficient planck_coef(energy_grid.Bounds(), Tcoef);
 	OpacityGroupCollapseCoefficient sigmaP(total, planck_coef);
 	ProjectedCoefficient totalP(gray_sigma_fes, sigmaP);
+	totalP.Project();
 
 	// rosseland weighted 
 	RosselandSpectrumMGCoefficient rosseland_coef(energy_grid.Bounds(), Tcoef);
@@ -722,8 +729,9 @@ int main(int argc, char *argv[]) {
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	DenseBlockDiagonalNonlinearForm meb_form(&fes);
 	if (IsMassLumped(lump)) {
-		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP))); 
-		meb_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
+		meb_form.AddDomainIntegrator(
+			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total))); 
+		meb_form.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
 	}
 	else {
 		meb_form.AddDomainIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total, 2, 2 + sigma_fe_order)); 
@@ -733,10 +741,10 @@ int main(int argc, char *argv[]) {
 	DenseBlockDiagonalNonlinearForm meb_form_totalP(&fes);
 	if (IsMassLumped(lump)) {
 		meb_form_totalP.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP))); 
-		meb_form_totalP.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
+		meb_form_totalP.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
 	}
 	else {
-		meb_form_totalP.AddDomainIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total, 2, 2 + sigma_fe_order)); 
+		meb_form_totalP.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP))); 
 		meb_form_totalP.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}	
 
@@ -799,7 +807,7 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<InverseMomentDiscretization> dsa_inv;
 	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor, meb_monitor; 
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
-	std::unique_ptr<LinearizedTRTOperator> linearized_op;
+	std::unique_ptr<mfem::Operator> linearized_op;
 	std::unique_ptr<mfem::Operator> ndsa_op;
 	std::unique_ptr<mfem::Operator> stepper; 	
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
@@ -854,16 +862,19 @@ int main(int argc, char *argv[]) {
 
 	else if (solver_type == "linearized") {
 		// create nonlinear solver 
-		sol::table nonlin_solve_table = solver["nonlinear_solver"]; 
-		io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
-			{"fp", "kinsol"}, root); 
-		nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
-		auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get());
-		if (sundials) {
-			const std::string strategy = nonlin_solve_table["strategy"]; 
-			io::ValidateOption<std::string>("kinsol strategy", strategy, {"none", "linesearch", "picard"}, root); 		
+		sol::optional<sol::table> nonlin_solve_table_avail = solver["nonlinear_solver"]; 
+		if (nonlin_solve_table_avail) {
+			sol::table nonlin_solve_table = nonlin_solve_table_avail.value();
+			io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
+				{"fp", "kinsol"}, root); 
+			nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
+			auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get());
+			if (sundials) {
+				const std::string strategy = nonlin_solve_table["strategy"]; 
+				io::ValidateOption<std::string>("kinsol strategy", strategy, {"none", "linesearch", "picard"}, root); 		
+			}
+			out << YAML::Key << "nonlinear solver" << YAML::Key << nonlin_solve_table; 			
 		}
-		out << YAML::Key << "nonlinear solver" << YAML::Key << nonlin_solve_table; 
 
 		// create solver for transport operator 
 		sol::table transport_solve_table = solver["transport_solver"]; 
@@ -873,7 +884,6 @@ int main(int argc, char *argv[]) {
 		// create solver for dsa system 
 		sol::optional<sol::table> prec_table_avail = transport_solve_table["preconditioner"]; 
 		if (prec_table_avail) {
-			// if (nonlinear_solver and root) MFEM_ABORT("DSA with Newton not implemented");
 			sol::table prec_table = prec_table_avail.value(); 
 			const std::string type = prec_table["type"]; 
 			io::ValidateOption<std::string>("preconditioner type", type, {"mip", "ldg"}, root); 
@@ -909,11 +919,14 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "transport solver" << YAML::Value << transport_solve_table; 
 
 		linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
-		inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
-		nonlinear_solver->SetMonitor(*inner_monitor); 				
-		linearized_op = std::make_unique<LinearizedTRTOperator>(
-			offsets, Linv, D, emission_form, meb_form,
-			Mtot_collapse, *linear_solver, *linearized_meb_solver);
+		if (nonlinear_solver) {
+			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
+			nonlinear_solver->SetMonitor(*inner_monitor); 
+		}
+		auto *op = new LinearizedTRTOperator(
+			offsets, Linv, D, emission_form, meb_form, 
+			Mtot_collapse, *linear_solver, *linearized_meb_solver);		
+		if (dsa_inv) op->SetDSAPreconditioner(*dsa_inv);
 		sol::optional<sol::table> meb_solver_table_avail = solver["rebalance_solver"]; 
 		if (meb_solver_table_avail) {
 			sol::table meb_solver_table = meb_solver_table_avail.value();
@@ -935,16 +948,24 @@ int main(int argc, char *argv[]) {
 				meb_solver->SetOperator(meb_form); 
 				meb_solver_ptr = meb_solver.get();
 			}				
-			linearized_op->SetRebalanceSolver(*meb_solver_ptr);
+			op->SetRebalanceSolver(*meb_solver_ptr);
 			out << YAML::Key << "rebalance solver" << YAML::Value << meb_solver_table;
 		}
-		auto *step_ptr = new NewtonTRTOperator(*linearized_op, *nonlinear_solver);
-		if (dsa_inv) step_ptr->SetDSAPreconditioner(*dsa_inv);
-		const bool implicit_opac = driver["implicit_opacity"].get_or(false);
-		if (implicit_opac) step_ptr->UseImplicitOpacity(total, Mtot);
-		stepper.reset(step_ptr);
-
-		out << YAML::Key << "implicit opacity" << YAML::Value << implicit_opac;
+		if (nonlinear_solver) {
+			if (Kform)
+				op->SetGrayOpacities(Kform->GetTotal(), Kform->GetAbsorption());
+			// convert [psi,T] -> [gray E, T]
+			auto *reduce = new SubBlockReductionOperator(x, Dgray, 0);
+			// recover full solution
+			auto *reduce_T = new mfem::TransposeOperator(*reduce);
+			// create fixed point solver that only tracks residual on [gray E, T]
+			linearized_op = std::make_unique<mfem::ProductOperator>(reduce, op, true, true);
+			auto *fp_solver = new FixedPointSolverWrapper(*linearized_op, *nonlinear_solver);
+			// recover full solution after solving on reduced variables 
+			stepper = std::make_unique<mfem::ProductOperator>(reduce_T, fp_solver, true, true);			
+		} else {
+			stepper.reset(op);
+		}
 	}
 
 	else if (solver_type == "ndsa") {
@@ -965,7 +986,7 @@ int main(int argc, char *argv[]) {
 			linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
 			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
 			global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
-			global_meb_solver->SetOperator(meb_form); 
+			global_meb_solver->SetOperator(meb_form_totalP); 
 			meb_monitor = std::make_unique<InnerIterativeSolverMonitor>(*global_meb_solver); 
 			meb_solver_ptr = global_meb_solver.get();
 		} else if (meb_type == "local newton") {
@@ -973,7 +994,7 @@ int main(int argc, char *argv[]) {
 			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
 			local_meb_solver->SetPreconditioner(*local_mat_inv);
 			meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver); 			
-			meb_solver->SetOperator(meb_form); 
+			meb_solver->SetOperator(meb_form_totalP); 
 			meb_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver); 
 			meb_solver_ptr = meb_solver.get();
 		}
@@ -1001,12 +1022,12 @@ int main(int argc, char *argv[]) {
 
 		const auto lo_type = io::GetAndValidateOption<std::string>(solver, "lo_type", {"ldg", "mip"}, "mip", root);
 		if (lo_type == "mip") {
-			auto *disc = new InteriorPenaltyDiscretization(fes, totalE, totalE, bc_map, lump);
+			auto *disc = new InteriorPenaltyDiscretization(fes, totalRinv, totalE, bc_map, lump);
 			disc->SetPenaltyLowerBound(alpha/2);
 			disc->SetKappa(pow(fe_order+1,2));
 			Kform.reset(disc);
 		} else if (lo_type == "ldg") {
-			auto *disc = new LDGDiscretization(fes, totalE, totalE, bc_map, lump);
+			auto *disc = new LDGDiscretization(fes, totalRinv, totalE, bc_map, lump);
 			Kform.reset(disc);
 		}
 		Kform->SetAlpha(alpha);
@@ -1018,7 +1039,7 @@ int main(int argc, char *argv[]) {
 			*Kform, *dsa_solver, *lo_solver, *meb_solver, Enu, E);
 		ndsa->SetGrayOpacities(Kform->GetTotal(), Kform->GetAbsorption(), totalP); // <-- update LO, gray opacities at each outer
 		// reduce ndsa from [psi, T] -> [gray E, T] 
-		auto *reduce = new SubBlockReductionOperator(x, Dgray, 0);
+		auto *reduce = new SubBlockExtractionOperator(x, 1);
 		ndsa_op = std::make_unique<mfem::ProductOperator>(reduce, ndsa, true, true);
 		// solve fixed point problem and return full [psi,T]
 		// this avoids computing norms and residuals on the full angular flux 
@@ -1273,14 +1294,18 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "time step size" << YAML::Value << time_step_old; 
 			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
 			if (nonlinear_solver) {
-				log.Log("max newton iterations", nonlinear_solver->GetNumIterations());
-				log.Log("max transport iterations", inner_monitor->iters.Max());
+				log.Log("max nonlinear iterations", nonlinear_solver->GetNumIterations());
+				log.Log("max inner iterations", inner_monitor->iters.Max());
 				out << YAML::Key << "it" << YAML::Value << nonlinear_solver->GetNumIterations(); 
 				out << YAML::Key << "norm" << YAML::Value; 
 				if (kinsol_data) 
 					out << io::FormatScientific(kinsol_data->norm); 
-				else 
-					out << io::FormatScientific(nonlinear_solver->GetFinalRelNorm()); 
+				else {
+					out << YAML::Flow << YAML::BeginMap
+						<< YAML::Key << "absolute" << YAML::Value << io::FormatScientific(nonlinear_solver->GetFinalNorm())
+						<< YAML::Key << "relative" << YAML::Value << io::FormatScientific(nonlinear_solver->GetFinalRelNorm()); 
+					out << YAML::EndMap;
+				}
 			}
 			if (inner_monitor) {
 				out << YAML::Key << "inner solver" << YAML::Value << *inner_monitor;

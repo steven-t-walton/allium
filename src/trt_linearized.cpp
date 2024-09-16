@@ -237,6 +237,10 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	// disable fixup for newton operations 
 	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(false); 
 
+	for (auto *ptr : opacities) {
+		ptr->Project();
+	}
+
 	// initial guess for schur solve 
 	D.Mult(psi, phi); 
 
@@ -265,9 +269,11 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	mfem::TripleProductOperator Ms_form(&dplanck, &meb_grad_inv, &sigma, false, false, false); 
 	TransportOperator transport_op(D, Linv, Ms_form, psi); 
 	std::unique_ptr<DiffusionSyntheticAccelerationOperator> dsa_op; 
-	if (dsa_solver) 
-		dsa_op = std::make_unique<DiffusionSyntheticAccelerationOperator>(*dsa_solver, Ms_form); 
-	if (dsa_op) schur_solver.SetPreconditioner(*dsa_op); 
+	if (dsa_solver) {
+		const auto &solver = dsa_solver->GetSolver();
+		dsa_op = std::make_unique<DiffusionSyntheticAccelerationOperator>(solver, Ms_form); 
+		schur_solver.SetPreconditioner(*dsa_op);
+	}
 	schur_solver.SetOperator(transport_op); 
 	schur_solver.Mult(phi_source, phi); 
 
