@@ -633,6 +633,7 @@ int main(int argc, char *argv[]) {
 	Dlin.Mult(psi, moments_nu);
 	to_gray_op_moments.Mult(moments_nu, moments);
 	E *= 1.0/constants::SpeedOfLight;
+	mfem::ProductOperator Dgray(&to_gray_op, &D, false, false);
 
 	// opacity weighting operators 
 	// energy density weighted 
@@ -790,7 +791,7 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor, meb_monitor; 
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
 	std::unique_ptr<LinearizedTRTOperator> linearized_op;
-	std::unique_ptr<NonlinearDSATRTOperator> ndsa_op;
+	std::unique_ptr<mfem::Operator> ndsa_op;
 	std::unique_ptr<mfem::Operator> stepper; 	
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
 	out << YAML::Key << "type" << YAML::Value << solver_type; 
@@ -1003,11 +1004,19 @@ int main(int argc, char *argv[]) {
 		Kform->SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 		out << YAML::Key << "lo type" << YAML::Value << lo_type;
 
-		ndsa_op = std::make_unique<NonlinearDSATRTOperator>(offsets, Linv, D, to_gray_op,
+		auto *ndsa = new NonlinearDSATRTOperator(offsets, Linv, D, to_gray_op,
 			emission_form, gr_emission_form, meb_form, Mtot_gray, 
 			*Kform, *dsa_solver, *lo_solver, *meb_solver, Enu, E);
-		ndsa_op->SetGrayOpacities(totalE, totalP, totalRinv);
-		stepper = std::make_unique<FixedPointSolverWrapper>(*ndsa_op, *nonlinear_solver);
+		ndsa->SetGrayOpacities(totalE, totalRinv); // <-- update LO, gray opacities at each outer
+		// reduce ndsa from [psi, T] -> [gray E, T] 
+		auto *reduce = new SubBlockReductionOperator(x, Dgray, 0);
+		ndsa_op = std::make_unique<mfem::ProductOperator>(reduce, ndsa, true, true);
+		// solve fixed point problem and return full [psi,T]
+		// this avoids computing norms and residuals on the full angular flux 
+		auto *reduce_T = new mfem::TransposeOperator(*reduce);
+		auto *fp_solver = new FixedPointSolverWrapper(*ndsa_op, *nonlinear_solver);
+		stepper = std::make_unique<mfem::ProductOperator>(
+			reduce_T, fp_solver, true, true);
 	}
 	out << YAML::EndMap; // end solver output
 	out << YAML::EndMap; // end driver output 
