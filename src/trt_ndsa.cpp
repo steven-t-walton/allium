@@ -25,7 +25,7 @@ NonlinearDSATRTOperator::NonlinearDSATRTOperator(
 	lo_offsets.SetSize(3);
 	lo_offsets[0] = 0;
 	lo_offsets[1] = Bt.Height();
-	lo_offsets[2] = Bgr.Height();
+	lo_offsets[2] = G.Height();
 	lo_offsets.PartialSum();
 
 	em_source.SetSize(B.Height());
@@ -54,11 +54,9 @@ void NonlinearDSATRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	D.Mult(psi, moments_nu);
 	G.Mult(moments_nu, moments_gray);
 
-	mfem::tic();
 	for (auto *coef : opacities) {
 		coef->Project();
 	}
-	TimingLog.Log("coef project", mfem::toc());
 
 	Mtot = 0.0;
 	Mtot.Assemble();
@@ -105,7 +103,7 @@ LowOrderOperator::LowOrderOperator(
 }
 
 void NonlinearDSATRTOperator::
-LowOrderOperator::Mult(const mfem::Vector &blank, mfem::Vector &x) const 
+LowOrderOperator::Mult(const mfem::Vector&, mfem::Vector &x) const 
 {
 	const mfem::Vector source_T(const_cast<mfem::Vector&>(source), offsets[0], offsets[1] - offsets[0]);
 	const mfem::Vector source_phi(const_cast<mfem::Vector&>(source), offsets[1], offsets[2] - offsets[1]);
