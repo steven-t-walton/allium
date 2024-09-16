@@ -721,8 +721,7 @@ int main(int argc, char *argv[]) {
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	DenseBlockDiagonalNonlinearForm meb_form(&fes);
 	if (IsMassLumped(lump)) {
-		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
-		// meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP))); 
+		meb_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP))); 
 		meb_form.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
 	}
 	else {
@@ -730,9 +729,18 @@ int main(int argc, char *argv[]) {
 		meb_form.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
 	}
 
+	DenseBlockDiagonalNonlinearForm meb_form_totalP(&fes);
+	if (IsMassLumped(lump)) {
+		meb_form_totalP.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP))); 
+		meb_form_totalP.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(Cvdt))); 
+	}
+	else {
+		meb_form_totalP.AddDomainIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total, 2, 2 + sigma_fe_order)); 
+		meb_form_totalP.AddDomainIntegrator(new mfem::MassIntegrator(Cvdt)); 
+	}	
+
 	DenseBlockDiagonalNonlinearForm gr_emission_form(&fes);
-	// gr_emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
-	gr_emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
+	gr_emission_form.AddDomainIntegrator(new QuadratureLumpedNFIntegrator(new BlackBodyEmissionNFI(totalP)));
 
 	// emission nonlinear form 
 	// sigma_g B_g(T) 
@@ -992,12 +1000,12 @@ int main(int argc, char *argv[]) {
 
 		const auto lo_type = io::GetAndValidateOption<std::string>(solver, "lo_type", {"ldg", "mip"}, "mip", root);
 		if (lo_type == "mip") {
-			auto *disc = new InteriorPenaltyDiscretization(fes, totalRinv, totalE, bc_map, lump);
+			auto *disc = new InteriorPenaltyDiscretization(fes, totalE, totalE, bc_map, lump);
 			disc->SetPenaltyLowerBound(alpha/2);
 			disc->SetKappa(pow(fe_order+1,2));
 			Kform.reset(disc);
 		} else if (lo_type == "ldg") {
-			auto *disc = new LDGDiscretization(fes, totalRinv, totalE, bc_map, lump);
+			auto *disc = new LDGDiscretization(fes, totalE, totalE, bc_map, lump);
 			Kform.reset(disc);
 		}
 		Kform->SetAlpha(alpha);
@@ -1005,9 +1013,9 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "lo type" << YAML::Value << lo_type;
 
 		auto *ndsa = new NonlinearDSATRTOperator(offsets, Linv, D, to_gray_op,
-			emission_form, gr_emission_form, meb_form, Mtot_gray, 
+			emission_form, gr_emission_form, meb_form_totalP, Mtot_gray, 
 			*Kform, *dsa_solver, *lo_solver, *meb_solver, Enu, E);
-		ndsa->SetGrayOpacities(totalE, totalRinv); // <-- update LO, gray opacities at each outer
+		ndsa->SetGrayOpacities(Kform->GetTotal(), Kform->GetAbsorption(), totalP); // <-- update LO, gray opacities at each outer
 		// reduce ndsa from [psi, T] -> [gray E, T] 
 		auto *reduce = new SubBlockReductionOperator(x, Dgray, 0);
 		ndsa_op = std::make_unique<mfem::ProductOperator>(reduce, ndsa, true, true);
