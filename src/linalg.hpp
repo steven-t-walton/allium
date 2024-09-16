@@ -59,6 +59,36 @@ public:
 		block_data = bx; 
 		y = block_data.GetBlock(comp); 
 	}
+	void MultTranspose(const mfem::Vector &x, mfem::Vector &y) const {
+		if (y.GetData() != block_data.GetData()) {
+			mfem::BlockVector by(y, offsets);
+			by = block_data;
+		}
+	}
+};
+
+// applies an operator to one component of a BlockVector 
+// and returns the rest as is
+// intended to reduce the memory cost of iterating on 
+// solution vectors including the angular flux 
+// such as for converting [psi,T] -> [E,T] 
+// to avoid storing and computing norms on psi 
+class SubBlockReductionOperator : public mfem::Operator
+{
+private:
+	const mfem::Operator &op;
+	mfem::BlockVector &data;
+	mfem::Array<int> row_offsets, col_offsets;
+	int comp;
+
+	mfem::Array<const mfem::Operator*> opers;
+public:
+	SubBlockReductionOperator(mfem::BlockVector &data, const mfem::Operator &op, int c);
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const override;
+	// returns the full BlockVector in y 
+	// checks if y and data are aliased to each other to avoid 
+	// unnecessary copy 
+	void MultTranspose(const mfem::Vector &x, mfem::Vector &y) const override;
 };
 
 // reimplement mfem::TripleProductOperator but initialize temporary vectors 
@@ -121,6 +151,54 @@ public:
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const; 
 };
 
+// forwards the source term provided in Mult to 
+// the nested class FixedPointOperator 
+// this makes a fixed point solver look like 
+// a standard linear solver that acts on a source term 
+// and returns a solution 
+class FixedPointSolverWrapper : public mfem::Operator {
+private:
+	const mfem::Operator &op;
+	mfem::Solver &fp_solver;
+public:
+	FixedPointSolverWrapper(const mfem::Operator &op, mfem::Solver &fp_solver)
+		: op(op), fp_solver(fp_solver)
+	{
+		height = op.Height();
+		width = op.Width();
+	}
+	void Mult(const mfem::Vector &b, mfem::Vector &x) const override
+	{
+		FixedPointOperator fp_op(op, b);
+		fp_solver.SetOperator(fp_op);
+		mfem::Vector blank;
+		fp_solver.Mult(blank, x);
+	}
+
+	// converts an "inverse operator" that acts on a source term 
+	// and returns a solution to a fixed point operator 
+	// that takes in the previous solution iterate 
+	// and returns a new one 
+	class FixedPointOperator : public mfem::Operator {
+	private:
+		const mfem::Operator &op; 
+		const mfem::Vector &source;
+	public:
+		FixedPointOperator(const mfem::Operator &op, const mfem::Vector &source)
+			: op(op), source(source)
+		{
+			height = op.Height();
+			width = op.Width();
+			if (source.Size() != op.Width()) MFEM_ABORT("size mismatch");
+		}
+		void Mult(const mfem::Vector &x, mfem::Vector &y) const override
+		{
+			y = x;
+			op.Mult(source, y);
+		}
+	};
+};
+
 class FixedPointIterationSolver : public mfem::IterativeSolver {
 private:
 	mutable mfem::Vector xold, r, z; 
@@ -129,12 +207,12 @@ public:
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const; 
 	void SetOperator(const mfem::Operator &op) {
 		mfem::IterativeSolver::SetOperator(op); 
-		xold.SetSize(width); 
-		r.SetSize(width); 
+		xold.SetSize(height); 
+		r.SetSize(height); 
 	}
 	void SetPreconditioner(mfem::Solver &s) {
 		mfem::IterativeSolver::SetPreconditioner(s); 
-		z.SetSize(width); 
+		z.SetSize(height); 
 	}
 };
 
@@ -241,6 +319,8 @@ public:
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const
 	{
 		R.Mult(b, b_restricted);
+		if (A.iterative_mode)
+			R.Mult(x, x_restricted);
 		A.Mult(b_restricted, x_restricted);
 		P.MultTranspose(x_restricted, x);
 	}

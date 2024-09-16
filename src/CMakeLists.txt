@@ -29,6 +29,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/mg_form.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/restart.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/coefficient.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/trt_ndsa.hpp
 )
 
 LIST(APPEND srcs 
@@ -58,6 +59,7 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/multigroup.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mg_form.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/restart.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/trt_ndsa.cpp
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)

@@ -135,6 +135,7 @@ LIST(APPEND EXE
 	exe/chive.cpp
 	exe/scallion.cpp
 	exe/green.cpp
+	exe/ramp.cpp
 )
 
 foreach(exe ${EXE})

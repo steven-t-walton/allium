@@ -38,6 +38,49 @@ mfem::HypreParMatrix *BlockOperatorToMonolithic(const mfem::BlockOperator &bop)
 	return mfem::HypreParMatrixFromBlocks(blocks); 
 }
 
+SubBlockReductionOperator::SubBlockReductionOperator(mfem::BlockVector &data, const mfem::Operator &op, int comp)
+	: data(data), op(op), comp(comp)
+{
+	const int num_blocks = data.NumBlocks();
+	row_offsets.SetSize(num_blocks+1);
+	col_offsets.SetSize(num_blocks+1);
+	row_offsets[0] = col_offsets[0] = 0;
+	for (int b=0; b<num_blocks; b++) {
+		row_offsets[b+1] = data.BlockSize(b);
+		col_offsets[b+1] = data.BlockSize(b);
+	} 
+	row_offsets[comp+1] = op.Height();
+	if (op.Width() != col_offsets[comp+1]) {
+		MFEM_ABORT("blocks not compatible");
+	}
+	row_offsets.PartialSum();
+	col_offsets.PartialSum();
+	height = row_offsets.Last();
+	width = col_offsets.Last();
+}
+
+void SubBlockReductionOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const 
+{
+	const mfem::BlockVector bx(const_cast<mfem::Vector&>(x), col_offsets);
+	mfem::BlockVector by(y, row_offsets);
+	data = bx;
+	for (int b=0; b<row_offsets.Size()-1; b++) {
+		if (b==comp) {
+			op.Mult(bx.GetBlock(b), by.GetBlock(b));
+		} else {
+			by.GetBlock(b) = bx.GetBlock(b);
+		}
+	}
+}
+
+void SubBlockReductionOperator::MultTranspose(const mfem::Vector &x, mfem::Vector &y) const 
+{
+	if (y.GetData() != data.GetData()) {
+		mfem::BlockVector by(y, col_offsets);
+		by = data;
+	}
+}
+
 TripleProductOperator::TripleProductOperator(const mfem::Operator *a, const mfem::Operator *b, const mfem::Operator *c,
 	bool owna, bool ownb, bool ownc)
 	: A(a), B(b), C(c), ownA(owna), ownB(ownb), ownC(ownc), mfem::Operator(a->Height(), c->Width())
@@ -132,7 +175,7 @@ void FixedPointIterationSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 		norm = Norm(r); 
 		if (i==1) {
 			initial_norm = norm; 
-			r0 = std::max(norm*rel_tol, abs_tol); 
+			r0 = std::max(norm*rel_tol, abs_tol*Norm(x)); 
 		}
 
 		if (norm < r0) {

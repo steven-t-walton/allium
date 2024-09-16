@@ -26,6 +26,9 @@ public:
 
 	void SetAlpha(double a) { alpha = a; }
 	void SetTimeAbsorption(double sigma);
+
+	mfem::Coefficient &GetTotal() { return total; }
+	mfem::Coefficient &GetAbsorption() { return absorption; }
 };
 
 class H1DiffusionDiscretization : public MomentDiscretization
