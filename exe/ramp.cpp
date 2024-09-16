@@ -872,8 +872,8 @@ int main(int argc, char *argv[]) {
 
 	// solver for low order system 
 	mfem::CGSolver lo_solver(MPI_COMM_WORLD);
-	lo_solver.SetAbsTol(1e-6);
-	lo_solver.SetRelTol(1e-10);
+	// lo_solver.SetAbsTol(1e-6);
+	lo_solver.SetRelTol(1e-11);
 	lo_solver.SetMaxIter(200);
 	lo_solver.iterative_mode = true;
 	mfem::HypreBoomerAMG amg;
@@ -884,7 +884,7 @@ int main(int argc, char *argv[]) {
 	// local_meb_solver is applied on each element independently 
 	// by meb_solver 
 	EnergyBalanceNewtonSolver local_meb_solver;
-	local_meb_solver.SetRelTol(1e-8);
+	local_meb_solver.SetRelTol(1e-11);
 	local_meb_solver.SetMaxIter(100);
 	local_meb_solver.SetPreconditioner(*local_mat_inv);
 	local_meb_solver.iterative_mode = true;
@@ -1005,7 +1005,7 @@ int main(int argc, char *argv[]) {
 			const double Enorm = Eprev.ComputeL2Error(Eho_coef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Eprev, Eprev));
 			const double Tnorm = Tprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tprev, Tprev));
 			norm = Enorm + Tnorm;
-			if (norm < 1e-4 or outer >= 50) break;
+			if (norm < 1e-6 or outer >= 50) break;
 			outer++;
 		}
 
