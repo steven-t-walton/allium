@@ -25,6 +25,12 @@
 #include "smm_coef.hpp"
 #include "coefficient.hpp"
 
+double Norm(const mfem::Vector &x)
+{
+	const auto loc = x.Norml2();
+	return mfem::GlobalLpNorm(2.0, loc, MPI_COMM_WORLD);
+}
+
 class IterationMonitor {
 public:
 	mfem::Array<int> iters;
@@ -1050,8 +1056,9 @@ int main(int argc, char *argv[]) {
 		IterationMonitor lo_monitor, meb_monitor;
 		std::unique_ptr<IterationMonitor> linear_monitor;
 		if (linear_it_solver) linear_monitor = std::make_unique<IterationMonitor>();
+		const double Tnorm_denom = Norm(T);
 		while (true) {
-			mfem::ParGridFunction Estar(E); // store previous energy density for stopping criterion
+			mfem::Vector Estar(E), Tstar(T); // store previous energy density for stopping criterion
 
 			emission_form.Mult(T, em_source); // comute emission term 
 			D.MultTranspose(em_source, psi); // phi -> psi 
@@ -1084,8 +1091,7 @@ int main(int argc, char *argv[]) {
 			int inner = 1;
 			double inner_norm;
 			while (true) {
-				mfem::ParGridFunction prev(E); // previous temperature for stopping criterion 
-				mfem::ParGridFunction Tprev(T);
+				mfem::Vector Eprev(E), Tprev(T);
 
 				timer.Restart();
 				// nonlinearly eliminate temperature 
@@ -1164,11 +1170,12 @@ int main(int argc, char *argv[]) {
 				TimingLog.Log("LO solve", timer.RealTime());
 
 				// stopping criterion 
-				// const auto norm = prev.ComputeL2Error(Tcoef);
-				// if (norm < 1e-8 or inner >= 10) break;
-				const auto norm = prev.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, prev, prev));
-				const auto Tnorm = Tprev.ComputeL2Error(Tcoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Tprev, Tprev));
-				inner_norm = norm + Tnorm;
+				Eprev -= E;
+				Tprev -= T;
+				const auto Enorm = Norm(Eprev) / Norm(E);
+				const auto Tnorm = Norm(Tprev) / Norm(T);
+				// inner_norm = Enorm + Tnorm;
+				inner_norm = Tnorm;
 				if (inner_norm < lo_solver_opts.reltol) break; 
 				if (inner >= lo_solver_opts.max_iter) {
 					if (root) EventLog.Register("inner solve not converged");
@@ -1179,7 +1186,11 @@ int main(int argc, char *argv[]) {
 			lo_monitor.Register(inner, inner_norm);
 			if (implicit_opacity)
 				Linv.AssembleLocalMatrices();
-			outer_norm = Estar.ComputeL2Error(Ecoef) / sqrt(mfem::InnerProduct(MPI_COMM_WORLD, Estar, Estar));
+			Estar -= E;
+			Tstar -= T;
+			const auto Enorm = Norm(Estar) / Norm(E);
+			const auto Tnorm = Norm(Tstar) / Tnorm_denom;
+			outer_norm = Enorm + Tnorm;
 			if (outer_norm < ho_solver_opts.reltol or outer >= ho_solver_opts.max_iter) break;
 			outer++;
 		}
