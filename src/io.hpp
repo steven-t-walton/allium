@@ -3,7 +3,7 @@
 #include "mfem.hpp"
 #include "sol/sol.hpp"
 #include "yaml-cpp/yaml.h"
-#include "transport_op.hpp"
+#include "log.hpp"
 
 namespace io 
 {
@@ -101,25 +101,8 @@ void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root=true)
 void SetSuperLUOptions(sol::table &table, mfem::SuperLUSolver &slu, bool root=true); 
 #endif
 
-struct SundialsUserCallbackData {
-	YAML::Emitter *out; 
-	const MomentMethodFixedPointOperator *G; 
-	const mfem::IterativeSolver * const inner_solver; 
-	mfem::Array<int> inner_it; 
-	mfem::Array<double> sweep_time, moment_time; 
-	SundialsUserCallbackData(YAML::Emitter &out, const MomentMethodFixedPointOperator &G, 
-		const mfem::IterativeSolver * const isolver) 
-		: out(&out), G(&G), inner_solver(isolver)
-	{
-
-	}
-};
-
 bool ParseKINSOLMessage(char *msg, int &it, double &norm);
-void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data); 
 void SundialsErrorFunction(int error_code, const char *module, const char *function, char *msg, void *user_data); 
-
-// DiffusionBoundaryConditionType GetDiffusionBCType(std::string type);  
 
 // --- functions to validate input --- 
 // print an error message if input is not valid 

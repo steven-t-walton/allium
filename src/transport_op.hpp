@@ -2,7 +2,7 @@
 #include "mfem.hpp"
 #include "tvector.hpp"
 #include "angular_quadrature.hpp"
-#include "linalg.hpp"
+// #include "linalg.hpp"
 
 // I - DL^{-1} MS 
 // applies Schur complement in phi of linear transport operator 

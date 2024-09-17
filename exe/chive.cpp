@@ -17,6 +17,7 @@
 #include "smm_source.hpp"
 #include "multigroup.hpp"
 #include <kinsol/kinsol.h>
+#include <regex>
 
 class TransportIterationMonitor : public mfem::IterativeSolverMonitor
 {
@@ -122,6 +123,20 @@ public:
 		}		
 	}
 };
+
+struct SundialsUserCallbackData {
+	YAML::Emitter *out; 
+	const MomentMethodFixedPointOperator *G; 
+	const mfem::IterativeSolver * const inner_solver; 
+	mfem::Array<int> inner_it; 
+	mfem::Array<double> sweep_time, moment_time; 
+	SundialsUserCallbackData(YAML::Emitter &out, const MomentMethodFixedPointOperator &G, 
+		const mfem::IterativeSolver * const isolver) 
+		: out(&out), G(&G), inner_solver(isolver)
+	{ }
+};
+
+void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data); 
 
 int main(int argc, char *argv[]) {
 	// initialize MPI 
@@ -945,10 +960,10 @@ int main(int argc, char *argv[]) {
 
 		MomentMethodFixedPointOperator G(D, Linv, *Ms, *smm, source_vec, psi); 
 		outer_solver->SetOperator(G); 
-		io::SundialsUserCallbackData sundials_data(out, G, inner_it_solver); 
+		SundialsUserCallbackData sundials_data(out, G, inner_it_solver); 
 		auto *sundials = dynamic_cast<mfem::SundialsSolver*>(outer_solver.get());
 		if (sundials) {
-			KINSetInfoHandlerFn(sundials->GetMem(), io::SundialsCallbackFunction, &sundials_data); 
+			KINSetInfoHandlerFn(sundials->GetMem(), SundialsCallbackFunction, &sundials_data); 
 			KINSetErrHandlerFn(sundials->GetMem(), io::SundialsErrorFunction, &sundials_data); 
 		}
 
@@ -1295,4 +1310,61 @@ int main(int argc, char *argv[]) {
 
 	// --- end yaml output --- 
 	out << YAML::EndMap << YAML::Newline; 
+}
+
+void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data) 
+{
+	auto *data = static_cast<SundialsUserCallbackData*>(user_data); 
+	auto &out = *data->out; 
+	MFEM_ASSERT(data, "sundials user data not set properly"); 
+	std::regex nni_reg("nni =\\s+([0-9]+)\\s"); 
+	std::cmatch nni_match; 
+	if (std::regex_search(msg, nni_match, nni_reg)) {
+		auto &G = *data->G; 
+		// fnorm =      0.0005730787351824196
+		std::regex norm_reg("fnorm =\\s+(\\S+)"); 
+		std::cmatch norm_match; 
+		out << YAML::BeginMap; 
+		out << YAML::Key << "it" << YAML::Value << nni_match[1].str(); 
+		if (std::regex_search(msg, norm_match, norm_reg)) {
+			double norm = std::stod(norm_match[1].str());
+			std::stringstream ss; 
+			ss << std::setprecision(3) << std::scientific << norm;  
+			out << YAML::Key << "norm" << YAML::Value << ss.str(); 
+		}
+		if (data->inner_solver) {
+			out << YAML::Key << "inner solver" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "it" << YAML::Value << data->inner_solver->GetNumIterations(); 
+				std::stringstream ss; 
+				ss << std::scientific << std::setprecision(3) << std::scientific << data->inner_solver->GetFinalNorm(); 
+				out << YAML::Key << "norm" << YAML::Value << ss.str(); 
+			out << YAML::EndMap; 		
+			data->inner_it.Append(data->inner_solver->GetNumIterations());		
+		}
+		const auto total_time = G.TotalTimer().RealTime(); 
+		const auto sweep_time = G.SweepTimer().RealTime(); 
+		const auto moment_time = G.MomentTimer().RealTime(); 
+		data->sweep_time.Append(sweep_time); 
+		data->moment_time.Append(moment_time); 
+		out << YAML::Key << "timings" << YAML::BeginMap; 
+		out << YAML::Key << "total" << YAML::Value << io::FormatTimeString(total_time); 
+		out << YAML::Key << "sweep" << YAML::Value << io::FormatTimeString(sweep_time); 
+		out << YAML::Key << "moment" << YAML::Value << io::FormatTimeString(moment_time); 
+		out << YAML::EndMap; 
+		out << YAML::EndMap; 
+		out << YAML::Newline; 		
+	}
+	else {
+		std::regex start_reg("scsteptol"); 
+		std::cmatch start_match; 
+		if (std::regex_search(msg, start_match, start_reg)) {
+			out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
+		}
+
+		std::regex end_reg("Return"); 
+		std::cmatch end_match; 
+		if (std::regex_search(msg, end_match, end_reg)) {
+			out << YAML::EndSeq; 
+		}
+	}
 }

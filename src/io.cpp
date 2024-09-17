@@ -1,5 +1,6 @@
 #include "io.hpp"
 #include "linalg.hpp"
+#include "fixed_point.hpp"
 #include <algorithm>
 #include <regex>
 #include <filesystem>
@@ -552,67 +553,10 @@ bool ParseKINSOLMessage(char *msg, int &it, double &norm)
 	}
 }
 
-void SundialsCallbackFunction(const char *module, const char *function, char *msg, void *user_data) 
-{
-	auto *data = static_cast<SundialsUserCallbackData*>(user_data); 
-	auto &out = *data->out; 
-	MFEM_ASSERT(data, "sundials user data not set properly"); 
-	std::regex nni_reg("nni =\\s+([0-9]+)\\s"); 
-	std::cmatch nni_match; 
-	if (std::regex_search(msg, nni_match, nni_reg)) {
-		auto &G = *data->G; 
-		// fnorm =      0.0005730787351824196
-		std::regex norm_reg("fnorm =\\s+(\\S+)"); 
-		std::cmatch norm_match; 
-		out << YAML::BeginMap; 
-		out << YAML::Key << "it" << YAML::Value << nni_match[1].str(); 
-		if (std::regex_search(msg, norm_match, norm_reg)) {
-			double norm = std::stod(norm_match[1].str());
-			std::stringstream ss; 
-			ss << std::setprecision(3) << std::scientific << norm;  
-			out << YAML::Key << "norm" << YAML::Value << ss.str(); 
-		}
-		if (data->inner_solver) {
-			out << YAML::Key << "inner solver" << YAML::Value << YAML::BeginMap; 
-				out << YAML::Key << "it" << YAML::Value << data->inner_solver->GetNumIterations(); 
-				std::stringstream ss; 
-				ss << std::scientific << std::setprecision(3) << std::scientific << data->inner_solver->GetFinalNorm(); 
-				out << YAML::Key << "norm" << YAML::Value << ss.str(); 
-			out << YAML::EndMap; 		
-			data->inner_it.Append(data->inner_solver->GetNumIterations());		
-		}
-		const auto total_time = G.TotalTimer().RealTime(); 
-		const auto sweep_time = G.SweepTimer().RealTime(); 
-		const auto moment_time = G.MomentTimer().RealTime(); 
-		data->sweep_time.Append(sweep_time); 
-		data->moment_time.Append(moment_time); 
-		out << YAML::Key << "timings" << YAML::BeginMap; 
-		out << YAML::Key << "total" << YAML::Value << FormatTimeString(total_time); 
-		out << YAML::Key << "sweep" << YAML::Value << FormatTimeString(sweep_time); 
-		out << YAML::Key << "moment" << YAML::Value << FormatTimeString(moment_time); 
-		out << YAML::EndMap; 
-		out << YAML::EndMap; 
-		out << YAML::Newline; 		
-	}
-	else {
-		std::regex start_reg("scsteptol"); 
-		std::cmatch start_match; 
-		if (std::regex_search(msg, start_match, start_reg)) {
-			out << YAML::Key << "transport iterations" << YAML::Value << YAML::BeginSeq; 
-		}
-
-		std::regex end_reg("Return"); 
-		std::cmatch end_match; 
-		if (std::regex_search(msg, end_match, end_reg)) {
-			out << YAML::EndSeq; 
-		}
-	}
-}
-
 void SundialsErrorFunction(int error_code, const char *module, const char *function, char *msg, void *user_data)
 {
-	
-} 
+	mfem::out << msg << std::endl; 
+}
 
 template<>
 void ValidateOption<const char*>(std::string key, const char *res, std::initializer_list<const char*> options, bool root)
