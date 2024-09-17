@@ -482,7 +482,8 @@ void EnergyBalanceNewtonSolver::SetOperator(const mfem::Operator &op)
 	successive_residual.SetSize(height);
 }
 
-double Norm(const mfem::Vector &x) {
+double EnergyBalanceNewtonSolver::Norm(const mfem::Vector &x) const
+{
 	return x.Norml1();
 }
 
@@ -501,8 +502,8 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 	// compute initial residual norm 
 	oper->Mult(x, r); 
 	r -= b; 
-	norm0 = norm = initial_norm = ::Norm(r); 
-	if (norm0/::Norm(b) < rel_tol) {
+	norm0 = norm = initial_norm = Norm(r); 
+	if (norm0/Norm(b) < rel_tol) {
 		converged = true; 
 		final_iter = 1;
 		final_norm = rel_tol;
@@ -539,7 +540,7 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 
 		oper->Mult(x, r); 
 		r -= b;
-		norm = ::Norm(r); 		
+		norm = Norm(r);
 		if (successive_iter_norm <= minimum_solution * 1e-2) {
 			stagnation_count++; 
 			if (stagnation_count > max_stagnation_count) {

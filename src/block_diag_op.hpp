@@ -143,6 +143,8 @@ public:
 	ExitCode GetExitCode() const { return exit_code; } 
 	void SetMinimumSolution(double m) { minimum_solution = m; }
 	void SetUnderRelaxParameter(double v) { under_relax_param = v; }
+private:
+	double Norm(const mfem::Vector &x) const;
 };
 
 // calls a nonlinear solver on each element 
