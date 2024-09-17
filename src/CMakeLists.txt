@@ -9,6 +9,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_coef.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/phase_coefficient.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/linalg.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/fixed_point.hpp	
 	${CMAKE_CURRENT_SOURCE_DIR}/dg_trace_coll.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/io.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/log.hpp
@@ -41,6 +42,7 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_coef.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/phase_coefficient.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/linalg.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/fixed_point.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dg_trace_coll.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/io.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/log.cpp

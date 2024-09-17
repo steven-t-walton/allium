@@ -156,45 +156,6 @@ void SLISolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
 	final_norm = norm; 
 }
 
-void FixedPointIterationSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const 
-{
-	if (!iterative_mode) x = 0.0; 
-	double norm, r0; 
-	int i; 
-	converged = false; 
-	bool done = false; 
-	for (i=1; true; ) {
-		xold = x; 
-		oper->Mult(xold, x); 
-		subtract(x, xold, r); // r = x - xold 
-		if (prec) {
-			prec->Mult(r, z); // z = M*r
-			x += z; // x = x + z 
-			subtract(x, xold, r); // preconditioned residual 
-		}
-		norm = Norm(r); 
-		if (i==1) {
-			initial_norm = norm; 
-			r0 = std::max(norm*rel_tol, abs_tol*Norm(x)); 
-		}
-
-		if (norm < r0) {
-			converged = true; 
-			final_iter = i; 
-		}
-
-		if (i >= max_iter or converged) {
-			done = true; 
-		}
-		Monitor(i-1, norm, x, r, done); 
-
-		if (done) { break; }
-		i++; 
-	}
-	final_iter = i; 
-	final_norm = norm; 
-}
-
 void BlockLDUInverseOperator::Mult(const mfem::Vector &b, mfem::Vector &x) const 
 {
 	mfem::BlockVector block_b(const_cast<mfem::Vector&>(b), offsets); 

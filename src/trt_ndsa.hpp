@@ -58,7 +58,6 @@ public:
 		const mfem::BilinearForm &Mtot;
 		const mfem::Solver &meb_solver;
 		mfem::Solver &lo_solver;
-		const mfem::Vector &source;
 
 		mutable mfem::Vector emission, meb_eval, tmp_T, tmp_phi;
 		mutable DenseBlockDiagonalOperator dB_dBt_inv;
@@ -70,8 +69,7 @@ public:
 			const DenseBlockDiagonalNonlinearForm &Bt, 
 			const mfem::BilinearForm &Mtot, 
 			const mfem::Solver &meb_solver, 
-			mfem::Solver &lo_solver, 
-			const mfem::Vector &source);
+			mfem::Solver &lo_solver);
 		void Mult(const mfem::Vector &source, mfem::Vector &x) const override;		
 	};
 };

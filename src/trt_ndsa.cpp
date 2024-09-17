@@ -1,4 +1,5 @@
 #include "trt_ndsa.hpp"
+#include "fixed_point.hpp"
 #include "log.hpp"
 
 NonlinearDSATRTOperator::NonlinearDSATRTOperator(
@@ -31,7 +32,7 @@ NonlinearDSATRTOperator::NonlinearDSATRTOperator(
 	em_source.SetSize(B.Height());
 	em_source_gr.SetSize(Bgr.Height());
 	phi.SetSize(G.Height());
-	phi = 0.0;
+	phi = moments_gray;
 	residual_phi.SetSize(G.Height());
 
 	lo_source.SetSize(lo_offsets.Last());
@@ -71,12 +72,14 @@ void NonlinearDSATRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	block_lo_source.GetBlock(0) = source_T;
 	block_lo_source.GetBlock(1) = residual_phi;
 	block_lo_soln.GetBlock(0) = T;
-	block_lo_soln.GetBlock(1) = moments_gray;
+	block_lo_soln.GetBlock(1) = phi;
 
-	LowOrderOperator op(lo_offsets, *K, Bgr, Bt, Mtot, meb_solver, linear_solver, block_lo_source);
-	lo_solver.SetOperator(op);
-	mfem::Vector blank;
-	lo_solver.Mult(blank, block_lo_soln);
+	LowOrderOperator op(lo_offsets, *K, Bgr, Bt, Mtot, meb_solver, linear_solver);
+	FixedPointSolverWrapper wrap(lo_solver);
+	ComponentReductionOperator reduce(lo_offsets, 0);
+	ReducedSolver rsolver(wrap, reduce);
+	rsolver.SetOperator(op);
+	rsolver.Mult(block_lo_source, block_lo_soln);
 
 	T = block_lo_soln.GetBlock(0);
 	phi = block_lo_soln.GetBlock(1);
@@ -90,10 +93,9 @@ LowOrderOperator::LowOrderOperator(
 	const DenseBlockDiagonalNonlinearForm &Bt, 
 	const mfem::BilinearForm &Mtot, 
 	const mfem::Solver &meb_solver, 
-	mfem::Solver &lo_solver,
-	const mfem::Vector &source)
+	mfem::Solver &lo_solver)
 	: offsets(offsets), K(K), B(B), Bt(Bt), 
-	  Mtot(Mtot), meb_solver(meb_solver), lo_solver(lo_solver), source(source), dB_dBt_inv(*Bt.FESpace())
+	  Mtot(Mtot), meb_solver(meb_solver), lo_solver(lo_solver), dB_dBt_inv(*Bt.FESpace())
 {
 	height = width = offsets.Last();
 	emission.SetSize(B.Height());
@@ -103,7 +105,7 @@ LowOrderOperator::LowOrderOperator(
 }
 
 void NonlinearDSATRTOperator::
-LowOrderOperator::Mult(const mfem::Vector&, mfem::Vector &x) const 
+LowOrderOperator::Mult(const mfem::Vector &source, mfem::Vector &x) const 
 {
 	const mfem::Vector source_T(const_cast<mfem::Vector&>(source), offsets[0], offsets[1] - offsets[0]);
 	const mfem::Vector source_phi(const_cast<mfem::Vector&>(source), offsets[1], offsets[2] - offsets[1]);

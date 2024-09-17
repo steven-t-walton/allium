@@ -22,6 +22,8 @@
 #include "planck.hpp"
 #include "restart.hpp"
 #include "coefficient.hpp"
+#include "linalg.hpp"
+#include "fixed_point.hpp"
 
 class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
 {
@@ -800,16 +802,15 @@ int main(int argc, char *argv[]) {
 		linear_solver, lo_solver;
 	std::unique_ptr<DenseBlockDiagonalNonlinearSolver> meb_solver;
 	std::unique_ptr<DenseBlockDiagonalSolver> linearized_meb_solver;
-	std::unique_ptr<mfem::Solver> dsa_solver;
+	std::unique_ptr<mfem::Solver> dsa_solver, fp_wrap;
 	std::unique_ptr<MomentDiscretization> Kform; 
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
 	std::unique_ptr<PARSolver> lmfg_solver;
 	std::unique_ptr<InverseMomentDiscretization> dsa_inv;
 	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor, meb_monitor; 
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
-	std::unique_ptr<mfem::Operator> linearized_op;
-	std::unique_ptr<mfem::Operator> ndsa_op;
-	std::unique_ptr<mfem::Operator> stepper; 	
+	std::unique_ptr<mfem::Operator> oper, stepper;
+	std::unique_ptr<SolutionReductionOperator> reducer;
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
 	out << YAML::Key << "type" << YAML::Value << solver_type; 
 	if (solver_type == "picard") {
@@ -954,15 +955,12 @@ int main(int argc, char *argv[]) {
 		if (nonlinear_solver) {
 			if (Kform)
 				op->SetGrayOpacities(Kform->GetTotal(), Kform->GetAbsorption());
-			// convert [psi,T] -> [gray E, T]
-			auto *reduce = new SubBlockReductionOperator(x, Dgray, 0);
-			// recover full solution
-			auto *reduce_T = new mfem::TransposeOperator(*reduce);
-			// create fixed point solver that only tracks residual on [gray E, T]
-			linearized_op = std::make_unique<mfem::ProductOperator>(reduce, op, true, true);
-			auto *fp_solver = new FixedPointSolverWrapper(*linearized_op, *nonlinear_solver);
-			// recover full solution after solving on reduced variables 
-			stepper = std::make_unique<mfem::ProductOperator>(reduce_T, fp_solver, true, true);			
+			oper.reset(op);
+			reducer = std::make_unique<ComponentReductionOperator>(offsets, 1);
+			fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
+			auto *rsolver = new ReducedSolver(*fp_wrap, *reducer);
+			rsolver->SetOperator(*oper);
+			stepper.reset(rsolver);
 		} else {
 			stepper.reset(op);
 		}
@@ -1038,15 +1036,15 @@ int main(int argc, char *argv[]) {
 			emission_form, gr_emission_form, meb_form_totalP, Mtot_gray, 
 			*Kform, *dsa_solver, *lo_solver, *meb_solver, Enu, E);
 		ndsa->SetGrayOpacities(Kform->GetTotal(), Kform->GetAbsorption(), totalP); // <-- update LO, gray opacities at each outer
-		// reduce ndsa from [psi, T] -> [gray E, T] 
-		auto *reduce = new SubBlockExtractionOperator(x, 1);
-		ndsa_op = std::make_unique<mfem::ProductOperator>(reduce, ndsa, true, true);
+		oper.reset(ndsa);
+		// reduce ndsa from [psi, T] -> T  
 		// solve fixed point problem and return full [psi,T]
 		// this avoids computing norms and residuals on the full angular flux 
-		auto *reduce_T = new mfem::TransposeOperator(*reduce);
-		auto *fp_solver = new FixedPointSolverWrapper(*ndsa_op, *nonlinear_solver);
-		stepper = std::make_unique<mfem::ProductOperator>(
-			reduce_T, fp_solver, true, true);
+		reducer = std::make_unique<ComponentReductionOperator>(offsets, 1);
+		fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
+		auto *rsolver = new ReducedSolver(*fp_wrap, *reducer);
+		rsolver->SetOperator(*oper);
+		stepper.reset(rsolver);
 	}
 	out << YAML::EndMap; // end solver output
 	out << YAML::EndMap; // end driver output 
