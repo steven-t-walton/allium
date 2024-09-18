@@ -814,7 +814,7 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor, meb_monitor; 
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
 	std::unique_ptr<mfem::Operator> oper, stepper;
-	std::unique_ptr<SolutionReductionOperator> reducer;
+	ComponentReductionOperator reducer(offsets, 1); // only compute residual on temperature 
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
 	out << YAML::Key << "type" << YAML::Value << solver_type; 
 	if (solver_type == "picard") {
@@ -848,9 +848,8 @@ int main(int argc, char *argv[]) {
 
 		oper = std::make_unique<PicardTRTOperator>(offsets, Linv, D, emission_form, Mtot_collapse, 
 			*meb_solver_ptr, *nonlinear_solver);
-		reducer = std::make_unique<ComponentReductionOperator>(offsets, 1);
 		fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
-		auto *rsolver = new ReducedSolver(*fp_wrap, *reducer);
+		auto *rsolver = new ReducedSolver(*fp_wrap, reducer);
 		rsolver->SetOperator(*oper);
 		stepper.reset(rsolver);
 		nonlinear_solver->SetMonitor(*inner_monitor); 
@@ -963,9 +962,8 @@ int main(int argc, char *argv[]) {
 			if (Kform)
 				op->SetGrayOpacities(Kform->GetTotal(), Kform->GetAbsorption());
 			oper.reset(op);
-			reducer = std::make_unique<ComponentReductionOperator>(offsets, 1);
 			fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
-			auto *rsolver = new ReducedSolver(*fp_wrap, *reducer);
+			auto *rsolver = new ReducedSolver(*fp_wrap, reducer);
 			rsolver->SetOperator(*oper);
 			stepper.reset(rsolver);
 		} else {
@@ -1054,9 +1052,8 @@ int main(int argc, char *argv[]) {
 		if (dsa_inv) op->SetDSAPreconditioner(*dsa_inv);
 		op->SetGrayOpacities(totalR);
 		oper.reset(op);
-		reducer = std::make_unique<ComponentReductionOperator>(offsets, Dgray, 0);
 		fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
-		auto *rsolver = new ReducedSolver(*fp_wrap, *reducer);
+		auto *rsolver = new ReducedSolver(*fp_wrap, reducer);
 		rsolver->SetOperator(*oper);
 		stepper.reset(rsolver);
 	}
@@ -1135,9 +1132,8 @@ int main(int argc, char *argv[]) {
 		// reduce ndsa from [psi, T] -> T  
 		// solve fixed point problem and return full [psi,T]
 		// this avoids computing norms and residuals on the full angular flux 
-		reducer = std::make_unique<ComponentReductionOperator>(offsets, 1);
 		fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
-		auto *rsolver = new ReducedSolver(*fp_wrap, *reducer);
+		auto *rsolver = new ReducedSolver(*fp_wrap, reducer);
 		rsolver->SetOperator(*oper);
 		stepper.reset(rsolver);
 	}
