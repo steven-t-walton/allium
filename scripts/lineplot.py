@@ -15,6 +15,7 @@ parser.add_argument('-c', '--component', help='component to select for vector-va
 parser.add_argument('-t', '--title', help='plot title', type=str, default=None)
 parser.add_argument('-lfs', '--label-font-size', help='font size for axis labels', default=18, type=int)
 parser.add_argument('-legfs', '--legend-font-size', help='font size for legend entries', default=18, type=int)
+parser.add_argument('-noleg', '--no-legend', help='turn off legend', default=False)
 args = parser.parse_args()
 
 var_names = {'scalar flux': r'$\varphi$', 'current' : r'$\|\mathbf{J}\|$', 
@@ -48,7 +49,7 @@ for file,label in zip(args.files, labels):
 	plt.xlabel('$t$', fontsize=args.label_font_size)
 	plt.ylabel(var_names[args.var], fontsize=args.label_font_size)
 
-if (len(args.files)>1):
+if (len(args.files)>1 and not(args.no_legend)):
 	plt.legend(fontsize=args.legend_font_size)
 if (args.title is not None):
 	plt.title(args.title)
