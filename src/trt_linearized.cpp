@@ -318,3 +318,75 @@ double LinearizedPseudoAbsorptionCoefficient::Eval(mfem::ElementTransformation &
 	const double nu = dB / (heat_capacity + dB);
 	return opacity * (1.0 - nu);
 }
+
+InexactNewtonTRTOperator::InexactNewtonTRTOperator(
+	const mfem::Array<int> &offsets, // [psi, T]
+	const InverseAdvectionOperator &Linv, // sweep
+	const mfem::Operator &D, // discrete to moment 
+	const mfem::Operator &B, // emission
+	const mfem::Operator &Bt, // emission with Cv/dt term
+	const mfem::Operator &sigma, // M_sigma 
+	const mfem::Solver &meb_solver, 
+	mfem::Solver &lin_meb_solver)
+	: offsets(offsets), Linv(Linv), D(D), B(B), Bt(Bt), sigma(sigma), 
+	  meb_solver(meb_solver), lin_meb_solver(lin_meb_solver)
+{
+	height = width = offsets.Last();
+
+	phi.SetSize(D.Height());
+	phi2.SetSize(D.Height());
+	abs_source.SetSize(sigma.Height());
+	temp_resid.SetSize(Bt.Height());
+	t1.SetSize(Bt.Height());
+	t2.SetSize(B.Height());
+	em_source.SetSize(B.Height());
+}
+
+void InexactNewtonTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const 
+{
+	const mfem::Vector source_psi(const_cast<mfem::Vector&>(x), offsets[0] , offsets[1] - offsets[0]);
+	const mfem::Vector source_T(const_cast<mfem::Vector&>(x), offsets[1] , offsets[2] - offsets[1]);
+
+	mfem::Vector psi(y, offsets[0], offsets[1] - offsets[0]);
+	mfem::Vector T(y, offsets[1], offsets[2] - offsets[1]);
+
+	for (auto *ptr : opacities) {
+		ptr->Project();
+	}
+
+	D.Mult(psi, phi);
+	sigma.Mult(phi, abs_source);
+	abs_source += source_T;
+
+	const auto &dBt = Bt.GetGradient(T);
+	lin_meb_solver.SetOperator(dBt);
+	const auto &dB = B.GetGradient(T);
+
+	Bt.Mult(T, temp_resid);
+	add(abs_source, -1.0, temp_resid, temp_resid);
+	lin_meb_solver.Mult(temp_resid, t1);
+	dB.Mult(t1, t2);
+	B.Mult(T, em_source);
+	em_source += t2;
+	D.MultTranspose(em_source, psi);
+	psi += source_psi;
+	Linv.Mult(psi, psi);
+
+	if (dsa_solver) {
+		D.Mult(psi, phi2); 
+		phi2 -= phi;
+
+		sigma.Mult(phi2, abs_source);
+		lin_meb_solver.Mult(abs_source, t1);
+		dB.Mult(t1, t2);
+
+		const auto &solver = dsa_solver->GetSolver();
+		solver.Mult(t2, phi);
+		D.AddMultTranspose(phi, psi);		
+	}
+
+	D.Mult(psi, phi);
+	sigma.Mult(phi, abs_source);
+	abs_source += source_T;
+	meb_solver.Mult(abs_source, T);
+}

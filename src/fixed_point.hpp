@@ -31,24 +31,62 @@ public:
 	const auto &GetData() const { return *data; }
 };
 
-// returns a single component of a block vector 
+// returns a single component of a block vector
+// optionally returns the component after applying an operator 
+// operator is not owned 
 class ComponentReductionOperator : public SolutionReductionOperator
 {
 private:
 	int comp;
+	const mfem::Operator *oper;
+	bool own_oper;
 public:
 	ComponentReductionOperator(const mfem::Array<int> &offsets, int c)
 		: SolutionReductionOperator(offsets), comp(c)
 	{
 		height = offsets[comp+1] - offsets[comp];
+		oper = new mfem::IdentityOperator(height);
+		own_oper = true;
+	}
+	ComponentReductionOperator(const mfem::Array<int> &offsets, const mfem::Operator &op, int c)
+		: SolutionReductionOperator(offsets), oper(&op), comp(c)
+	{
+		height = oper->Height();
+		own_oper = false;
+		assert(offsets[comp+1] - offsets[comp] == oper->Width());
+	}
+	~ComponentReductionOperator()
+	{
+		if (own_oper) delete oper;
 	}
 
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const override
 	{
 		assert(data);
+		assert(y.Size() == oper->Height());
 		*data = x;
 		const mfem::BlockVector bx(const_cast<mfem::Vector&>(x), offsets);
-		y = bx.GetBlock(comp);
+		oper->Mult(bx.GetBlock(comp), y);
+	}
+};
+
+class ProjectGridFunctionOperator : public mfem::Operator
+{
+private:
+	mfem::FiniteElementSpace &in_fes, &out_fes;
+public:
+	ProjectGridFunctionOperator(mfem::FiniteElementSpace &in_fes, mfem::FiniteElementSpace &out_fes)
+		: in_fes(in_fes), out_fes(out_fes)
+	{
+		height = out_fes.GetVSize();
+		width = in_fes.GetVSize();
+	}
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const override 
+	{
+		const mfem::GridFunction gfx(&in_fes, const_cast<mfem::Vector&>(x), 0);
+		mfem::GridFunctionCoefficient gfx_coef(&gfx);
+		mfem::GridFunction gfy(&out_fes, y, 0);
+		gfy.ProjectCoefficient(gfx_coef);
 	}
 };
 

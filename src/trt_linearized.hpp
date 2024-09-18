@@ -171,7 +171,6 @@ private:
 
 } // end namespace experimental 
 
-class NewtonTRTOperator;
 class LinearizedTRTOperator : public mfem::Operator
 {
 private:
@@ -216,8 +215,6 @@ public:
 			if (ptr) opacities.Append(ptr);
 		}
 	}
-
-	friend class NewtonTRTOperator;
 };
 
 class LinearizedPseudoAbsorptionCoefficient : public mfem::Coefficient 
@@ -229,4 +226,44 @@ public:
 		: T(T), Cvdt(Cvdt), sigma(sigma)
 	{ }
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+};
+
+class InexactNewtonTRTOperator : public mfem::Operator
+{
+private:
+	const mfem::Array<int> &offsets; 
+	const InverseAdvectionOperator &Linv; 
+	const mfem::Operator &D, &B, &Bt, &sigma;
+	const mfem::Solver &meb_solver;
+	mfem::Solver &lin_meb_solver;
+	InverseMomentDiscretization *dsa_solver = nullptr; 
+	mfem::Array<ProjectedCoefficient*> opacities;
+
+	mutable mfem::Vector phi, phi2, abs_source, temp_resid, t1, t2, em_source;
+public:
+	InexactNewtonTRTOperator(
+		const mfem::Array<int> &offsets, // [psi, T]
+		const InverseAdvectionOperator &Linv, // sweep
+		const mfem::Operator &D, // discrete to moment 
+		const mfem::Operator &B, // emission
+		const mfem::Operator &Bt, // emission with Cv/dt term
+		const mfem::Operator &sigma, // M_sigma 
+		const mfem::Solver &meb_solver, 
+		mfem::Solver &lin_meb_solver
+		); 
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
+
+	void SetDSAPreconditioner(InverseMomentDiscretization &dsa)
+	{
+		dsa_solver = &dsa;
+	}
+	template<typename... Args>
+	void SetGrayOpacities(Args&... args) 
+	{
+		std::array<mfem::Coefficient*,sizeof...(args)> coefs{&args...};
+		for (auto *coef : coefs) {
+			auto *ptr = dynamic_cast<ProjectedCoefficient*>(coef);
+			if (ptr) opacities.Append(ptr);
+		}
+	}
 };
