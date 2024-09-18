@@ -52,7 +52,7 @@ void ReducedSolver::
 ReducedOperator::Mult(const mfem::Vector &bfull, mfem::Vector &xred) const
 {
 	assert(bfull.Size() == full_op.Width());
-	assert(xref.Size() == reducer.Height());
+	assert(xred.Size() == reducer.Height());
 	auto &xfull = reducer.GetData();
 	full_op.Mult(bfull, xfull);
 	reducer.Mult(xfull, xred);
