@@ -55,7 +55,7 @@ public:
 			out << YAML::Key << "avg" << YAML::Value << ss.str();  
 			out << YAML::Key << "total" << YAML::Value << sum; 
 		out << YAML::EndMap; 
-		out << YAML::Key << "max norm" << YAML::Key << monitor.max_norm; 
+		out << YAML::Key << "max norm" << YAML::Key << io::FormatScientific(monitor.max_norm); 
 		return out; 
 	}
 };
@@ -1052,13 +1052,13 @@ int main(int argc, char *argv[]) {
 
 		// --- get new time step solution --- 
 		int outer = 1;
-		double outer_norm;
+		double outer_norm, outer_norm_E0, outer_norm_T0;
 		IterationMonitor lo_monitor, meb_monitor;
 		std::unique_ptr<IterationMonitor> linear_monitor;
 		if (linear_it_solver) linear_monitor = std::make_unique<IterationMonitor>();
 		const double Tnorm_denom = Norm(T);
 		while (true) {
-			mfem::Vector Estar(E), Tstar(T); // store previous energy density for stopping criterion
+			mfem::Vector Tstar(T), Estar(E); // store previous energy density for stopping criterion
 
 			emission_form.Mult(T, em_source); // comute emission term 
 			D.MultTranspose(em_source, psi); // phi -> psi 
@@ -1089,9 +1089,9 @@ int main(int argc, char *argv[]) {
 			smm_source += moments0; // time source 
 			TimingLog.Log("SMM source", timer.RealTime());
 			int inner = 1;
-			double inner_norm;
+			double inner_norm, inner_norm_E0, inner_norm_T0;
 			while (true) {
-				mfem::Vector Eprev(E), Tprev(T);
+				mfem::Vector Tprev(T), Eprev(E);
 
 				timer.Restart();
 				// nonlinearly eliminate temperature 
@@ -1170,12 +1170,17 @@ int main(int argc, char *argv[]) {
 				TimingLog.Log("LO solve", timer.RealTime());
 
 				// stopping criterion 
-				Eprev -= E;
 				Tprev -= T;
-				const auto Enorm = Norm(Eprev) / Norm(E);
-				const auto Tnorm = Norm(Tprev) / Norm(T);
-				// inner_norm = Enorm + Tnorm;
-				inner_norm = Tnorm;
+				const auto Tnorm = Norm(Tprev);
+				Eprev -= E;
+				const auto Enorm = Norm(Eprev);
+				if (inner == 1) {
+					inner_norm_E0 = Enorm;
+					inner_norm_T0 = Tnorm;
+					if (inner_norm_E0 < 1e-14) inner_norm_E0 = std::numeric_limits<double>::max();
+					if (inner_norm_T0 < 1e-14) inner_norm_T0 = std::numeric_limits<double>::max();
+				}
+				inner_norm = Enorm / inner_norm_E0 + Tnorm / inner_norm_T0;
 				if (inner_norm < lo_solver_opts.reltol) break; 
 				if (inner >= lo_solver_opts.max_iter) {
 					if (root) EventLog.Register("inner solve not converged");
@@ -1184,14 +1189,25 @@ int main(int argc, char *argv[]) {
 				inner++;
 			}
 			lo_monitor.Register(inner, inner_norm);
+			if (root) io::EventLogPersistent.Log("inner solves", inner);
 			if (implicit_opacity)
 				Linv.AssembleLocalMatrices();
-			Estar -= E;
 			Tstar -= T;
-			const auto Enorm = Norm(Estar) / Norm(E);
-			const auto Tnorm = Norm(Tstar) / Tnorm_denom;
-			outer_norm = Enorm + Tnorm;
-			if (outer_norm < ho_solver_opts.reltol or outer >= ho_solver_opts.max_iter) break;
+			Estar -= E;
+			const auto Tnorm = Norm(Tstar);
+			const auto Enorm = Norm(Estar);
+			if (outer == 1) {
+				outer_norm_T0 = Tnorm;
+				outer_norm_E0 = Enorm;
+				if (outer_norm_T0 < 1e-14) outer_norm_T0 = std::numeric_limits<double>::max();
+				if (outer_norm_E0 < 1e-14) outer_norm_E0 = std::numeric_limits<double>::max();
+			}
+			outer_norm = Tnorm / outer_norm_T0 + Enorm / outer_norm_E0;
+			if (outer_norm < ho_solver_opts.reltol) break;
+			else if (outer >= ho_solver_opts.max_iter) {
+				if (root) EventLog.Register("outer solver not converged");
+				break;
+			}
 			outer++;
 		}
 
@@ -1303,9 +1319,9 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "cycle" << YAML::Value << cycle; 
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
 			out << YAML::Key << "time step size" << YAML::Value << time_step_old; 
-			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
+			out << YAML::Key << "||radE||" << YAML::Value << io::FormatScientific(radE_norm); 
 			out << YAML::Key << "it" << YAML::Value << outer;
-			out << YAML::Key << "norm" << YAML::Value << outer_norm;
+			out << YAML::Key << "norm" << YAML::Value << io::FormatScientific(outer_norm);
 			out << YAML::Key << "lo solve" << YAML::Value << YAML::BeginMap;
 				out << lo_monitor;
 				if (linear_monitor) {
