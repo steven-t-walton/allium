@@ -151,19 +151,12 @@ void FixedPointIterationSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 		norm = Norm(r); 
 		if (i==1) {
 			initial_norm = norm; 
-			initial_mag = Norm(x);
-			r0 = norm *rel_tol;
+			r0 = std::max(abs_tol, initial_norm * rel_tol);
 		}
 
 		if (norm < r0) {
 			converged = true; 
 			final_iter = i; 
-		}
-
-		else if (norm / initial_mag < abs_tol) {
-			converged = true; 
-			final_iter = i;
-			norm /= initial_mag;
 		}
 
 		if (i >= max_iter or converged) {
