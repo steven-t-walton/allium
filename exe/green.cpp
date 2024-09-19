@@ -1078,10 +1078,13 @@ int main(int argc, char *argv[]) {
 			Mtot_gray.Assemble(); 
 			TimingLog.Log("sigmaE", timer.RealTime());
 
-			totalR.Project();
-			totalRinv.Project();
+			timer.Restart();
 			totalP.Project();
-			totalF.Project();
+			auto *total_ptr = dynamic_cast<ProjectedCoefficient*>(&lo_disc->GetTotal());
+			auto *abs_ptr = dynamic_cast<ProjectedCoefficient*>(&lo_disc->GetAbsorption());
+			if (total_ptr) total_ptr->Project();
+			if (abs_ptr) abs_ptr->Project();
+			TimingLog.Log("gray opacity", timer.RealTime());
 
 			// compute SMM closure 
 			timer.Restart();
