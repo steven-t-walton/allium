@@ -1094,7 +1094,16 @@ int main(int argc, char *argv[]) {
 		if (!lo_solver_table.valid()) MFEM_ABORT("must supply lo solver");
 		lo_solver.reset(io::CreateIterativeSolver(lo_solver_table, MPI_COMM_WORLD));
 		inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*lo_solver); 
-		nonlinear_solver->SetMonitor(*inner_monitor); 
+		auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get()); 
+		if (sundials) {
+			mfem::IdentityOperator identity(reducer.Height()); 
+			sundials->SetOperator(identity); 
+			kinsol_data = std::make_unique<KinsolCallbackData>(inner_monitor.get()); 
+			KINSetInfoHandlerFn(sundials->GetMem(), KinsolCallbackFunction, kinsol_data.get()); 
+			KINSetErrHandlerFn(sundials->GetMem(), io::SundialsErrorFunction, nullptr); 
+		} else {
+			nonlinear_solver->SetMonitor(*inner_monitor); 			
+		}
 		out << YAML::Key << "inner solver" << YAML::Value << lo_solver_table;		
 
 		sol::table linear_solver_table = solver["linear_solver"];
