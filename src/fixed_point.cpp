@@ -1,5 +1,65 @@
 #include "fixed_point.hpp"
 
+ComponentReductionOperator::ComponentReductionOperator(const mfem::Array<int> &offsets, int c)
+	: SolutionReductionOperator(offsets), comp(c)
+{
+	height = offsets[comp+1] - offsets[comp];
+	oper = new mfem::IdentityOperator(height);
+	own_oper = true;
+}
+
+ComponentReductionOperator::ComponentReductionOperator(const mfem::Array<int> &offsets, const mfem::Operator &op, int c)
+	: SolutionReductionOperator(offsets), oper(&op), comp(c)
+{
+	height = oper->Height();
+	own_oper = false;
+	assert(offsets[comp+1] - offsets[comp] == oper->Width());
+}
+
+ComponentReductionOperator::~ComponentReductionOperator()
+{
+	if (own_oper) delete oper;
+}
+
+void ComponentReductionOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
+{
+	assert(data);
+	assert(y.Size() == oper->Height());
+	*data = x;
+	const mfem::BlockVector bx(const_cast<mfem::Vector&>(x), offsets);
+	oper->Mult(bx.GetBlock(comp), y);
+}
+
+void ComponentReductionOperator::MultTranspose(const mfem::Vector &x, mfem::Vector &y) const
+{
+	assert(data);
+	mfem::BlockVector by(y, offsets);
+	oper->MultTranspose(x, by.GetBlock(comp));
+}
+
+ProjectGridFunctionOperator::ProjectGridFunctionOperator(mfem::FiniteElementSpace &in_fes, mfem::FiniteElementSpace &out_fes)
+	: in_fes(in_fes), out_fes(out_fes)
+{
+	height = out_fes.GetVSize();
+	width = in_fes.GetVSize();
+}
+
+void ProjectGridFunctionOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const 
+{
+	const mfem::GridFunction gfx(&in_fes, const_cast<mfem::Vector&>(x), 0);
+	mfem::GridFunctionCoefficient gfx_coef(&gfx);
+	mfem::GridFunction gfy(&out_fes, y, 0);
+	gfy.ProjectCoefficient(gfx_coef);
+}
+
+void ProjectGridFunctionOperator::MultTranspose(const mfem::Vector &x, mfem::Vector &y) const 
+{
+	const mfem::GridFunction gfx(&out_fes, const_cast<mfem::Vector&>(x), 0);
+	mfem::GridFunctionCoefficient gfx_coef(&gfx);
+	mfem::GridFunction gfy(&in_fes, y, 0);
+	gfy.ProjectCoefficient(gfx_coef);
+}
+
 void FixedPointSolverWrapper::SetOperator(const mfem::Operator &op)
 {
 	oper = &op;
@@ -11,8 +71,20 @@ void FixedPointSolverWrapper::Mult(const mfem::Vector &b, mfem::Vector &x) const
 {
 	FixedPointOperator fp_op(*oper, b);
 	fp_solver.SetOperator(fp_op);
-	mfem::Vector blank;
-	fp_solver.Mult(blank, x);
+	auto *kinsol = dynamic_cast<mfem::KINSolver*>(&fp_solver);
+	if (kinsol) {
+		mfem::Vector fx_scale(height), x_scale(height);
+		oper->Mult(b, x);
+		double norm = x.Normlinf();
+		double gnorm;
+		MPI_Allreduce(&norm, &gnorm, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+		fx_scale = 1.0 / gnorm;
+		x_scale = 1.0;
+		kinsol->Mult(x, x_scale, fx_scale);
+	} else {
+		mfem::Vector blank;
+		fp_solver.Mult(blank, x);
+	}
 }
 
 ReducedSolver::ReducedSolver(mfem::Solver &solver, SolutionReductionOperator &R)
@@ -54,6 +126,7 @@ ReducedOperator::Mult(const mfem::Vector &bfull, mfem::Vector &xred) const
 	assert(bfull.Size() == full_op.Width());
 	assert(xred.Size() == reducer.Height());
 	auto &xfull = reducer.GetData();
+	reducer.MultTranspose(xred, xfull);
 	full_op.Mult(bfull, xfull);
 	reducer.Mult(xfull, xred);
 }

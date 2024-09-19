@@ -20,7 +20,11 @@ public:
 	{
 		width = offsets.Last();
 	}
+	// stores pointer to x, reduces x -> y 
 	virtual void Mult(const mfem::Vector &x, mfem::Vector &y) const =0;
+	// takes a reduced vector x and moves it into y 
+	// y should be data to fully save memory but does not need to be 
+	virtual void MultTranspose(const mfem::Vector &x, mfem::Vector &y) const =0;
 
 	void SetData(mfem::Vector &v)
 	{
@@ -41,33 +45,13 @@ private:
 	const mfem::Operator *oper;
 	bool own_oper;
 public:
-	ComponentReductionOperator(const mfem::Array<int> &offsets, int c)
-		: SolutionReductionOperator(offsets), comp(c)
-	{
-		height = offsets[comp+1] - offsets[comp];
-		oper = new mfem::IdentityOperator(height);
-		own_oper = true;
-	}
-	ComponentReductionOperator(const mfem::Array<int> &offsets, const mfem::Operator &op, int c)
-		: SolutionReductionOperator(offsets), oper(&op), comp(c)
-	{
-		height = oper->Height();
-		own_oper = false;
-		assert(offsets[comp+1] - offsets[comp] == oper->Width());
-	}
-	~ComponentReductionOperator()
-	{
-		if (own_oper) delete oper;
-	}
-
-	void Mult(const mfem::Vector &x, mfem::Vector &y) const override
-	{
-		assert(data);
-		assert(y.Size() == oper->Height());
-		*data = x;
-		const mfem::BlockVector bx(const_cast<mfem::Vector&>(x), offsets);
-		oper->Mult(bx.GetBlock(comp), y);
-	}
+	ComponentReductionOperator(const mfem::Array<int> &offsets, int c);
+	ComponentReductionOperator(const mfem::Array<int> &offsets, const mfem::Operator &op, int c);
+	~ComponentReductionOperator();
+	// extracts component comp, applies operator, returns in y 
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const override;
+	// moves transpose of operator applied to x into comp component of y 
+	void MultTranspose(const mfem::Vector &x, mfem::Vector &y) const override;
 };
 
 class ProjectGridFunctionOperator : public mfem::Operator
@@ -75,19 +59,11 @@ class ProjectGridFunctionOperator : public mfem::Operator
 private:
 	mfem::FiniteElementSpace &in_fes, &out_fes;
 public:
-	ProjectGridFunctionOperator(mfem::FiniteElementSpace &in_fes, mfem::FiniteElementSpace &out_fes)
-		: in_fes(in_fes), out_fes(out_fes)
-	{
-		height = out_fes.GetVSize();
-		width = in_fes.GetVSize();
-	}
-	void Mult(const mfem::Vector &x, mfem::Vector &y) const override 
-	{
-		const mfem::GridFunction gfx(&in_fes, const_cast<mfem::Vector&>(x), 0);
-		mfem::GridFunctionCoefficient gfx_coef(&gfx);
-		mfem::GridFunction gfy(&out_fes, y, 0);
-		gfy.ProjectCoefficient(gfx_coef);
-	}
+	ProjectGridFunctionOperator(mfem::FiniteElementSpace &in_fes, mfem::FiniteElementSpace &out_fes);
+	// projects x from in_fes to y in out out_fes 
+	void Mult(const mfem::Vector &x, mfem::Vector &y) const override;
+	// projects x in out_fes to y in in_fes 
+	void MultTranspose(const mfem::Vector &x, mfem::Vector &y) const override;
 };
 
 // forwards the source term provided in Mult to 
