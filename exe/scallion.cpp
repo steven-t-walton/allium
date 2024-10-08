@@ -130,6 +130,24 @@ void KinsolCallbackFunction(const char *module, const char *function, char *msg,
 	}
 }
 
+double ComputeBalance(
+	const InverseAdvectionOperator &Linv, const mfem::Operator &D, 
+	const mfem::Operator &emission_form, const mfem::Vector &source, 
+	const mfem::Vector &psi, const mfem::Vector &T)
+{
+	AdvectionOperator L(Linv);
+	double local[2]; 
+	local[0] = L.ComputeBalance(psi);
+	mfem::Vector tmp(emission_form.Height());
+	emission_form.Mult(T, tmp);
+	local[1] = tmp.Sum();
+	D.Mult(source, tmp);
+	local[1] += tmp.Sum();
+	double global[2];
+	MPI_Reduce(local, global, 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+	return std::fabs(global[0] - global[1]) / global[1];
+}
+
 int main(int argc, char *argv[]) {
 	mfem::StopWatch wall_timer; 
 	wall_timer.Start(); 
@@ -982,7 +1000,7 @@ int main(int argc, char *argv[]) {
 			auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get());
 			if (sundials) {
 				const std::string strategy = nonlin_solve_table["strategy"]; 
-				io::ValidateOption<std::string>("kinsol strategy", strategy, {"none", "linesearch", "picard"}, root); 		
+				io::ValidateOption<std::string>("kinsol strategy", strategy, {"fp"}, root); 		
 			}
 			out << YAML::Key << "nonlinear solver" << YAML::Key << nonlin_solve_table; 			
 		}
@@ -1024,6 +1042,15 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "preconditioner" << YAML::Value << prec_table;
 		}
 
+		auto *sundials = dynamic_cast<mfem::KINSolver*>(nonlinear_solver.get()); 
+		if (sundials) {
+			mfem::IdentityOperator identity(reducer.Height()); 
+			sundials->SetOperator(identity); 
+			kinsol_data = std::make_unique<KinsolCallbackData>(dsa_monitor.get()); 
+			KINSetInfoHandlerFn(sundials->GetMem(), KinsolCallbackFunction, kinsol_data.get()); 
+			KINSetErrHandlerFn(sundials->GetMem(), io::SundialsErrorFunction, nullptr); 
+		}
+
 		linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
 
 		sol::table meb_solver_table = solver["energy_balance_solver"]; 
@@ -1032,7 +1059,6 @@ int main(int argc, char *argv[]) {
 			meb_solver_table["type"], {"newton", "local newton"}, root); 
 		mfem::Solver *meb_solver_ptr;
 		if (meb_type == "newton") {
-			linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
 			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
 			global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
 			global_meb_solver->SetOperator(meb_form); 
@@ -1292,6 +1318,10 @@ int main(int argc, char *argv[]) {
 		// --- post process new time solution --- 
 		Dlin.Mult(psi, moments_nu); // update energy density 
 		to_gray_op_moments.Mult(moments_nu, moments);
+
+		// --- compute energy balance --- 
+		const auto balance = ComputeBalance(Linv, D, emission_form, psi0, psi, T);
+
 		E *= 1.0/constants::SpeedOfLight; 
 		if (E.CheckFinite() > 0) MFEM_ABORT("infinite energy density"); 
 
@@ -1390,7 +1420,7 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "cycle" << YAML::Value << cycle; 
 			out << YAML::Key << "simulation time" << YAML::Value << time; 
 			out << YAML::Key << "time step size" << YAML::Value << time_step_old; 
-			out << YAML::Key << "||radE||" << YAML::Value << radE_norm; 
+			out << YAML::Key << "||radE||" << YAML::Value << io::FormatScientific(radE_norm); 
 			if (nonlinear_solver) {
 				log.Log("max nonlinear iterations", nonlinear_solver->GetNumIterations());
 				if (inner_monitor)
@@ -1420,6 +1450,7 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "dsa solver" << YAML::Value << *dsa_monitor;
 			}
 			io::ProcessGlobalLogs(out, log_verbosity);
+			out << YAML::Key << "energy balance" << YAML::Value << io::FormatScientific(balance);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
 

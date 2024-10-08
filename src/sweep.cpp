@@ -869,6 +869,8 @@ void AdvectionOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 				ylocal.SetSize(vdofs.Size()); 
 				for (int i=0; i<vdofs.Size(); i++) { xlocal(i) = xview(g,a,vdofs[i]); }
 				mass_mat_view(g,e)->Mult(xlocal, ylocal); 
+				if (Linv.is_time_dependent)
+					Linv.time_mass_matrices[e]->AddMult(xlocal, ylocal, Linv.time_absorption);
 				grad.SetSize(vdofs.Size()); 
 				grad = 0.0; 
 				for (int d=0; d<dim; d++) {
@@ -938,4 +940,79 @@ void AdvectionOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 			}
 		}
 	}
+}
+
+void ColumnSum(const mfem::DenseMatrix &mat, mfem::Vector &sums)
+{
+	sums.SetSize(mat.Width());
+	for (int c=0; c<mat.Width(); c++) {
+		sums(c) = 0.0;
+		for (int r=0; r<mat.Height(); r++) {
+			sums(c) += mat(r,c);
+		}
+	}
+}
+
+double AdvectionOperator::ComputeBalance(const mfem::Vector &psi) const
+{
+	auto &mesh = Linv.mesh;
+	const auto dim = mesh.Dimension(); 
+	auto &fes = Linv.fes; 
+	const auto &psi_ext = Linv.psi_ext; 
+	const auto &psi_fnbr_ext = Linv.psi_fnbr_ext; 
+	const auto G = psi_ext.extent(0); 
+	const auto &quad = Linv.quad; 
+	const auto Nomega = quad.Size(); 
+	const auto &normals = Linv.normals; 
+
+	auto mass_mat_view = Kokkos::mdspan(Linv.mass_matrices.GetData(), G, fes.GetNE()); 
+	auto grad_mat_view = Kokkos::mdspan(Linv.grad_matrices.GetData(), dim, fes.GetNE()); 
+	auto face_mat_view = Kokkos::mdspan(Linv.face_matrices.GetData(), mesh.GetNumFaces(), 2, 2); 
+
+	TransportVectorView psi_view(psi.GetData(), psi_ext); 
+
+	mfem::DenseMatrix *time_mat = nullptr;
+	mfem::Vector psi_local, local, weights, time_weights; 
+	mfem::Array<int> dofs;
+	double absorption = 0.0;
+	for (int e=0; e<fes.GetNE(); e++) {
+		const auto &fe = *fes.GetFE(e);
+		const auto ndof = fe.GetDof();
+		psi_local.SetSize(ndof);
+		local.SetSize(ndof);
+		fes.GetElementDofs(e, dofs);
+		for (int g=0; g<G; g++) {
+			auto M = *mass_mat_view(g,e);
+			if (Linv.is_time_dependent) M.Add(Linv.time_absorption, *Linv.time_mass_matrices[e]);
+			for (int a=0; a<quad.Size(); a++) {
+				for (int n=0; n<ndof; n++) { psi_local(n) = psi_view(g,a,dofs[n]); }
+				M.Mult(psi_local, local);
+				absorption += local.Sum() * quad.GetWeight(a);
+			}
+		}
+	}
+
+	double leakage = 0.0;
+	mfem::Vector nor(dim);
+	for (int bf=0; bf<mesh.GetNBE(); bf++) {
+		const auto f = mesh.GetBdrElementFaceIndex(bf);
+		int e, info;
+		mesh.GetBdrElementAdjacentElement(bf, e, info);
+		fes.GetElementDofs(e, dofs);
+		psi_local.SetSize(dofs.Size()); 
+		local.SetSize(dofs.Size());
+		for (auto d=0; d<dim; d++) { nor(d) = normals(f*dim + d); }
+		for (int a=0; a<quad.Size(); a++) {
+			const auto &Omega = quad.GetOmega(a);
+			const auto dot = Omega*nor;
+			if (dot >= 0) {
+				for (int g=0; g<G; g++) {
+					for (int n=0; n<dofs.Size(); n++) { psi_local(n) = psi_view(g,a,dofs[n]); }
+					face_mat_view(f,0,0)->Mult(psi_local, local); 
+					leakage += quad.GetWeight(a) * dot * local.Sum();
+				}				
+			}
+		}
+	}
+	return leakage + absorption;
 }

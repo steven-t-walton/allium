@@ -143,4 +143,5 @@ public:
 	AdvectionOperator(const InverseAdvectionOperator &Linv) : Linv(Linv) 
 	{ }
 	void Mult(const mfem::Vector &x, mfem::Vector &y) const override; 
+	double ComputeBalance(const mfem::Vector &psi) const;
 };
