@@ -820,10 +820,8 @@ int main(int argc, char *argv[]) {
 	const std::string solver_type = solver["type"]; 
 	io::ValidateOption<std::string>("solver type", solver_type, 
 		{"picard", "linearized", "ndsa", "inexact newton"}, root); 
-	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver, local_meb_solver, global_meb_solver,
-		linear_solver, lo_solver;
+	std::unique_ptr<mfem::IterativeSolver> nonlinear_solver, local_meb_solver, linear_solver, lo_solver;
 	std::unique_ptr<DenseBlockDiagonalNonlinearSolver> meb_solver;
-	std::unique_ptr<DenseBlockDiagonalSolver> linearized_meb_solver;
 	std::unique_ptr<mfem::Solver> dsa_solver, fp_wrap;
 	std::unique_ptr<MomentDiscretization> Kform; 
 	std::unique_ptr<mfem::HypreBoomerAMG> amg; 
@@ -841,31 +839,19 @@ int main(int argc, char *argv[]) {
 		io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
 			{"fp", "kinsol"}, root); 
 		nonlinear_solver.reset(io::CreateIterativeSolver(nonlin_solve_table, MPI_COMM_WORLD)); 
+
+		// create energy balance solver 
 		sol::table meb_solver_table = solver["energy_balance_solver"]; 
 		if (!meb_solver_table.valid()) MFEM_ABORT("must supply solver for energy balance"); 
-		const std::string meb_type = meb_solver_table["type"]; 
-		io::ValidateOption<std::string>("energy balance solver", 
-			meb_solver_table["type"], {"newton", "local newton"}, root); 
-		mfem::Solver *meb_solver_ptr;
-		if (meb_type == "newton") {
-			linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
-			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
-			global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
-			global_meb_solver->SetOperator(meb_form); 
-			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*global_meb_solver); 
-			meb_solver_ptr = global_meb_solver.get();
-		} else if (meb_type == "local newton") {
-			local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
-			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
-			local_meb_solver->SetPreconditioner(*local_mat_inv);
-			meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver); 			
-			meb_solver->SetOperator(meb_form); 
-			inner_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver); 
-			meb_solver_ptr = meb_solver.get();
-		}
+		local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>();
+		io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver);
+		local_meb_solver->SetPreconditioner(*local_mat_inv);
+		meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver);
+		meb_solver->SetOperator(meb_form);
+		inner_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver);
 
 		oper = std::make_unique<PicardTRTOperator>(offsets, Linv, D, emission_form, Mtot_collapse, 
-			*meb_solver_ptr, *nonlinear_solver);
+			*meb_solver, *nonlinear_solver);
 		fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
 		auto *rsolver = new ReducedSolver(*fp_wrap, reducer);
 		rsolver->SetOperator(*oper);
@@ -954,26 +940,14 @@ int main(int argc, char *argv[]) {
 		if (dsa_inv) op->SetDSAPreconditioner(*dsa_inv);
 		sol::optional<sol::table> meb_solver_table_avail = solver["rebalance_solver"]; 
 		if (meb_solver_table_avail) {
+			// create energy balance solver 
 			sol::table meb_solver_table = meb_solver_table_avail.value();
-			const std::string meb_type = meb_solver_table["type"]; 
-			io::ValidateOption<std::string>("energy balance solver", 
-				meb_solver_table["type"], {"newton", "local newton"}, root); 
-			mfem::Solver *meb_solver_ptr;
-			if (meb_type == "newton") {
-				linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
-				global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
-				global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
-				global_meb_solver->SetOperator(meb_form); 
-				meb_solver_ptr = global_meb_solver.get();
-			} else if (meb_type == "local newton") {
-				local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
-				io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
-				local_meb_solver->SetPreconditioner(*local_mat_inv);
-				meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver); 			
-				meb_solver->SetOperator(meb_form); 
-				meb_solver_ptr = meb_solver.get();
-			}				
-			op->SetRebalanceSolver(*meb_solver_ptr);
+			local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>();
+			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver);
+			local_meb_solver->SetPreconditioner(*local_mat_inv);
+			meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver);
+			meb_solver->SetOperator(meb_form);
+			op->SetRebalanceSolver(*meb_solver);
 			out << YAML::Key << "rebalance solver" << YAML::Value << meb_solver_table;
 		}
 		if (nonlinear_solver) {
@@ -1054,27 +1028,16 @@ int main(int argc, char *argv[]) {
 		linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
 
 		sol::table meb_solver_table = solver["energy_balance_solver"]; 
-		const std::string meb_type = meb_solver_table["type"]; 
-		io::ValidateOption<std::string>("energy balance solver", 
-			meb_solver_table["type"], {"newton", "local newton"}, root); 
-		mfem::Solver *meb_solver_ptr;
-		if (meb_type == "newton") {
-			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
-			global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
-			global_meb_solver->SetOperator(meb_form); 
-			meb_solver_ptr = global_meb_solver.get();
-		} else if (meb_type == "local newton") {
-			local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
-			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
-			local_meb_solver->SetPreconditioner(*local_mat_inv);
-			meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver); 			
-			meb_solver->SetOperator(meb_form); 
-			meb_solver_ptr = meb_solver.get();
-		}				
+		if (!meb_solver_table.valid()) MFEM_ABORT("must supply energy balance solver table");
+		local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>();
+		io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver);
+		local_meb_solver->SetPreconditioner(*local_mat_inv);
+		meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver);
+		meb_solver->SetOperator(meb_form);
 		out << YAML::Key << "energy balance solver" << YAML::Value << meb_solver_table;
 
 		auto *op = new InexactNewtonTRTOperator(offsets, Linv, D, emission_form, meb_form, 
-			Mtot_collapse, *meb_solver_ptr, *linearized_meb_solver);
+			Mtot_collapse, *meb_solver, *linearized_meb_solver);
 		if (dsa_inv) op->SetDSAPreconditioner(*dsa_inv);
 		op->SetGrayOpacities(totalR);
 		oper.reset(op);
@@ -1093,27 +1056,13 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "outer solver" << YAML::Value << nonlin_solve_table;
 
 		sol::table meb_solver_table = solver["energy_balance_solver"]; 
-		if (!meb_solver_table.valid()) MFEM_ABORT("must supply solver for energy balance"); 
-		const std::string meb_type = meb_solver_table["type"]; 
-		io::ValidateOption<std::string>("energy balance solver", 
-			meb_solver_table["type"], {"newton", "local newton"}, root); 
-		mfem::Solver *meb_solver_ptr;
-		if (meb_type == "newton") {
-			linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
-			global_meb_solver.reset(io::CreateIterativeSolver(meb_solver_table, MPI_COMM_WORLD)); 
-			global_meb_solver->SetPreconditioner(*linearized_meb_solver); 
-			global_meb_solver->SetOperator(meb_form_totalP); 
-			meb_monitor = std::make_unique<InnerIterativeSolverMonitor>(*global_meb_solver); 
-			meb_solver_ptr = global_meb_solver.get();
-		} else if (meb_type == "local newton") {
-			local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>(); 
-			io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver); 
-			local_meb_solver->SetPreconditioner(*local_mat_inv);
-			meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver); 			
-			meb_solver->SetOperator(meb_form_totalP); 
-			meb_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver); 
-			meb_solver_ptr = meb_solver.get();
-		}
+		if (!meb_solver_table.valid()) MFEM_ABORT("must supply energy balance solver table");
+		local_meb_solver = std::make_unique<EnergyBalanceNewtonSolver>();
+		io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver);
+		local_meb_solver->SetPreconditioner(*local_mat_inv);
+		meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver);
+		meb_solver->SetOperator(meb_form_totalP);
+
 		out << YAML::Key << "energy balance solver" << YAML::Value << meb_solver_table;
 
 		sol::table lo_solver_table = solver["inner_solver"];
