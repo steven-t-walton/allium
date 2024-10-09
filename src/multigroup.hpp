@@ -18,6 +18,7 @@ public:
 	// or by manually building the bounds and midpoints arrays 
 	// models design of mfem::Mesh 
 	MultiGroupEnergyGrid() = default;
+	MultiGroupEnergyGrid(const mfem::Array<double> &grid);
 	MultiGroupEnergyGrid(const mfem::Array<double> &grid, const mfem::Array<double> &midpoints);
 	MultiGroupEnergyGrid(const MultiGroupEnergyGrid &other) = delete;
 	MultiGroupEnergyGrid(MultiGroupEnergyGrid &&other) = default;

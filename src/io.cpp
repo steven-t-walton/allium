@@ -419,6 +419,122 @@ void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, i
 	out << YAML::EndMap; 
 }
 
+MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, bool root)
+{
+	MultiGroupEnergyGrid grid;
+	sol::optional<sol::table> bounds_table_avail = table["bounds"];
+	if (bounds_table_avail) {
+		sol::table bounds_table = bounds_table_avail.value();
+		mfem::Array<double> bounds(bounds_table.size());
+		for (int i=0; i<bounds.Size(); i++) {
+			bounds[i] = bounds_table[i+1];
+		}
+		grid = MultiGroupEnergyGrid(bounds);
+		out << YAML::Key << "groups" << YAML::Value << grid.Size();
+	} else {
+		const double Emin = table["min"];
+		const double Emax = table["max"]; 
+		const int G = table["num_groups"];
+
+		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin); 
+		out << YAML::Key << "Emax" << YAML::Value << FormatScientific(Emax);
+		out << YAML::Key << "groups" << YAML::Value << G;
+
+		if (G == 1) {
+			grid = MultiGroupEnergyGrid::MakeGray(Emin, Emax);
+		} else {
+			const bool extend_to_zero = table["extend_to_zero"].get_or(false);
+			const auto spacing = io::GetAndValidateOption<std::string>(table, "spacing", 
+				{"log", "equal"}, "log", root);
+			out << YAML::Key << "group spacing" << YAML::Value << spacing;
+			out << YAML::Key << "extend to zero" << YAML::Value << extend_to_zero;
+
+			if (spacing == "log") {
+				grid = MultiGroupEnergyGrid::MakeLogSpaced(Emin, Emax, G, extend_to_zero);
+			} else if (spacing == "equal") {
+				grid = MultiGroupEnergyGrid::MakeEqualSpaced(Emin, Emax, G, extend_to_zero);
+			}			
+		}
+	}
+
+	const bool print_bounds = table["print_bounds"].get_or(false);
+	if (print_bounds) {
+		const auto &bounds = grid.Bounds();
+		out << YAML::Key << "bounds" << YAML::Value << YAML::BeginSeq;
+		for (int b=0; b<bounds.Size(); b++) {
+			out << FormatScientific(bounds[b],6);
+		}
+		out << YAML::EndSeq;
+	}
+	return grid;
+}
+
+OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid, YAML::Emitter &out, bool root)
+{
+	OpacityCoefficient *opac;
+	std::string type = table["type"]; 
+	io::ValidateOption<std::string>("opacity type", type, 
+		{"constant", "analytic gray", "analytic", "analytic edge"}, root); 
+	out << YAML::Key << "type" << YAML::Value << type; 
+	if (type == "constant") {
+		sol::table values = table["values"];
+		mfem::Vector vec(values.size()); 
+		for (int i=0; i<vec.Size(); i++) { vec(i) = values[i+1]; }
+		opac = new ConstantOpacityCoefficient(vec);  
+	}
+
+	else if (type == "analytic gray") {
+		double coef = table["coef"]; 
+		double nrho = table["nrho"]; 
+		double nT = table["nT"]; 
+		opac = new AnalyticGrayOpacityCoefficient(coef, nrho, nT); 
+
+		out << YAML::Key << "coef" << YAML::Value << coef;
+		out << YAML::Key << "nrho" << YAML::Value << nrho; 
+		out << YAML::Key << "nT" << YAML::Value << nT;
+	}
+
+	else if (type == "analytic") {
+		double coef = table["coef"]; 
+		double nrho = table["nrho"]; 
+		double nT = table["nT"]; 
+		double Emin = table["Emin"].get_or(0.0);
+		opac = new AnalyticOpacityCoefficient(coef, nrho, nT, grid.Midpoints(), Emin);
+
+		out << YAML::Key << "coef" << YAML::Value << coef;
+		out << YAML::Key << "nrho" << YAML::Value << nrho; 
+		out << YAML::Key << "nT" << YAML::Value << nT;
+		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin); 
+	} 
+
+	else if (type == "analytic edge") {
+		const double c0 = table["c0"];
+		const double c1 = table["c1"];
+		const double c2 = table["c2"];
+		const double Emin = table["Emin"];
+		const double Eedge = table["Eedge"];
+		const double delta_s = table["delta_s"];
+		const double delta_w = table["delta_w"];
+		const int Nlines = table["Nlines"];
+		const int int_order = table["int_order"].get_or(1);
+		opac = new AnalyticEdgeOpacityCoefficient(
+			c0, c1, c2, 
+			Emin, Eedge, delta_s, 
+			delta_w, Nlines, grid.Bounds(), 
+			int_order);
+		out << YAML::Key << "c0" << YAML::Value << c0;
+		out << YAML::Key << "c1" << YAML::Value << c1;
+		out << YAML::Key << "c2" << YAML::Value << c2;
+		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin);
+		out << YAML::Key << "Eedge" << YAML::Value << FormatScientific(Eedge);
+		out << YAML::Key << "delta_s" << YAML::Value << FormatScientific(delta_s);
+		out << YAML::Key << "delta_w" << YAML::Value << FormatScientific(delta_w);
+		out << YAML::Key << "Nlines" << YAML::Value << Nlines;
+		out << YAML::Key << "int order" << YAML::Value << int_order;
+	}
+	return opac;
+}
+
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root) 
 {
 	for (const auto &it : table) {

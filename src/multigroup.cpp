@@ -1,6 +1,24 @@
 #include "multigroup.hpp"
 #include "planck.hpp"
 
+MultiGroupEnergyGrid::MultiGroupEnergyGrid(const mfem::Array<double> &bounds)
+	: bounds(bounds)
+{
+	midpoints.SetSize(bounds.Size()-1);
+	for (int i=0; i<midpoints.Size(); i++) {
+		if (bounds[i] > 0.0) {
+			midpoints[i] = std::sqrt(bounds[i] * bounds[i+1]);
+		} else {
+			midpoints[i] = (bounds[i] + bounds[i+1])/2;
+		}
+	}
+
+	widths.SetSize(Size());
+	for (int g=0; g<Size(); g++) {
+		widths[g] = bounds[g+1] - bounds[g];
+	}
+}
+
 MultiGroupEnergyGrid::MultiGroupEnergyGrid(const mfem::Array<double> &bounds, const mfem::Array<double> &midpoints)
 	: bounds(bounds), midpoints(midpoints)
 {
@@ -14,11 +32,9 @@ MultiGroupEnergyGrid::MultiGroupEnergyGrid(const mfem::Array<double> &bounds, co
 MultiGroupEnergyGrid MultiGroupEnergyGrid::MakeGray(double Emin, double Emax)
 {
 	mfem::Array<double> bounds(2);
-	mfem::Array<double> midpoints(1);
 	bounds[0] = Emin; 
 	bounds[1] = Emax; 
-	midpoints[0] = std::sqrt(std::max(Emin, 1e-5) * Emax);
-	return MultiGroupEnergyGrid(bounds, midpoints);
+	return MultiGroupEnergyGrid(bounds);
 }
 
 MultiGroupEnergyGrid MultiGroupEnergyGrid::MakeLogSpaced(double Emin, double Emax, int G, bool extend_to_zero)

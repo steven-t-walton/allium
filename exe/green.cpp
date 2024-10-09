@@ -60,6 +60,24 @@ public:
 	}
 };
 
+double ComputeBalance(
+	const InverseAdvectionOperator &Linv, const mfem::Operator &D, 
+	const mfem::Operator &emission_form, const mfem::Vector &source, 
+	const mfem::Vector &psi, const mfem::Vector &T)
+{
+	AdvectionOperator L(Linv);
+	double local[2]; 
+	local[0] = L.ComputeBalance(psi);
+	mfem::Vector tmp(emission_form.Height());
+	emission_form.Mult(T, tmp);
+	local[1] = tmp.Sum();
+	D.Mult(source, tmp);
+	local[1] += tmp.Sum();
+	double global[2];
+	MPI_Reduce(local, global, 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+	return std::fabs(global[0] - global[1]) / global[1];
+}
+
 int main(int argc, char *argv[]) {
 	mfem::StopWatch wall_timer; 
 	wall_timer.Start(); 
@@ -145,45 +163,9 @@ int main(int argc, char *argv[]) {
 	// do this first since materials depend on energy 
 	// discretization 
 	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap; 
-	sol::optional<sol::table> energy_table_avail = lua["energy"];
-	MultiGroupEnergyGrid energy_grid;
-	if (energy_table_avail) {
-		sol::table energy_table = energy_table_avail.value();
-		const double Emin = energy_table["min"];
-		const double Emax = energy_table["max"]; 
-		const int G = energy_table["num_groups"];
-
-		out << YAML::Key << "Emin" << YAML::Value << Emin; 
-		out << YAML::Key << "Emax" << YAML::Value << Emax;
-		out << YAML::Key << "groups" << YAML::Value << G;
-
-		if (G == 1) {
-			energy_grid = MultiGroupEnergyGrid::MakeGray(Emin, Emax);
-		} else {
-			const bool extend_to_zero = energy_table["extend_to_zero"].get_or(false);
-			const auto spacing = io::GetAndValidateOption<std::string>(energy_table, "spacing", 
-				{"log", "equal"}, "log", root);
-			if (spacing == "log") {
-				energy_grid = MultiGroupEnergyGrid::MakeLogSpaced(Emin, Emax, G, extend_to_zero);
-			} else if (spacing == "equal") {
-				energy_grid = MultiGroupEnergyGrid::MakeEqualSpaced(Emin, Emax, G, extend_to_zero);
-			}			
-			out << YAML::Key << "extend to zero" << YAML::Value << extend_to_zero;
-		}
-
-		const bool print_bounds = energy_table["print_bounds"].get_or(false);
-		if (print_bounds) {
-			out << YAML::Key << "bounds" << YAML::Value << YAML::Flow << energy_grid.Bounds();
-		}
-	} else {
-		const double Emin = 0.0;
-		const double Emax = 1e9;
-		energy_grid = MultiGroupEnergyGrid::MakeGray(Emin, Emax);
-		out << YAML::Key << "Emin" << YAML::Value << Emin; 
-		out << YAML::Key << "Emax" << YAML::Value << Emax;
-		out << YAML::Key << "groups" << YAML::Value << 1;		
-		if (root) MFEM_WARNING("not specifying energy is deprecated, defaulting to gray");
-	}
+	sol::table energy_table = lua["energy"];
+	if (!energy_table.valid()) MFEM_ABORT("must supply energy table");
+	auto energy_grid = io::CreateEnergyGrid(energy_table, out, root);
 	out << YAML::EndMap; // end energy block 
 	const auto G = energy_grid.Size();
 
@@ -202,39 +184,19 @@ int main(int argc, char *argv[]) {
 	mfem::Vector cv_list(nattr), density_list(nattr); 
 	// must store the lua object so data doesn't go out of scope 
 	// for the source coefficients 
-	bool temp_dependent_opacity = false; 
 	std::vector<sol::object> lua_source_objs(nattr); 
 	mfem::Array<OpacityCoefficient*> total_list(nattr); 
 	mfem::Array<PhaseSpaceCoefficient*> source_list(nattr); 
-	out << YAML::Key << "materials" << YAML::Value << YAML::BeginSeq; 
+	out << YAML::Key << "materials" << YAML::Value << YAML::BeginMap; 
 	for (auto i=0; i<attr_list.size(); i++) {
 		sol::table data = materials[attr_list[i].c_str()]; 
 		if (!data.valid()) MFEM_ABORT("material named " << attr_list[i] << " not found"); 
+		out << YAML::Key << attr_list[i] << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "attribute" << YAML::Value << i+1; 
+		out << YAML::Key << "opacity" << YAML::Key << YAML::BeginMap; 
 		sol::table total = data["total"]; 
-		std::string type = total["type"]; 
-		io::ValidateOption<std::string>("opacity type", type, {"constant", "analytic gray", "analytic"}, root); 
-		if (type == "constant") {
-			sol::table values = total["values"];
-			mfem::Vector vec(values.size()); 
-			for (int i=0; i<vec.Size(); i++) { vec(i) = values[i+1]; }
-			total_list[i] = new ConstantOpacityCoefficient(vec);  
-		}
-
-		else if (type == "analytic gray") {
-			double coef = total["coef"]; 
-			double nrho = total["nrho"]; 
-			double nT = total["nT"]; 
-			total_list[i] = new AnalyticGrayOpacityCoefficient(coef, nrho, nT); 
-			temp_dependent_opacity = true; 
-		}
-
-		else if (type == "analytic") {
-			double coef = total["coef"]; 
-			double nrho = total["nrho"]; 
-			double nT = total["nT"]; 
-			total_list[i] = new AnalyticOpacityCoefficient(coef, nrho, nT, energy_grid.Midpoints());
-			temp_dependent_opacity = true;
-		}
+		total_list[i] = io::CreateOpacity(total, energy_grid, out, root);
+		out << YAML::EndMap;
 		cv_list(i) = data["heat_capacity"]; 
 		density_list(i) = data["density"].get_or(1.0); 
 		lua_source_objs[i] = data["source"]; 
@@ -249,21 +211,17 @@ int main(int argc, char *argv[]) {
 			source_list[i] = new FunctionGrayCoefficient(source_func); 
 		}
 
-		out << YAML::BeginMap; 
-			out << YAML::Key << "name" << YAML::Value << attr_list[i]; 
-			out << YAML::Key << "attribute" << YAML::Value << i+1; 
-			out << YAML::Key << "opacity" << YAML::Value << type; 
-			out << YAML::Key << "heat capacity" << YAML::Value << cv_list(i); 
-			out << YAML::Key << "density" << YAML::Value << density_list(i); 
-			out << YAML::Key << "source" << YAML::Value; 
-			if (lua_source_objs[i].get_type() == sol::type::number) {
-				out << lua_source_objs[i].as<double>(); 
-			} else {
-				out << "function"; 
-			}
+		out << YAML::Key << "heat capacity" << YAML::Value << cv_list(i); 
+		out << YAML::Key << "density" << YAML::Value << density_list(i); 
+		out << YAML::Key << "source" << YAML::Value; 
+		if (lua_source_objs[i].get_type() == sol::type::number) {
+			out << lua_source_objs[i].as<double>(); 
+		} else {
+			out << "function"; 
+		}
 		out << YAML::EndMap; 
 	}
-	out << YAML::EndSeq; 
+	out << YAML::EndMap; 
 
 	// map string material id to integer
 	// start from 1 since MFEM expects attributes to be >0
@@ -287,7 +245,7 @@ int main(int argc, char *argv[]) {
 	mfem::Array<mfem::Coefficient*> inflow_base_list(nbattr);
 	mfem::Array<PhaseSpaceCoefficient*> inflow_list(nbattr); 
 	BoundaryConditionMap bc_map;
-	out << YAML::Key << "boundary conditions" << YAML::Value << YAML::BeginSeq; 
+	out << YAML::Key << "boundary conditions" << YAML::Value << YAML::BeginMap; 
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
 		sol::table data = bcs[bdr_attr_list[i].c_str()]; 
 		std::string type = data["type"]; 
@@ -299,24 +257,23 @@ int main(int argc, char *argv[]) {
 			inflow_list[i] = new PlanckEmissionPSCoefficient(*inflow_base_list[i]);
 			bc_map[i+1] = BoundaryCondition::INFLOW;
 		} else if (type == "reflective") {
-			inflow_base_list[i] = nullptr;
 			inflow_list[i] = nullptr; 
+			inflow_base_list[i] = nullptr; 
 			bc_map[i+1] = BoundaryCondition::REFLECTIVE;
 		} 
 		else if (type == "vacuum") {
-			inflow_base_list[i] = nullptr;
 			inflow_list[i] = nullptr; 
+			inflow_base_list[i] = nullptr; 
 			bc_map[i+1] = BoundaryCondition::INFLOW;
 		}
 
-		out << YAML::BeginMap; 
-			out << YAML::Key << "name" << YAML::Value << bdr_attr_list[i]; 
+		out << YAML::Key << bdr_attr_list[i] << YAML::Value << YAML::BeginMap;
 			out << YAML::Key << "attribute" << YAML::Value << i+1; 
 			out << YAML::Key << "type" << YAML::Value << type; 
 			if (inflow_list[i]) out << YAML::Key << "value" << YAML::Value << value; 
 		out << YAML::EndMap; 
 	}
-	out << YAML::EndSeq; 
+	out << YAML::EndMap; 
 
 	// map string to bdr attribute integer 
 	// start from 1 since MFEM expects >0
@@ -1223,6 +1180,10 @@ int main(int argc, char *argv[]) {
 		value_log.Log("max consistency E", consistency_E);
 		value_log.Log("max consistency F", consistency_F);
 
+		// --- compute energy balance --- 
+		const auto balance = ComputeBalance(Linv, D, emission_form, psi0, psi, T);
+		value_log.Log("energy balance", balance);
+
 		// get peicewise constant version of temperature 
 		// used for comparison to other codes 
 		Tpw.ProjectGridFunction(T); 
@@ -1277,27 +1238,25 @@ int main(int argc, char *argv[]) {
 
 		// --- update opacity and opacity-dependent terms --- 
 		if (T.Min() < 0) MFEM_ABORT("negative temperature"); 
-		if (temp_dependent_opacity or time_step_changed) {
-			mfem::StopWatch assembly_timer;
-			assembly_timer.Start();
-			// recompute opacities 
-			total.Project();
-			totalP.Project();
+		mfem::StopWatch assembly_timer;
+		assembly_timer.Start();
+		// recompute opacities 
+		total.Project();
+		totalP.Project();
 
-			// recompute sweep data 
-			Linv.AssembleLocalMatrices(); 
-			Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
+		// recompute sweep data 
+		Linv.AssembleLocalMatrices(); 
+		Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 
-			// energy balance time step 
-			Cvdt.SetAConst(1.0/time_step); 
+		// energy balance time step 
+		Cvdt.SetAConst(1.0/time_step); 
 
-			// LO system time step 
-			lo_disc->SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
-			lo_disc->SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
+		// LO system time step 
+		lo_disc->SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
+		lo_disc->SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
 
-			assembly_timer.Stop(); 
-			TimingLog.Log("assembly time", assembly_timer.RealTime());
-		}
+		assembly_timer.Stop(); 
+		TimingLog.Log("assembly time", assembly_timer.RealTime());
 
 		fixup_monitor = 0.0;
 
@@ -1339,6 +1298,7 @@ int main(int argc, char *argv[]) {
 				out << YAML::Key << "flux" << YAML::Value << io::FormatScientific(consistency_F);
 			out << YAML::EndMap;
 			io::ProcessGlobalLogs(out, log_verbosity);
+			out << YAML::Key << "energy balance" << YAML::Value << io::FormatScientific(balance);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
 
