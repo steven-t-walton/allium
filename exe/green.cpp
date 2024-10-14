@@ -867,14 +867,23 @@ int main(int argc, char *argv[]) {
 	meb_solver.SetOperator(meb_form); // solves meb_form = (cv/dt + B(.))T 
 	out << YAML::Key << "meb solver" << YAML::Value << meb_solver_table;
 
-	mfem::LinearForm opac_corr_form(&vfes);
-	OpacityCorrectionCoefficient opac_corr_coef(lo_disc->GetTotal(), total, Fnu_coef);
+	// multigroup component of opacity correction: sum_g sigma_g F_g 
+	mfem::LinearForm opac_corr_form_ho(&vfes);
+	MatrixTransposeVectorProductCoefficient opac_corr_coef_ho(Fnu_coef, total);
 	if (IsMassLumped(lump))
-		opac_corr_form.AddDomainIntegrator(
-			new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef)));
+		opac_corr_form_ho.AddDomainIntegrator(
+			new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef_ho)));
+	else 
+		opac_corr_form_ho.AddDomainIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef_ho));
+
+	// gray component of opacity correction: bar(sigma) bar(F) 
+	mfem::LinearForm opac_corr_form_lo(&vfes);
+	mfem::ScalarVectorProductCoefficient opac_corr_coef_lo(lo_disc->GetTotal(), Fho_coef);
+	if (IsMassLumped(lump))
+		opac_corr_form_lo.AddDomainIntegrator(
+			new QuadratureLumpedLFIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef_lo)));
 	else
-		opac_corr_form.AddDomainIntegrator(
-			new mfem::VectorDomainLFIntegrator(opac_corr_coef));
+		opac_corr_form_lo.AddDomainIntegrator(new mfem::VectorDomainLFIntegrator(opac_corr_coef_lo));
 
 		out << YAML::EndMap; // end smm output 
 	out << YAML::EndMap; // end driver output 
@@ -1065,27 +1074,28 @@ int main(int argc, char *argv[]) {
 			Dlin.Mult(psi, moments_nu);
 			to_gray_op_moments.Mult(moments_nu, moments_ho);
 
-			// compute E_HO-weighted opacity 
+			// compute gray opacities 
 			timer.Restart(); 
-			if (opacity_int_type == OUTER)
-				total.Project();
 			gray_opac_manager.Update();
 			TimingLog.Log("opacity", timer.RealTime());
 
 			// compute SMM closure 
 			timer.Restart();
+			// compute sum_g sigma_g F_g 
+			opac_corr_form_ho.Assemble();
 			source_op.Mult(psi, smm_source);
 			smm_source += moments0; // time source 
+			// add multigroup part of opacity correction 
+			add(smm_source.GetBlock(0), -3.0, opac_corr_form_ho, smm_source.GetBlock(0));
 			TimingLog.Log("SMM source", timer.RealTime());
 			int inner = 1;
 			double inner_norm, inner_norm_E0, inner_norm_T0;
 			while (true) {
 				mfem::Vector Tprev(T), Eprev(E);
 
-				// compute rosseland opacity-dependent 
-				// term in opacity correction 
+				// compute gray part of opacity correction sigma_F bar(F) 
 				timer.Restart();
-				opac_corr_form.Assemble();
+				opac_corr_form_lo.Assemble();
 				TimingLog.Log("opac correction", timer.RealTime());
 
 				// form schur complement of jacobian 
@@ -1114,7 +1124,7 @@ int main(int argc, char *argv[]) {
 				add(T0, -1.0, em_source_gr, em_source_gr);
 				dB_dBt_inv.AddMult(em_source_gr, lo_source.GetBlock(1));
 				// add in opacity correction and SMM source
-				add(smm_source.GetBlock(0), 3.0, opac_corr_form, lo_source.GetBlock(0));
+				add(smm_source.GetBlock(0), 3.0, opac_corr_form_lo, lo_source.GetBlock(0));
 				TimingLog.Log("LO assembly", timer.RealTime());
 
 				// solve linearized LO system 
@@ -1175,8 +1185,17 @@ int main(int argc, char *argv[]) {
 			}
 			lo_monitor.Register(inner, inner_norm);
 			if (root) io::EventLogPersistent.Log("inner solves", inner);
+
+			// update opacities given new temperature from LO solve 
+			if (opacity_int_type == OUTER) {
+				timer.Restart();
+				total.Project();
+				TimingLog.Log("opacity", timer.RealTime());
+			}
+			// reassemble sweep if opacity has changed 
 			if (opacity_int_type>0)
 				Linv.AssembleLocalMatrices();
+
 			Tstar -= T;
 			Estar -= E;
 			const auto Tnorm = Norm(Tstar);
