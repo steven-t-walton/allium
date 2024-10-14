@@ -95,7 +95,8 @@ TEST(Opacity, WeightedCollapseMassMatrix) {
 
 	mfem::ConstantCoefficient rho(1.0);
 	mfem::FunctionCoefficient T([](const mfem::Vector &x) { return 100*sin(M_PI*x(0)) + 1.0; });
-	AnalyticOpacityCoefficient opacity(1e9, 1.0, -3.0, grid.Midpoints());
+	FleckCummingsOpacityFunction func(1e9, 1.0, -3.0, 0.0);
+	MultiGroupFunctionOpacityCoefficient opacity(grid.Bounds(), func);
 	opacity.SetTemperature(T);
 	opacity.SetDensity(rho);
 	mfem::GridFunction total(&sigma_fes);

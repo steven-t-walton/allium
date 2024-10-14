@@ -56,65 +56,67 @@ public:
 	}
 };
 
-class AnalyticOpacityCoefficient : public OpacityCoefficient {
+// evaluates Fleck and Cummings opacity 
+// sigma(rho, T, E) = C rho^n1 T^n2 (1 - e^(-x))/x^3 
+// where x = E/T 
+// with optional "edge" 
+class FleckCummingsOpacityFunction
+{
 private:
-	double coef, nrho, nT; 
-	const mfem::Array<double> &energy_midpts; 
-	double Emin;
+	double coef, nrho, nT, Emin;
+	double edge_energy = std::numeric_limits<double>::max(), edge_coef = 0.0;
 public:
-	AnalyticOpacityCoefficient(double c, double rho, double T, 
-		const mfem::Array<double> &energy_midpts, double Emin=0.0) 
-		: coef(c), nrho(rho), nT(T), energy_midpts(energy_midpts), Emin(Emin),
-		  OpacityCoefficient(energy_midpts.Size())
+	FleckCummingsOpacityFunction(double c, double rho, double T, double Emin)
+		: coef(c), nrho(rho), nT(T), Emin(Emin)
+	{ }
+	void SetEdge(double E, double c) 
 	{
+		edge_energy = E; 
+		edge_coef = c;
 	}
-	void Eval(mfem::Vector &v, mfem::ElementTransformation &T, const mfem::IntegrationPoint &ip) 
+	double operator()(double rho, double T, double E) const
 	{
-		assert(temperature); 
-		assert(density); 
-		v.SetSize(vdim); 
-		double temp = temperature->Eval(T, ip); 
-		double rho = density->Eval(T, ip); 
-		double val = coef * pow(rho, nrho) * pow(temp, nT);
-		for (int g=0; g<vdim; g++) {
-			const double Ehat = std::max(Emin, energy_midpts[g]);
-			const double x = Ehat / temp;
-			v(g) = val * (1.0 - exp(-x))/pow(x,3);
-		}
-		if (v.Min() <= 0.0) MFEM_ABORT("negative opacity");
+		const double Ehat = std::max(E, Emin);
+		const double x = Ehat / T;
+		double opac = coef * pow(rho, nrho) * pow(T, nT) * (1.0 - exp(-x)) / pow(Ehat,3); 
+		if (Ehat > edge_energy) opac *= (1.0 + edge_coef);
+		return opac;
 	}
 };
 
-class AnalyticEdgeOpacityCoefficient : public OpacityCoefficient {
+// evaluates Tom Brunner opacity function 
+class EdgeLineOpacityFunction
+{
 private:
-	double c0, c1, c2, Emin, Eedge, delta_s, delta_w; 
+	double c0, c1, c2, Emin, Eedge, delta_s, delta_w, nT;
 	int Nlines;
-	const mfem::Array<double> &energy_bounds;
-	int int_order;
 public:
-	AnalyticEdgeOpacityCoefficient(double c0, double c1, double c2, 
-		double Emin, double Eedge, double delta_s, double delta_w, int Nlines, 
-		const mfem::Array<double> &energy_bounds, int int_order=1)
-		: c0(c0), c1(c1), c2(c2), Emin(Emin), Eedge(Eedge), 
-		  delta_s(delta_s), delta_w(delta_w), Nlines(Nlines), 
-		  energy_bounds(energy_bounds), int_order(int_order), 
-		  OpacityCoefficient(energy_bounds.Size()-1)
+	EdgeLineOpacityFunction(double c0, double c1, double c2, double Emin, double Eedge, 
+		double delta_s, double delta_w, double nT, int Nlines)
+		: c0(c0), c1(c1), c2(c2), Emin(Emin), Eedge(Eedge), delta_s(delta_s), delta_w(delta_w),
+		  nT(nT), Nlines(Nlines)
+	{ }
+	double operator()(double rho, double T, double E) const;
+};
+
+// converts a function of (rho, T, E) to a multigroup opacity 
+class MultiGroupFunctionOpacityCoefficient : public OpacityCoefficient
+{
+private:
+	const mfem::Array<double> &bounds;
+	using OpacityFunction = std::function<double(double,double,double)>; // density, temperature, energy
+	OpacityFunction opacity_func;
+	const mfem::IntegrationRule *rule = nullptr;
+public:
+	MultiGroupFunctionOpacityCoefficient(const mfem::Array<double> &bounds, OpacityFunction opacity_func)
+		: bounds(bounds), opacity_func(opacity_func), OpacityCoefficient(bounds.Size()-1)
+	{ }
+	void SetIntegrationOrder(int order)
 	{
+		rule = &mfem::IntRules.Get(mfem::Geometry::SEGMENT, order);
 	}
-	void Eval(mfem::Vector &v, mfem::ElementTransformation &T, const mfem::IntegrationPoint &ip)
-	{
-		assert(temperature);
-		assert(density);
-		v.SetSize(vdim);
-		double temp = temperature->Eval(T, ip);
-		double rho = density->Eval(T, ip);
-		for (int g=0; g<vdim; g++) {
-			v(g) = IntegrateOpacity(energy_bounds[g], energy_bounds[g+1], temp, rho);
-		}
-		if (v.Min() <= 0.0) MFEM_ABORT("negative opacity");
-	}
-	double ComputeOpacity(const double T, const double rho, const double E); 
-	double IntegrateOpacity(const double Elow, const double Ehigh, const double T, const double rho);
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+	const OpacityFunction &GetOpacityFunction() const { return opacity_func; }
 };
 
 // helper class for representing a discrete multigroup opacity 

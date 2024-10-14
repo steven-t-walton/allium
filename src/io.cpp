@@ -499,12 +499,28 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 		double nrho = table["nrho"]; 
 		double nT = table["nT"]; 
 		double Emin = table["Emin"].get_or(0.0);
-		opac = new AnalyticOpacityCoefficient(coef, nrho, nT, grid.Midpoints(), Emin);
+		const int int_order = table["int_order"].get_or(1);
+		sol::optional<sol::table> edge_avail = table["edge"]; 
+		FleckCummingsOpacityFunction func(coef, nrho, nT, Emin);
 
 		out << YAML::Key << "coef" << YAML::Value << coef;
 		out << YAML::Key << "nrho" << YAML::Value << nrho; 
 		out << YAML::Key << "nT" << YAML::Value << nT;
 		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin); 
+		out << YAML::Key << "integration order" << YAML::Value << int_order;
+		if (edge_avail) {
+			sol::table edge_table = edge_avail.value();
+			double edge = edge_table["energy"];
+			double coef = edge_table["coef"];
+			func.SetEdge(edge, coef);
+			out << YAML::Key << "edge" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "energy" << YAML::Value << edge; 
+				out << YAML::Key << "coef" << YAML::Value << coef; 
+			out << YAML::EndMap;
+		}
+		auto *ptr = new MultiGroupFunctionOpacityCoefficient(grid.Bounds(), func);
+		if (int_order > 1) ptr->SetIntegrationOrder(int_order);
+		opac = ptr;
 	} 
 
 	else if (type == "analytic edge") {
@@ -515,13 +531,12 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 		const double Eedge = table["Eedge"];
 		const double delta_s = table["delta_s"];
 		const double delta_w = table["delta_w"];
+		const double nT = table["nT"].get_or(-0.5);
 		const int Nlines = table["Nlines"];
 		const int int_order = table["int_order"].get_or(1);
-		opac = new AnalyticEdgeOpacityCoefficient(
-			c0, c1, c2, 
-			Emin, Eedge, delta_s, 
-			delta_w, Nlines, grid.Bounds(), 
-			int_order);
+		EdgeLineOpacityFunction func(c0, c1, c2, Emin, Eedge, delta_s, delta_w, nT, Nlines);
+		auto *ptr = new MultiGroupFunctionOpacityCoefficient(grid.Bounds(), func);
+		if (int_order > 1) ptr->SetIntegrationOrder(int_order);
 		out << YAML::Key << "c0" << YAML::Value << c0;
 		out << YAML::Key << "c1" << YAML::Value << c1;
 		out << YAML::Key << "c2" << YAML::Value << c2;
@@ -529,8 +544,10 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 		out << YAML::Key << "Eedge" << YAML::Value << FormatScientific(Eedge);
 		out << YAML::Key << "delta_s" << YAML::Value << FormatScientific(delta_s);
 		out << YAML::Key << "delta_w" << YAML::Value << FormatScientific(delta_w);
+		out << YAML::Key << "nT" << YAML::Value << nT;
 		out << YAML::Key << "Nlines" << YAML::Value << Nlines;
-		out << YAML::Key << "int order" << YAML::Value << int_order;
+		out << YAML::Key << "integration order" << YAML::Value << int_order;
+		opac = ptr;
 	}
 	return opac;
 }

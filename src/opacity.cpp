@@ -30,11 +30,10 @@ void PWOpacityCoefficient::Eval(mfem::Vector &v, mfem::ElementTransformation &tr
 	ptr->Eval(v, trans, ip); 
 }
 
-double AnalyticEdgeOpacityCoefficient::ComputeOpacity(
-	const double T, const double rho, const double E)
+double EdgeLineOpacityFunction::operator()(double rho, double T, double E) const
 {
 	const double Ehat = std::max(E, Emin);
-	const double coef = c0 * rho*rho / (std::sqrt(T) * std::pow(Ehat, 3)) * (1.0 - std::exp(-Ehat/T));
+	const double coef = c0 * rho*rho * std::pow(T, nT) / std::pow(Ehat, 3) * (1.0 - std::exp(-Ehat/T));
 	double edge = 1.0 + (Ehat > Eedge ? c1 : 0.0);
 
 	double lines = 0.0;
@@ -47,21 +46,33 @@ double AnalyticEdgeOpacityCoefficient::ComputeOpacity(
 	return coef * (edge + lines);
 }
 
-double AnalyticEdgeOpacityCoefficient::IntegrateOpacity(
-	const double Elow, const double Ehigh, const double T, const double rho)
+void MultiGroupFunctionOpacityCoefficient::Eval(
+	mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) 
 {
-	if (int_order==1) {
-		return ComputeOpacity(T, rho, std::sqrt(Elow*Ehigh));
+	const auto T = temperature->Eval(trans, ip);
+	const auto rho = density->Eval(trans, ip);
+	v.SetSize(vdim);
+	if (!rule) {
+		for (int g=0; g<vdim; g++) {
+			double ip; 
+			if (bounds[g] > 0.0) {
+				ip = std::sqrt(bounds[g]*bounds[g+1]);
+			} else {
+				ip = (bounds[g] + bounds[g+1])/2;
+			}
+			v(g) = opacity_func(rho, T, ip);
+		}
 	}
-	
-	const auto &rule = mfem::IntRules.Get(mfem::Geometry::SEGMENT, int_order);
-	double val = 0.0;
-	const auto dE = Ehigh - Elow;
-	for (int n=0; n<rule.GetNPoints(); n++) {
-		const auto &ip = rule.IntPoint(n);
-		const double E = Elow + dE * ip.x;
-		const auto opac = ComputeOpacity(T, rho, E);
-		val += opac * ip.weight;
+
+	else {
+		for (int g=0; g<vdim; g++) {
+			const auto dE = bounds[g+1] - bounds[g];
+			v(g) = 0.0;
+			for (int n=0; n<rule->GetNPoints(); n++) {
+				const auto &ip = rule->IntPoint(n);
+				const double E = bounds[g] + dE * ip.x;
+				v(g) += ip.weight * opacity_func(rho, T, E); 
+			}
+		}
 	}
-	return val;
 }
