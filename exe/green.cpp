@@ -78,6 +78,38 @@ double ComputeBalance(
 	return std::fabs(global[0] - global[1]) / global[1];
 }
 
+enum OpacityIntegrationType {
+	EXPLICIT = 0, 
+	OUTER = 1, 
+	INNER = 2, 
+};
+
+class GrayOpacityManager
+{
+private:
+	ProjectedCoefficient &abs, &total, &planck;
+	mfem::BilinearForm &Mabs;
+	OpacityIntegrationType type;
+public:
+	GrayOpacityManager(
+		OpacityIntegrationType type, 
+		ProjectedCoefficient &abs, ProjectedCoefficient &total, 
+		ProjectedCoefficient &planck, mfem::BilinearForm &Mabs)
+		: type(type), abs(abs), total(total), planck(planck), Mabs(Mabs)
+	{ }
+	void Update()
+	{
+		abs.Project();
+		// re-assemble mass matrix 
+		Mabs = 0.0; // set all entries to zero 
+		// assemble into existing sparsity pattern 
+		Mabs.Assemble(); 
+		total.Project();
+		if (type == EXPLICIT or type == OUTER)
+			planck.Project();
+	}
+};
+
 int main(int argc, char *argv[]) {
 	mfem::StopWatch wall_timer; 
 	wall_timer.Start(); 
@@ -661,7 +693,12 @@ int main(int argc, char *argv[]) {
 	sol::table solver = lua["smm"];
 	const auto lo_type = io::GetAndValidateOption<std::string>(solver, "type", {"ldg", "p1"}, root);
 	const bool consistent = solver["consistent"].get_or(true);
-	const bool implicit_opacity = solver["implicit_opacity"].get_or(false);
+	const auto opacity_int_type_str = io::GetAndValidateOption<std::string>(solver, "opacity_integration", 
+		{"explicit", "outer", "inner"}, "explicit", root);
+	OpacityIntegrationType opacity_int_type;
+	if (opacity_int_type_str == "explicit") opacity_int_type = EXPLICIT;
+	else if (opacity_int_type_str == "outer") opacity_int_type = OUTER;
+	else if (opacity_int_type_str == "inner") opacity_int_type = INNER;
 	const bool floor_radE_LO = solver["floor_E"].get_or(false);
 	const bool reset_to_ho = solver["reset_to_ho"].get_or(false);
 	const std::string sigmaF_type = io::GetAndValidateOption<std::string>(solver, "sigmaF_weight", 
@@ -674,7 +711,7 @@ int main(int argc, char *argv[]) {
 	out << YAML::Key << "smm" << YAML::Value << YAML::BeginMap;
 		out << YAML::Key << "type" << YAML::Value << lo_type;
 		out << YAML::Key << "consistent" << YAML::Value << consistent;
-		out << YAML::Key << "implicit opacity" << YAML::Value << implicit_opacity;
+		out << YAML::Key << "opacity integration" << YAML::Value << opacity_int_type_str;
 		out << YAML::Key << "sigmaF weight" << YAML::Value << sigmaF_type;
 		out << YAML::Key << "floor radE" << YAML::Value << floor_radE_LO;
 		out << YAML::Key << "reset to ho" << YAML::Value << reset_to_ho;
@@ -683,7 +720,7 @@ int main(int argc, char *argv[]) {
 	// cv/dt + sigma B(T)
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	DenseBlockDiagonalNonlinearForm meb_form(&fes);
-	if (implicit_opacity)
+	if (opacity_int_type == INNER)
 		meb_form.AddDomainIntegrator(
 			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
 	else
@@ -697,7 +734,7 @@ int main(int argc, char *argv[]) {
 
 	// gray emission 
 	DenseBlockDiagonalNonlinearForm gr_emission_form(&fes);
-	if (implicit_opacity)
+	if (opacity_int_type == INNER)
 		gr_emission_form.AddDomainIntegrator(
 			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
 	else
@@ -984,6 +1021,8 @@ int main(int argc, char *argv[]) {
 	mfem::BlockVector smm_source(lo_disc->GetOffsets()), lo_source(lo_disc->GetOffsets());
 	DenseBlockDiagonalOperator dB_dBt_inv(fes);
 
+	GrayOpacityManager gray_opac_manager(opacity_int_type, totalE, *first_moment_opac, totalP, Mtot_gray);
+
 	mfem::StopWatch cycle_timer; // times cost per time step 
 	mfem::StopWatch timer;
 	// log events across time steps 
@@ -1028,20 +1067,10 @@ int main(int argc, char *argv[]) {
 
 			// compute E_HO-weighted opacity 
 			timer.Restart(); 
-			totalE.Project();
-			// re-assemble mass matrix 
-			Mtot_gray = 0.0; // set all entries to zero 
-			// assemble into existing sparsity pattern 
-			Mtot_gray.Assemble(); 
-			TimingLog.Log("sigmaE", timer.RealTime());
-
-			timer.Restart();
-			totalP.Project();
-			auto *total_ptr = dynamic_cast<ProjectedCoefficient*>(&lo_disc->GetTotal());
-			auto *abs_ptr = dynamic_cast<ProjectedCoefficient*>(&lo_disc->GetAbsorption());
-			if (total_ptr) total_ptr->Project();
-			if (abs_ptr) abs_ptr->Project();
-			TimingLog.Log("gray opacity", timer.RealTime());
+			if (opacity_int_type == OUTER)
+				total.Project();
+			gray_opac_manager.Update();
+			TimingLog.Log("opacity", timer.RealTime());
 
 			// compute SMM closure 
 			timer.Restart();
@@ -1052,28 +1081,6 @@ int main(int argc, char *argv[]) {
 			double inner_norm, inner_norm_E0, inner_norm_T0;
 			while (true) {
 				mfem::Vector Tprev(T), Eprev(E);
-
-				timer.Restart();
-				// nonlinearly eliminate temperature 
-				// compute sigma c E term 
-				Mtot_gray.Mult(E, abs_source); 
-				// add cv/dt T0 
-				add(abs_source, 1.0, T0, abs_source); // abs_source + 1.0 * T0 -> abs_source 
-				// nonlinearly solve for T given E 
-				meb_solver.Mult(abs_source, T);
-				TimingLog.Log("meb solve", timer.RealTime());
-				meb_monitor.Register(meb_solver.GetNumIterations(), meb_solver.GetFinalRelNorm());
-
-				if (implicit_opacity) {
-					total.Project();
-					totalR.Project();
-					totalF.Project();
-					totalRinv.Project();
-					totalP.Project();
-					totalE.Project();
-					Mtot_gray = 0.0; // set all entries to zero 
-					Mtot_gray.Assemble(); 					
-				}
 
 				// compute rosseland opacity-dependent 
 				// term in opacity correction 
@@ -1129,6 +1136,24 @@ int main(int argc, char *argv[]) {
 				}
 				TimingLog.Log("LO solve", timer.RealTime());
 
+				timer.Restart();
+				// nonlinearly eliminate temperature 
+				// compute sigma c E term 
+				Mtot_gray.Mult(E, abs_source); 
+				// add cv/dt T0 
+				add(abs_source, 1.0, T0, abs_source); // abs_source + 1.0 * T0 -> abs_source 
+				// nonlinearly solve for T given E 
+				meb_solver.Mult(abs_source, T);
+				TimingLog.Log("meb solve", timer.RealTime());
+				meb_monitor.Register(meb_solver.GetNumIterations(), meb_solver.GetFinalRelNorm());
+
+				if (opacity_int_type == INNER) {
+					timer.Restart();
+					total.Project();
+					gray_opac_manager.Update(); // updates totalE, totalF, totalP (if needed), Mtot_gray
+					TimingLog.Log("opacity", timer.RealTime());
+				}
+
 				// stopping criterion 
 				Tprev -= T;
 				const auto Tnorm = Norm(Tprev);
@@ -1150,7 +1175,7 @@ int main(int argc, char *argv[]) {
 			}
 			lo_monitor.Register(inner, inner_norm);
 			if (root) io::EventLogPersistent.Log("inner solves", inner);
-			if (implicit_opacity)
+			if (opacity_int_type>0)
 				Linv.AssembleLocalMatrices();
 			Tstar -= T;
 			Estar -= E;
@@ -1188,6 +1213,14 @@ int main(int argc, char *argv[]) {
 		// used for comparison to other codes 
 		Tpw.ProjectGridFunction(T); 
 
+		// recompute opacities 
+		if (opacity_int_type == EXPLICIT) {
+			timer.Restart();
+			total.Project();
+			TimingLog.Log("opacity", timer.RealTime());
+			Linv.AssembleLocalMatrices(); 
+		}
+
 		// --- update time step info --- 
 		time += time_step; 
 		cycle++; 
@@ -1210,7 +1243,11 @@ int main(int argc, char *argv[]) {
 		// output every time step 
 		if (tracer_dc) {
 			tracer_dc->SetCycle(cycle); tracer_dc->SetTime(time); tracer_dc->SetTimeStep(time_step); 
-			tracer_dc->Save(); 
+			E *= 1.0/constants::SpeedOfLight;
+			Enu *= 1.0/constants::SpeedOfLight;
+			tracer_dc->Save();
+			E *= constants::SpeedOfLight;
+			Enu *= constants::SpeedOfLight;
 		}
 
 		// write restart to file 
@@ -1236,27 +1273,17 @@ int main(int argc, char *argv[]) {
 			time_step = new_time_step; 
 		}
 
-		// --- update opacity and opacity-dependent terms --- 
-		if (T.Min() < 0) MFEM_ABORT("negative temperature"); 
-		mfem::StopWatch assembly_timer;
-		assembly_timer.Start();
-		// recompute opacities 
-		total.Project();
-		totalP.Project();
+		if (time_step_changed) {
+			// adjust time step for sweep 
+			Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 
-		// recompute sweep data 
-		Linv.AssembleLocalMatrices(); 
-		Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
+			// energy balance time step 
+			Cvdt.SetAConst(1.0/time_step); 
 
-		// energy balance time step 
-		Cvdt.SetAConst(1.0/time_step); 
-
-		// LO system time step 
-		lo_disc->SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
-		lo_disc->SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);
-
-		assembly_timer.Stop(); 
-		TimingLog.Log("assembly time", assembly_timer.RealTime());
+			// LO system time step 
+			lo_disc->SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
+			lo_disc->SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);			
+		}
 
 		fixup_monitor = 0.0;
 
