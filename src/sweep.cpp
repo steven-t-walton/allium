@@ -224,6 +224,19 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	}
 
 	delete[] requests; delete[] statuses; 
+
+	mass_matrices.SetSize(fes.GetNE()*G);
+	for (int i=0; i<mass_matrices.Size(); i++) {
+		mass_matrices[i] = new mfem::DenseMatrix;
+	}
+	grad_matrices.SetSize(fes.GetNE()*dim); 
+	for (int i=0; i<grad_matrices.Size(); i++) {
+		grad_matrices[i] = new mfem::DenseMatrix;
+	}
+	face_matrices.SetSize(4*mesh.GetNumFaces()); 
+	for (auto i=0; i<face_matrices.Size(); i++) {
+		face_matrices[i] = new mfem::DenseMatrix; 
+	}
 	AssembleLocalMatrices(); 
 }
 
@@ -558,6 +571,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 void InverseAdvectionOperator::AssembleLocalMatrices() 
 {
+	mfem::StopWatch timer;
+	timer.Start();
 	const auto dim = mesh.Dimension(); 
 	const auto G = total.GetVDim();
 
@@ -568,9 +583,7 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 		}
 	}
 
-	mass_matrices.SetSize(fes.GetNE()*G);
 	auto mass_mat_view = Kokkos::mdspan(mass_matrices.GetData(), G, fes.GetNE());  
-	grad_matrices.SetSize(fes.GetNE()*dim); 
 	auto grad_mat_view = Kokkos::mdspan(grad_matrices.GetData(), dim, fes.GetNE()); 
 	for (auto e=0; e<fes.GetNE(); e++) {
 		const auto &fe = *fes.GetFE(e); 
@@ -581,12 +594,11 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 		if (IsMassLumped(lump)) mi.SetIntegrationRule(lumped_ir);
 		mi.AssembleElementMatrices(fe, trans, local_mass_mats);
 		for (int g=0; g<G; g++) {
-			mass_mat_view(g,e) = new mfem::DenseMatrix(*local_mass_mats(g,g));
+			*mass_mat_view(g,e) = *local_mass_mats(g,g);
 		}
 
 		mfem::Vector Omega(dim); 
 		for (auto d=0; d<dim; d++) {
-			grad_mat_view(d,e) = new mfem::DenseMatrix; 
 			Omega = 0.0; 
 			Omega(d) = 1.0; 
 			mfem::VectorConstantCoefficient Q(Omega); 
@@ -596,10 +608,6 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 		}
 	}	
 
-	face_matrices.SetSize(4*mesh.GetNumFaces()); 
-	for (auto i=0; i<face_matrices.Size(); i++) {
-		face_matrices[i] = new mfem::DenseMatrix; 
-	}
 	auto face_mat_view = Kokkos::mdspan(face_matrices.GetData(), mesh.GetNumFaces(), 2, 2); 
 	FaceMassMatricesIntegrator fmi; 
 	mfem::DenseMatrix elmat; 
@@ -637,6 +645,7 @@ void InverseAdvectionOperator::AssembleLocalMatrices()
 			delete local_mass_mats(i,j);
 		}
 	}
+	TimingLog.Log("sweep assembly", timer.RealTime());
 }
 
 void InverseAdvectionOperator::SetTimeAbsorption(const double sigma)
