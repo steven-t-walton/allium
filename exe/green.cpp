@@ -575,7 +575,7 @@ int main(int argc, char *argv[]) {
 		};
 		mfem::FunctionCoefficient ic_coef(ic_func);
 		Tpw.ProjectCoefficient(ic_coef);
-		T.ProjectGridFunction(ic_coef);  
+		T.ProjectGridFunction(Tpw);  
 		T0 = T; 
 
 		// radiation initial condition
