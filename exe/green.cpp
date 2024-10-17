@@ -107,7 +107,6 @@ public:
 		total.Project();
 		if (type == EXPLICIT or type == OUTER)
 			planck.Project();
-		EventLog.Register("gray opacity update");
 	}
 };
 
@@ -1163,7 +1162,6 @@ int main(int argc, char *argv[]) {
 				if (opacity_int_type == INNER) {
 					timer.Restart();
 					total.Project();
-					EventLog.Register("opacity update");
 					gray_opac_manager.Update(); // updates totalE, totalF, totalP (if needed), Mtot_gray
 					TimingLog.Log("opacity", timer.RealTime());
 				}
@@ -1195,7 +1193,6 @@ int main(int argc, char *argv[]) {
 			if (opacity_int_type == OUTER) {
 				timer.Restart();
 				total.Project();
-				EventLog.Register("opacity update");
 				TimingLog.Log("opacity", timer.RealTime());
 			}
 			// reassemble sweep if opacity has changed 
@@ -1242,7 +1239,6 @@ int main(int argc, char *argv[]) {
 		if (opacity_int_type == EXPLICIT) {
 			timer.Restart();
 			total.Project();
-			EventLog.Register("opacity update");
 			TimingLog.Log("opacity", timer.RealTime());
 			Linv.AssembleLocalMatrices(); 
 		}
