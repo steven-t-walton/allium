@@ -574,9 +574,9 @@ int main(int argc, char *argv[]) {
 			return ic_lua(pos[0], pos[1], pos[2]); 
 		};
 		mfem::FunctionCoefficient ic_coef(ic_func);
-		T.ProjectCoefficient(ic_coef);  
+		Tpw.ProjectCoefficient(ic_coef);
+		T.ProjectGridFunction(ic_coef);  
 		T0 = T; 
-		Tpw.ProjectGridFunction(T); 
 
 		// radiation initial condition
 		// assume radiation and material in equilibrium 
