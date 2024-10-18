@@ -315,7 +315,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 		MPI_Request request; 
 		std::vector<char> buffer;
 	};
-	std::list<SentMessage> sent_messages;
+	std::deque<SentMessage> sent_messages;
 	// buffer for receiving the packed message 
 	std::vector<char> packed_byte_buffer;
 
@@ -552,9 +552,11 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			// unpack number of doubles 
 			MPI_Unpack(packed_byte_buffer.data(), buffer_size, &loc, &data_count, 1, MPI_INT, MPI_COMM_WORLD);
 			// unpack the list of elements 
+			assert(node_buffer.Size() >= node_count);
 			MPI_Unpack(packed_byte_buffer.data(), buffer_size, &loc, 
 				node_buffer.GetData(), node_count, MPI_INT, MPI_COMM_WORLD);
 			// unpack the data 
+			assert(par_data_buffer.Size() >= data_count);
 			MPI_Unpack(packed_byte_buffer.data(), buffer_size, &loc, 
 				par_data_buffer.GetData(), data_count, MPI_DOUBLE, MPI_COMM_WORLD);
 
@@ -590,13 +592,17 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			}
 		}
 
-		// clear the MPI_Isend's 
-		// if message sent delete the buffer 
+		// clear sent buffers if message has been recvd 
 		int ready;
-		while (sent_messages.size()) {
-			auto &message = sent_messages.back();
-			MPI_Test(&message.request, &ready, MPI_STATUS_IGNORE);
-			sent_messages.pop_back();
+		for (auto it=sent_messages.begin(); it != sent_messages.end(); ) {
+			// if recvd, remove from list 
+			MPI_Test(&it->request, &ready, MPI_STATUS_IGNORE);
+			if (ready)
+				it = sent_messages.erase(it);
+			// else keep it around 
+			// until it is recvd 
+			else
+				it++;
 		}
 	}
 	// clean up data 
@@ -605,6 +611,21 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 	// use barrier to avoid tag clash? 
 	MPI_Barrier(MPI_COMM_WORLD); 
+
+#ifndef NDEBUG 
+	int ready;
+	for (auto it=sent_messages.begin(); it != sent_messages.end(); ) {
+		// if recvd, remove from list 
+		MPI_Test(&it->request, &ready, MPI_STATUS_IGNORE);
+		if (ready)
+			it = sent_messages.erase(it);
+		// else keep it around 
+		// until it is recvd 
+		else
+			it++;
+	}
+	if (sent_messages.size() > 0) MFEM_ABORT("sent messages not cleared...");
+#endif
 
 	timer.Stop();
 	TimingLog.Log("sweep", timer.RealTime());

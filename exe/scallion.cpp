@@ -637,7 +637,9 @@ int main(int argc, char *argv[]) {
 	InverseAdvectionOperator Linv(fes, *quad, total, bc_map, lump); 
 	sol::optional<sol::table> sweep_opts_avail = driver["sweep_opts"]; 
 	if (sweep_opts_avail) {
-		io::SetSweepOptions(sweep_opts_avail.value(), Linv, root);
+		sol::table sweep_opts = sweep_opts_avail.value();
+		io::SetSweepOptions(sweep_opts, Linv, root);
+		out << YAML::Key << "sweep options" << YAML::Value << sweep_opts;
 	}
 	out << YAML::Key << "lumping type" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "mass" << YAML::Value << IsMassLumped(lump); 
