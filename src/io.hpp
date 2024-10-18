@@ -6,6 +6,7 @@
 #include "log.hpp"
 #include "multigroup.hpp"
 #include "opacity.hpp"
+#include "sweep.hpp"
 
 namespace io 
 {
@@ -106,6 +107,7 @@ void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root=true)
 #ifdef MFEM_USE_SUPERLU
 void SetSuperLUOptions(sol::table &table, mfem::SuperLUSolver &slu, bool root=true); 
 #endif
+void SetSweepOptions(sol::table &table, InverseAdvectionOperator &Linv, bool root=true);
 
 bool ParseKINSOLMessage(char *msg, int &it, double &norm);
 void SundialsErrorFunction(int error_code, const char *module, const char *function, char *msg, void *user_data); 

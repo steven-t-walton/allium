@@ -315,7 +315,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	int nsweep = 0; 
 	while (nsweep < Ne*Nomega) {
 		// --- sweep on processor-local domain --- 
-		while (not(local.empty())) {
+		int send_count = 0;
+		while (not(local.empty()) and send_count < max_sends_per_recv) {
 			nsweep++; //increment sweep counter to know when to stop 
 			// get first element of queue 
 			const auto node = local.front();
@@ -493,6 +494,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
 				}
 				send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
+				send_count++;
 			}
 		}
 

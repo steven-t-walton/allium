@@ -667,6 +667,25 @@ void SetSuperLUOptions(sol::table &table, mfem::SuperLUSolver &slu, bool root)
 }
 #endif
 
+void SetSweepOptions(sol::table &table, InverseAdvectionOperator &Linv, bool root)
+{
+	for (const auto &it : table) {
+		auto key = it.first.as<std::string>(); 
+		ValidateOption<std::string>("sweep", key, 
+			{"write_graph", "send_buffer_size", "max_sends_per_recv"}, 
+			root); 
+	}
+	bool write_graph = table["write_graph"].get_or(false); 
+	if (write_graph) 
+		Linv.WriteGraphToDot("graph"); 
+	sol::optional<int> send_buffer_size = table["send_buffer_size"]; 
+	if (send_buffer_size) 
+		Linv.SetSendBufferSize(send_buffer_size.value()); 
+	sol::optional<int> max_sends_per_recv = table["max_sends_per_recv"]; 
+	if (max_sends_per_recv)
+		Linv.SetMaxSendsPerReceive(max_sends_per_recv.value());
+}
+
 bool ParseKINSOLMessage(char *msg, int &it, double &norm)
 {
 	std::regex nni_reg("nni =\\s+([0-9]+)\\s"); 

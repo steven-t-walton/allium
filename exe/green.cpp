@@ -639,13 +639,7 @@ int main(int argc, char *argv[]) {
 	InverseAdvectionOperator Linv(fes, *quad, total, bc_map, lump); 
 	sol::optional<sol::table> sweep_opts_avail = driver["sweep_opts"]; 
 	if (sweep_opts_avail) {
-		sol::table sweep_opts = sweep_opts_avail.value(); 
-		bool write_graph = sweep_opts["write_graph"].get_or(false); 
-		if (write_graph) 
-			Linv.WriteGraphToDot("graph"); 
-		sol::optional<int> send_buffer_size = sweep_opts["send_buffer_size"]; 
-		if (send_buffer_size) 
-			Linv.SetSendBufferSize(send_buffer_size.value()); 
+		io::SetSweepOptions(sweep_opts_avail.value(), Linv, root);
 	}
 	out << YAML::Key << "lumping type" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "mass" << YAML::Value << IsMassLumped(lump); 

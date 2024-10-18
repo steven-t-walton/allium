@@ -68,6 +68,7 @@ private:
 	// at the expense of making downwind neighbors wait longer 
 	// to receive data 
 	int send_buffer_size = 8; 
+	int max_sends_per_recv = 8;
 	// use lumping 
 	int lump = 0; 
 
@@ -93,6 +94,7 @@ public:
 	double GetTimeAbsorption() const { return time_absorption; }
 
 	void SetSendBufferSize(int s);
+	void SetMaxSendsPerReceive(int s) { max_sends_per_recv = s; }
 	// allow disabling or re-enabling fixup 
 	void UseFixup(bool use=true);
 	bool IsFixupOn() const { return apply_fixup and fixup_op; }
