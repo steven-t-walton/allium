@@ -4,6 +4,7 @@
 #include "log.hpp"
 #include "lumping.hpp"
 #include "multigroup.hpp"
+#include <list>
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int use_lumping)
@@ -303,6 +304,21 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// local buffer for recv meta data 
 	mfem::Array<int> node_buffer(send_buffer_size); 
 
+	// store packed messages and an MPI request 
+	// in a linked list 
+	// this allows keeping the buffer around past the 
+	// call to MPI_Isend. This prevents MPI hanging 
+	// when it has buffer issues and requires 
+	// the receiver to post a MPI_Recv before send 
+	// can complete 
+	struct SentMessage {
+		MPI_Request request; 
+		std::vector<char> buffer;
+	};
+	std::list<SentMessage> sent_messages;
+	// buffer for receiving the packed message 
+	std::vector<char> packed_byte_buffer;
+
 	// count messages sents 
 	auto message_count = 0; // incremented at each message, used as message tag 
 
@@ -459,11 +475,11 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			}
 
 			// send data if send buffer full or no more local work to do 
-			if (send_list.Size() >= send_buffer_size or local.empty()) {
+			if (send_list.Size() >= send_buffer_size or (local.empty() and num_face_nbrs>0)) {
 				send_list.Sort(); send_list.Unique(); 
 				mfem::Table send_table(num_face_nbrs, send_list); 
 				for (auto fn=0; fn<num_face_nbrs; fn++) {
-					if (send_table.RowSize(fn) == 0) continue; 
+					if (send_table.RowSize(fn) == 0) continue; 					
 					const auto nbr_rank = mesh.GetFaceNbrRank(fn); 
 					int buffer_size = 0;
 					auto nodes = std::span<const int>(send_table.GetRow(fn), send_table.RowSize(fn)); 
@@ -486,12 +502,27 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 						}
 					}
 
-					MPI_Request request[2]; 
-					MPI_Isend(send_table.GetRow(fn), send_table.RowSize(fn), MPI_INT, nbr_rank, message_count++, 
-						MPI_COMM_WORLD, &request[0]); 
-					MPI_Isend(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, nbr_rank, message_count++, 
-						MPI_COMM_WORLD, &request[1]); 
-					MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
+					// pack nodes and par_data_buffer into a single 
+					// byte array so that only one message is sent per 
+					// face neighbor 
+					// the packed message is prepended by the integer number 
+					// of elements being sent and the integer number of doubles 
+					// being sent 
+					sent_messages.emplace_back();
+					auto &message = sent_messages.back();
+					auto &buffer = message.buffer;
+
+					int loc = 0;
+					const int elems_size = nodes.size();
+					// +2 for meta data describing size of int and double arrays 
+					const int pack_size = sizeof(int)*(elems_size+2) + sizeof(double)*buffer_size;
+					buffer.resize(pack_size);
+					MPI_Pack(&elems_size, 1, MPI_INT, buffer.data(), pack_size, &loc, MPI_COMM_WORLD);
+					MPI_Pack(&buffer_size, 1, MPI_INT, buffer.data(), pack_size, &loc, MPI_COMM_WORLD);
+					MPI_Pack(nodes.data(), nodes.size(), MPI_INT, buffer.data(), pack_size, &loc, MPI_COMM_WORLD);
+					MPI_Pack(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, buffer.data(), 
+						pack_size, &loc, MPI_COMM_WORLD);
+					MPI_Isend(buffer.data(), loc, MPI_PACKED, nbr_rank, message_count++, MPI_COMM_WORLD, &message.request);
 				}
 				send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
 				send_count++;
@@ -500,31 +531,32 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 		while (true) {
 			int avail; 
-			MPI_Status status[2]; 
-			MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &avail, &status[0]);
+			MPI_Status status; 
+			MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &avail, &status);
 			if (avail==0) break; 
 
-			const auto tag = status[0].MPI_TAG; 
-			const auto source = status[0].MPI_SOURCE; 
-			MPI_Probe(source, (tag % 2 == 0) ? tag + 1 : tag - 1, MPI_COMM_WORLD, &status[1]); 
+			const auto tag = status.MPI_TAG; 
+			const auto source = status.MPI_SOURCE; 
 
-			if (tag % 2 == 1) {
-				std::swap(status[0], status[1]); 
-			}
+			// get the size of the packed buffer 
+			int buffer_size, node_count, data_count, loc = 0;
+			MPI_Get_count(&status, MPI_PACKED, &buffer_size);
+			packed_byte_buffer.resize(buffer_size);
 
-			int node_count, data_count; 
-			MPI_Get_count(&status[0], MPI_INT, &node_count); 
-			MPI_Get_count(&status[1], MPI_DOUBLE, &data_count); 
+			// get the packed message 
+			MPI_Recv(packed_byte_buffer.data(), buffer_size, MPI_PACKED, source, 
+				tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-			// make sure data can fit in buffers 
-			assert(node_buffer.Size() >= node_count); 
-			assert(par_data_buffer.Size() >= data_count); 
-			assert(status[0].MPI_SOURCE == status[1].MPI_SOURCE); 
-
-			MPI_Recv(node_buffer.GetData(), node_count, MPI_INT, source, 
-				status[0].MPI_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-			MPI_Recv(par_data_buffer.GetData(), data_count, MPI_DOUBLE, source, 
-				status[1].MPI_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			// unpack number of elements 
+			MPI_Unpack(packed_byte_buffer.data(), buffer_size, &loc, &node_count, 1, MPI_INT, MPI_COMM_WORLD);
+			// unpack number of doubles 
+			MPI_Unpack(packed_byte_buffer.data(), buffer_size, &loc, &data_count, 1, MPI_INT, MPI_COMM_WORLD);
+			// unpack the list of elements 
+			MPI_Unpack(packed_byte_buffer.data(), buffer_size, &loc, 
+				node_buffer.GetData(), node_count, MPI_INT, MPI_COMM_WORLD);
+			// unpack the data 
+			MPI_Unpack(packed_byte_buffer.data(), buffer_size, &loc, 
+				par_data_buffer.GetData(), data_count, MPI_DOUBLE, MPI_COMM_WORLD);
 
 			const auto fn = proc_to_fn.at(source); 
 			int buffer_idx = 0; 
@@ -556,6 +588,15 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					}
 				}				
 			}
+		}
+
+		// clear the MPI_Isend's 
+		// if message sent delete the buffer 
+		int ready;
+		while (sent_messages.size()) {
+			auto &message = sent_messages.back();
+			MPI_Test(&message.request, &ready, MPI_STATUS_IGNORE);
+			sent_messages.pop_back();
 		}
 	}
 	// clean up data 
