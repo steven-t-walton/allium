@@ -1,6 +1,7 @@
 #include "mfem.hpp"
 #include "yaml-cpp/yaml.h"
 #include "sol/sol.hpp"
+#include <deque>
 
 #include "bdr_conditions.hpp"
 #include "comment_stream.hpp"
@@ -1069,6 +1070,7 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<TracerDataCollection> tracer_dc; 
 	std::unique_ptr<RestartWriter> restart_dc;
 	int output_freq, restart_freq;
+	std::deque<double> write_times;
 	if (output_avail) {
 		out << YAML::Key << "output" << YAML::Value << YAML::BeginMap; 
 		sol::table output = output_avail.value(); 
@@ -1109,11 +1111,26 @@ int main(int argc, char *argv[]) {
 				dc->Save(); 
 			}
 
+			sol::optional<sol::table> times_avail = viz["times"];
+			if (times_avail) {
+				sol::table times = times_avail.value();
+				for (int i=1; i<=times.size(); i++) {
+					write_times.push_back(times[i]);
+				}
+			}
+
 			out << YAML::Key << "visualization" << YAML::Value << YAML::BeginMap; 
 				out << YAML::Key << "type" << YAML::Value << type; 
 				out << YAML::Key << "frequency" << YAML::Value << output_freq; 
 				out << YAML::Key << "precision" << YAML::Value << precision; 
 				out << YAML::Key << "restart mode" << YAML::Value << restart_mode;
+			if (write_times.size()) {
+				out << YAML::Key << "write times" << YAML::Value << YAML::BeginSeq; 
+				for (const auto &time : write_times) {
+					out << time;
+				}
+				out << YAML::EndSeq;
+			}
 			out << YAML::EndMap; 
 		} 
 
@@ -1221,7 +1238,10 @@ int main(int argc, char *argv[]) {
 		// --- output to file --- 
 		// write data collection to file 
 		bool done = time >= final_time - 1e-14 or cycle >= max_cycles; 
-		if (dc and (cycle % output_freq == 0 or done)) {
+		double write_time = write_times.front();
+		const bool write = std::fabs(write_time - time) < time_step;
+		if (write) write_times.pop_front();
+		if (dc and (cycle % output_freq == 0 or write or done)) {
 			output_cycle++;
 			dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
 			dc->Save(); 			
