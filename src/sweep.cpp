@@ -247,6 +247,11 @@ InverseAdvectionOperator::~InverseAdvectionOperator()
 	for (auto &ptr : mass_matrices) { delete ptr; }
 	for (auto &ptr : grad_matrices) { delete ptr; }
 	for (auto &ptr : face_matrices) { delete ptr; }
+	if (time_mass_matrices.Size()) {
+		for (auto &ptr : time_mass_matrices) {
+			delete ptr;
+		}
+	}
 }
 
 void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) const 
@@ -608,6 +613,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// clean up data 
 	igraph_vector_int_destroy(&nbrs); 
 	igraph_vector_int_destroy(&nbr_nbrs); 
+	igraph_vector_int_destroy(&edges); 
 
 	// use barrier to avoid tag clash? 
 	MPI_Barrier(MPI_COMM_WORLD); 
