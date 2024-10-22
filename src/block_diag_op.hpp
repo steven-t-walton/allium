@@ -14,6 +14,7 @@ public:
 	DenseBlockDiagonalOperator(const mfem::Table &row_table, const mfem::Table &col_table);
 	DenseBlockDiagonalOperator(const mfem::FiniteElementSpace &fes);
 	DenseBlockDiagonalOperator(const mfem::FiniteElementSpace &tr_fes, const mfem::FiniteElementSpace &te_fes);
+	~DenseBlockDiagonalOperator(); 
 	int NumBlocks() const { return data.Size(); }
 	const mfem::Table &GetRowDofs() const { return *row_table; }
 	const mfem::Table &GetColDofs() const { return *col_table; }
@@ -145,6 +146,7 @@ public:
 	void SetUnderRelaxParameter(double v) { under_relax_param = v; }
 private:
 	double Norm(const mfem::Vector &x) const;
+	void Floor(mfem::Vector &x) const; 
 };
 
 // calls a nonlinear solver on each element 

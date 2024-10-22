@@ -48,6 +48,13 @@ DenseBlockDiagonalOperator::DenseBlockDiagonalOperator(
 	width = col_table->Size_of_connections();
 }
 
+DenseBlockDiagonalOperator::~DenseBlockDiagonalOperator()
+{
+	for (int block=0; block<data.Size(); block++) {
+		delete data[block];
+	}
+}
+
 const mfem::DenseMatrix &DenseBlockDiagonalOperator::GetBlock(int block) const 
 {
 	assert(block >= 0 and block < data.Size());
@@ -487,6 +494,16 @@ double EnergyBalanceNewtonSolver::Norm(const mfem::Vector &x) const
 	return x.Norml1();
 }
 
+void EnergyBalanceNewtonSolver::Floor(mfem::Vector &x) const 
+{
+	for (auto &val : x) {
+		if (val <= minimum_solution) {
+			EventLog.Register("floored temperature");
+			val = minimum_solution;
+		}
+	}
+}
+
 void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) const
 {
 	MFEM_ASSERT(oper != NULL, "the Operator is not set (use SetOperator).");
@@ -508,6 +525,7 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 		final_iter = 1;
 		final_norm = rel_tol;
 		initial_norm = 1.0;
+		Floor(x);
 		return;
 	}
 
@@ -552,6 +570,7 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 		}
 	}
 
+	Floor(x);
 	converged = exit_code > 0; 
 	final_iter = it; 
 	final_norm = norm;

@@ -422,6 +422,7 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 		elvec1.Add(-val, shape1); 
 		elvec2.Add(val, shape2); 
 	}
+	delete iptrans;
 }
 
 void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteElement &el, 
@@ -560,6 +561,7 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 			elvec2_d.Add(upw_tensor_d * w, shape2); 
 		}
 	}
+	delete iptrans;
 }
 
 void MixedVectorScalarMassIntegrator::AssembleElementMatrix2(
