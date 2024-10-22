@@ -77,7 +77,7 @@ void PrintSolTable(YAML::Emitter &out, sol::table &table)
 }
 
 LogMap<double,SUM,MAX> TimingLogPersistent;
-LogMap<int,SUM> EventLogPersistent;
+LogMap<unsigned long int,SUM> EventLogPersistent;
 void ProcessGlobalLogs(YAML::Emitter &out, int verbose)
 {
 	EventLog.Synchronize();

@@ -63,7 +63,7 @@ void PrintArray(YAML::Emitter &out, const mfem::Array<T> &x)
 
 // synchronize parallel logs, print to YAML, clear 
 extern LogMap<double,SUM,MAX> TimingLogPersistent;
-extern LogMap<int,SUM> EventLogPersistent;
+extern LogMap<unsigned long int,SUM> EventLogPersistent;
 void ProcessGlobalLogs(YAML::Emitter &out, int verbose=3);
 
 // create a data collection based on string description 

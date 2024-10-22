@@ -31,6 +31,14 @@ void Log(T &map, const std::string key, const U &val)
 	}
 }
 
+// static assert to ensure T is a supported integer type  
+template<typename T> 
+constexpr bool IsIntegerType = std::disjunction_v<
+	std::is_same<T,int>,
+	std::is_same<T,unsigned int>,
+	std::is_same<T,unsigned long int>
+>;
+
 template<typename T, LogOperation Op, LogOperation ParOp=Op>
 class LogMap : public std::map<std::string,T> 
 {
@@ -45,6 +53,10 @@ public:
 			T_mpi = MPI_DOUBLE; 
 		} else if constexpr (std::is_same<T,int>::value) {
 			T_mpi = MPI_INT; 
+		} else if constexpr (std::is_same<T,unsigned int>::value) {
+			T_mpi = MPI_UNSIGNED;
+		} else if constexpr (std::is_same<T,unsigned long int>::value) {
+			T_mpi = MPI_UNSIGNED_LONG;
 		}
 	}
 
@@ -53,7 +65,7 @@ public:
 		::Log<Op>(*this, key, val);
 	}
 	void Register(const std::string key) {
-		static_assert(std::is_same<T,int>::value, "limiting register to int only");
+		static_assert(IsIntegerType<T>, "Register only for integer types");
 		::Log<SUM>(*this, key, 1);
 	}
 
@@ -126,4 +138,4 @@ public:
 };
 
 extern LogMap<double,SUM,MAX> TimingLog; 
-extern LogMap<int,SUM> EventLog; 
+extern LogMap<unsigned long int,SUM> EventLog; 
