@@ -1239,7 +1239,7 @@ int main(int argc, char *argv[]) {
 		// write data collection to file 
 		bool done = time >= final_time - 1e-14 or cycle >= max_cycles; 
 		double write_time = write_times.front();
-		const bool write = std::fabs(write_time - time) < time_step;
+		const bool write = std::fabs(write_time - time) < time_step / 2;
 		if (write) write_times.pop_front();
 		if (dc and (cycle % output_freq == 0 or write or done)) {
 			output_cycle++;
