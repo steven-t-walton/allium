@@ -1,4 +1,5 @@
 LIST(APPEND hdrs 
+	${CMAKE_CURRENT_SOURCE_DIR}/utils.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/bdr_conditions.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/tvector.hpp	
 	${CMAKE_CURRENT_SOURCE_DIR}/angular_quadrature.hpp
@@ -34,6 +35,7 @@ LIST(APPEND hdrs
 )
 
 LIST(APPEND srcs 
+	${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/tvector.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/angular_quadrature.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.cpp

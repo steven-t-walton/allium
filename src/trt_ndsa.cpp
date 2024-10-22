@@ -1,6 +1,7 @@
 #include "trt_ndsa.hpp"
 #include "fixed_point.hpp"
 #include "log.hpp"
+#include "utils.hpp"
 
 NonlinearDSATRTOperator::NonlinearDSATRTOperator(
 	const mfem::Array<int> &offsets, // [psi, T]
@@ -54,6 +55,8 @@ void NonlinearDSATRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 
 	D.Mult(psi, moments_nu);
 	G.Mult(moments_nu, moments_gray);
+	const auto floor_count = utils::Floor(moments_gray, 1e-10);
+	if (floor_count > 0) EventLog.Log("floored E weight", floor_count);
 
 	for (auto *coef : opacities) {
 		coef->Project();
@@ -76,10 +79,13 @@ void NonlinearDSATRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 
 	LowOrderOperator op(lo_offsets, *K, Bgr, Bt, Mtot, meb_solver, linear_solver);
 	FixedPointSolverWrapper wrap(lo_solver);
-	ComponentReductionOperator reduce(lo_offsets, 0);
-	ReducedSolver rsolver(wrap, reduce);
-	rsolver.SetOperator(op);
-	rsolver.Mult(block_lo_source, block_lo_soln);
+	wrap.SetOperator(op);
+	wrap.Mult(block_lo_source, block_lo_soln);
+
+	// ComponentReductionOperator reduce(lo_offsets, 0);
+	// ReducedSolver rsolver(wrap, reduce);
+	// rsolver.SetOperator(op);
+	// rsolver.Mult(block_lo_source, block_lo_soln);
 
 	T = block_lo_soln.GetBlock(0);
 	phi = block_lo_soln.GetBlock(1);
