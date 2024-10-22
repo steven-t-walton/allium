@@ -395,7 +395,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					const auto nbr = IGRAPH_FROM(&graph, eid); 
 					const auto nbr_e = nbr / Nomega; 
 					const auto nbr_a = nbr % Nomega; 
-					const auto fid = edge_to_face_id[eid]; 
+					const auto fid = edge_to_face_id[(int)eid]; 
 					for (auto d=0; d<dim; d++) { nor(d) = normals(fid * dim + d); }
 					const auto info = mesh.GetFaceInformation(fid); 
 					bool keep_order = e == info.element[0].index; 
