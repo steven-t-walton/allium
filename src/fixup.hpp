@@ -12,6 +12,13 @@ public:
 	virtual bool Apply(const mfem::DenseMatrix &A, const mfem::Vector &rhs, mfem::Vector &solution) const =0;
 };
 
+class ZeroFixupOperator : public NegativeFluxFixupOperator
+{
+public:
+	ZeroFixupOperator(double min) : NegativeFluxFixupOperator(min) { }
+	bool Apply(const mfem::DenseMatrix &A, const mfem::Vector &rhs, mfem::Vector &solution) const override;	
+};
+
 class ZeroAndScaleFixupOperator : public NegativeFluxFixupOperator
 {
 private:

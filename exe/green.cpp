@@ -651,38 +651,12 @@ int main(int argc, char *argv[]) {
 	out << YAML::EndMap; 
 	if (sweep_opts_avail) out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value(); 
 
-	bool use_fixup = false; 
-	std::unique_ptr<NegativeFluxFixupOperator> nff_op = nullptr; 
-	std::unique_ptr<mfem::SLBQPOptimizer> nff_optimizer = nullptr; 
+	std::unique_ptr<io::NegativeFluxFixup> nff;
 	sol::optional<sol::table> fixup_avail = driver["fixup"]; 
-	mfem::ParGridFunction fixup_monitor(&fes0_mg);
-	fixup_monitor = 0.0;
 	if (fixup_avail) {
 		sol::table fixup = fixup_avail.value(); 
-		use_fixup = true; 
-		std::string type = fixup["type"]; 
-		io::ValidateOption<std::string>("fixup type", type, 
-			{"zero and scale", "local optimization", "ryosuke"}, root); 
-		double min = fixup["psi_min"].get_or(0.0); 
-		if (type == "zero and scale") {
-			nff_op = std::make_unique<ZeroAndScaleFixupOperator>(min); 
-		} else if (type == "local optimization") {
-			nff_optimizer = std::make_unique<mfem::SLBQPOptimizer>(); 
-			double abstol = fixup["abstol"].get_or(1e-18); 
-			double reltol = fixup["reltol"].get_or(1e-12); 
-			int max_iter = fixup["max_iter"].get_or(20); 
-			int print_level = fixup["print_level"].get_or(-1); 
-			nff_optimizer->SetAbsTol(abstol); 
-			nff_optimizer->SetRelTol(reltol); 
-			nff_optimizer->SetMaxIter(max_iter); 
-			nff_optimizer->SetPrintLevel(print_level); 
-			nff_optimizer->iterative_mode = fixup["iterative_mode"].get_or(true);
-			nff_op = std::make_unique<LocalOptimizationFixupOperator>(*nff_optimizer, min); 
-		} else if (type == "ryosuke") {
-			nff_op = std::make_unique<RyosukeFixupOperator>(min);
-		}
-		Linv.SetFixupOperator(*nff_op); 
-		Linv.SetFixupMonitorData(fixup_monitor);
+		nff.reset(io::CreateNegativeFluxFixup(fixup, root));
+		Linv.SetFixupOperator(*nff); 
 		out << YAML::Key << "negative flux fixup" << YAML::Value << fixup; 
 	}
 	Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight); 
@@ -925,7 +899,6 @@ int main(int argc, char *argv[]) {
 			dc->RegisterField("cv", &cvgf); 
 			dc->RegisterField("density", &density_gf); 
 			dc->RegisterField("partition", &partition); 
-			dc->RegisterField("fixup", &fixup_monitor);
 			// paraview has a "restart mode" 
 			// that allows continuing the same output after a restart 
 			if (restart_mode) {
@@ -1322,8 +1295,6 @@ int main(int argc, char *argv[]) {
 			lo_disc->SetScalarTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_s);
 			lo_disc->SetVectorTimeAbsorption(1.0/constants::SpeedOfLight/time_step, *Mtime_v);			
 		}
-
-		fixup_monitor = 0.0;
 
 		if (reset_to_ho) {
 			F = Fho;

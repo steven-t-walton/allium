@@ -7,6 +7,7 @@
 #include "multigroup.hpp"
 #include "opacity.hpp"
 #include "sweep.hpp"
+#include "fixup.hpp"
 
 namespace io 
 {
@@ -101,6 +102,20 @@ void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, i
 MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, bool root=true);
 OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid, 
 	YAML::Emitter &out, bool root=true);
+
+class NegativeFluxFixup {
+private:
+	std::unique_ptr<const mfem::SLBQPOptimizer> optimizer;
+	std::unique_ptr<const NegativeFluxFixupOperator> op;
+public:
+	NegativeFluxFixup(const NegativeFluxFixupOperator *_op, const mfem::SLBQPOptimizer *_optimizer=nullptr)
+	{
+		op.reset(_op);
+		if (_optimizer) optimizer.reset(_optimizer);
+	}
+	operator const NegativeFluxFixupOperator&() const { return *op; }
+};
+NegativeFluxFixup *CreateNegativeFluxFixup(sol::table &table, bool root);
 
 // set AMG options like max levels, num sweeps, etc via a lua table 
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root=true); 

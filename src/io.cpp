@@ -552,6 +552,37 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 	return opac;
 }
 
+NegativeFluxFixup *CreateNegativeFluxFixup(sol::table &table, bool root)
+{
+	NegativeFluxFixupOperator *op; 
+	mfem::SLBQPOptimizer *optimizer = nullptr;
+	std::string type = table["type"]; 
+	io::ValidateOption<std::string>("fixup type", type, 
+		{"zero", "zero and scale", "local optimization", "ryosuke"}, root); 
+	double min = table["psi_min"].get_or(0.0); 
+	if (type == "zero") {
+		op = new ZeroFixupOperator(min);
+	} else if (type == "zero and scale") {
+		op = new ZeroAndScaleFixupOperator(min);
+	} else if (type == "local optimization") {
+		optimizer = new mfem::SLBQPOptimizer();
+		double abstol = table["abstol"].get_or(1e-18); 
+		double reltol = table["reltol"].get_or(1e-12); 
+		int max_iter = table["max_iter"].get_or(20); 
+		int print_level = table["print_level"].get_or(-1); 
+		optimizer->SetAbsTol(abstol); 
+		optimizer->SetRelTol(reltol); 
+		optimizer->SetMaxIter(max_iter); 
+		optimizer->SetPrintLevel(print_level); 
+		optimizer->iterative_mode = table["iterative_mode"].get_or(true);
+		op = new LocalOptimizationFixupOperator(*optimizer, min);
+	} else if (type == "ryosuke") {
+		double min = table["psi_min"].get_or(0.0);
+		op = new RyosukeFixupOperator(min);
+	}
+	return new NegativeFluxFixup(op, optimizer);
+}
+
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root) 
 {
 	for (const auto &it : table) {

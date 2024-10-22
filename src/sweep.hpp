@@ -73,7 +73,7 @@ private:
 	int lump = 0; 
 
 	bool apply_fixup = false; 
-	NegativeFluxFixupOperator *fixup_op = nullptr; 
+	const NegativeFluxFixupOperator *fixup_op = nullptr; 
 	mfem::Vector *fixup_monitor = nullptr;
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
@@ -98,7 +98,7 @@ public:
 	// allow disabling or re-enabling fixup 
 	void UseFixup(bool use=true);
 	bool IsFixupOn() const { return apply_fixup and fixup_op; }
-	void SetFixupOperator(NegativeFluxFixupOperator &op) {
+	void SetFixupOperator(const NegativeFluxFixupOperator &op) {
 		fixup_op = &op; 
 		apply_fixup = true; 
 	}

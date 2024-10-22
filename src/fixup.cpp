@@ -1,6 +1,19 @@
 #include "fixup.hpp"
 #include "log.hpp"
 
+bool ZeroFixupOperator::Apply(const mfem::DenseMatrix &A, const mfem::Vector &rhs, mfem::Vector &solution) const
+{
+	bool applied = false;
+	for (auto &x : solution) {
+		if (x <= minimum_solution) {
+			x = minimum_solution; 
+			applied = true;
+		}
+	}
+	if (applied) EventLog.Register("fixup applied");
+	return applied;
+}
+
 bool ZeroAndScaleFixupOperator::Apply(const mfem::DenseMatrix &A, 
 	const mfem::Vector &rhs, mfem::Vector &solution) const 
 {
