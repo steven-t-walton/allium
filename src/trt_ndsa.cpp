@@ -79,13 +79,10 @@ void NonlinearDSATRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 
 	LowOrderOperator op(lo_offsets, *K, Bgr, Bt, Mtot, meb_solver, linear_solver);
 	FixedPointSolverWrapper wrap(lo_solver);
-	wrap.SetOperator(op);
-	wrap.Mult(block_lo_source, block_lo_soln);
-
-	// ComponentReductionOperator reduce(lo_offsets, 0);
-	// ReducedSolver rsolver(wrap, reduce);
-	// rsolver.SetOperator(op);
-	// rsolver.Mult(block_lo_source, block_lo_soln);
+	ComponentReductionOperator reduce(lo_offsets, 0);
+	ReducedSolver rsolver(wrap, reduce);
+	rsolver.SetOperator(op);
+	rsolver.Mult(block_lo_source, block_lo_soln);
 
 	T = block_lo_soln.GetBlock(0);
 	phi = block_lo_soln.GetBlock(1);
@@ -119,10 +116,6 @@ LowOrderOperator::Mult(const mfem::Vector &source, mfem::Vector &x) const
 	mfem::Vector T(x, offsets[0], offsets[1] - offsets[0]);
 	mfem::Vector phi(x, offsets[1], offsets[2] - offsets[1]);
 
-	Mtot.Mult(phi, tmp_phi);
-	add(tmp_phi, 1.0, source_T, tmp_T);
-	meb_solver.Mult(tmp_T, T);
-
 	B.Mult(T, emission);
 	Bt.Mult(T, meb_eval);
 	add(source_T, -1.0, meb_eval, tmp_T);
@@ -143,4 +136,8 @@ LowOrderOperator::Mult(const mfem::Vector &source, mfem::Vector &x) const
 
 	lo_solver.SetOperator(schur);
 	lo_solver.Mult(tmp_phi, phi);
+
+	Mtot.Mult(phi, tmp_phi);
+	add(tmp_phi, 1.0, source_T, tmp_T);
+	meb_solver.Mult(tmp_T, T);
 }
