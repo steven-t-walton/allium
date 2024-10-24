@@ -1010,12 +1010,12 @@ int main(int argc, char *argv[]) {
 
 		const auto lo_type = io::GetAndValidateOption<std::string>(solver, "lo_type", {"ldg", "mip"}, "mip", root);
 		if (lo_type == "mip") {
-			auto *disc = new InteriorPenaltyDiscretization(fes, totalRinv, totalE, bc_map, lump);
+			auto *disc = new InteriorPenaltyDiscretization(fes, totalR, totalE, bc_map, lump);
 			disc->SetPenaltyLowerBound(alpha/2);
 			disc->SetKappa(pow(fe_order+1,2));
 			Kform.reset(disc);
 		} else if (lo_type == "ldg") {
-			auto *disc = new LDGDiscretization(fes, totalRinv, totalE, bc_map, lump);
+			auto *disc = new LDGDiscretization(fes, totalR, totalE, bc_map, lump);
 			Kform.reset(disc);
 		}
 		Kform->SetAlpha(alpha);
