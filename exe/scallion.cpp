@@ -61,6 +61,28 @@ public:
 	}
 };
 
+class DiffusionAndEnergyBalanceMonitor : public mfem::IterativeSolverMonitor
+{
+private:
+	ScallionInnerSolverMonitor &diffusion, &meb;
+public:
+	DiffusionAndEnergyBalanceMonitor(
+		ScallionInnerSolverMonitor &diffusion, ScallionInnerSolverMonitor &meb)	
+		: diffusion(diffusion), meb(meb)
+	{ }
+	void MonitorResidual(int it, double norm, const mfem::Vector &r, bool final) 
+	{
+		diffusion.MonitorResidual(it, norm, r, final);
+		meb.MonitorResidual(it, norm, r, final);
+	}
+	friend YAML::Emitter &operator<<(YAML::Emitter &out, 
+		const DiffusionAndEnergyBalanceMonitor &monitor)
+	{
+		out << monitor.diffusion << monitor.meb;
+		return out;
+	}
+};
+
 class InnerIterativeSolverMonitor : public ScallionInnerSolverMonitor
 {
 private:
@@ -742,6 +764,7 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<PARSolver> lmfg_solver;
 	std::unique_ptr<InverseMomentDiscretization> dsa_inv;
 	std::unique_ptr<ScallionInnerSolverMonitor> inner_monitor, dsa_monitor, meb_monitor; 
+	std::unique_ptr<DiffusionAndEnergyBalanceMonitor> dual_monitor;
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
 	std::unique_ptr<mfem::Operator> oper, stepper;
 	ComponentReductionOperator reducer(offsets, 1); // only compute residual on temperature 
@@ -921,7 +944,6 @@ int main(int argc, char *argv[]) {
 				amg->SetPrintLevel(0);
 				it_solver->SetPreconditioner(*amg);		
 				dsa_monitor = std::make_unique<InnerIterativeSolverMonitor>(*it_solver); 
-				nonlinear_solver->SetMonitor(*dsa_monitor);
 			}
 			// LMFG restricts to gray, solves diffusion, prolongs back to multigroup 
 			// rosseland spectrum is used for both restriction and prolongation
@@ -947,13 +969,17 @@ int main(int argc, char *argv[]) {
 		io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver);
 		local_meb_solver->SetPreconditioner(*local_mat_inv);
 		meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver);
-		meb_solver->SetOperator(meb_form);
+		meb_solver->SetOperator(meb_form_totalP);
+		meb_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver);
 		out << YAML::Key << "energy balance solver" << YAML::Value << meb_solver_table;
 
-		auto *op = new InexactNewtonTRTOperator(offsets, Linv, D, emission_form, meb_form, 
+		dual_monitor = std::make_unique<DiffusionAndEnergyBalanceMonitor>(*dsa_monitor, *meb_monitor);
+		nonlinear_solver->SetMonitor(*dual_monitor);
+
+		auto *op = new InexactNewtonTRTOperator(offsets, Linv, D, emission_form, meb_form_totalP, 
 			Mtot_collapse, *meb_solver, *linearized_meb_solver);
 		if (dsa_inv) op->SetDSAPreconditioner(*dsa_inv);
-		op->SetGrayOpacities(totalR);
+		op->SetGrayOpacities(totalR, totalP);
 		oper.reset(op);
 		fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
 		auto *rsolver = new ReducedSolver(*fp_wrap, reducer);
@@ -976,6 +1002,7 @@ int main(int argc, char *argv[]) {
 		local_meb_solver->SetPreconditioner(*local_mat_inv);
 		meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver);
 		meb_solver->SetOperator(meb_form_totalP);
+		meb_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver);
 
 		out << YAML::Key << "energy balance solver" << YAML::Value << meb_solver_table;
 
@@ -1004,9 +1031,11 @@ int main(int argc, char *argv[]) {
 			amg->SetPrintLevel(0);
 			it_solver->SetPreconditioner(*amg);		
 			dsa_monitor = std::make_unique<InnerIterativeSolverMonitor>(*it_solver); 
-			lo_solver->SetMonitor(*dsa_monitor);
 		}
 		out << YAML::Key << "linear solver" << YAML::Value << linear_solver_table;
+
+		dual_monitor = std::make_unique<DiffusionAndEnergyBalanceMonitor>(*dsa_monitor, *meb_monitor);
+		lo_solver->SetMonitor(*dual_monitor);
 
 		const auto lo_type = io::GetAndValidateOption<std::string>(solver, "lo_type", {"ldg", "mip"}, "mip", root);
 		if (lo_type == "mip") {
@@ -1328,6 +1357,9 @@ int main(int argc, char *argv[]) {
 			if (dsa_monitor) {
 				log.Log("max DSA iterations", dsa_monitor->iters.Max());
 				out << YAML::Key << "dsa solver" << YAML::Value << *dsa_monitor;
+			}
+			if (meb_monitor) {
+				out << YAML::Key << "energy balance solver" << YAML::Value << *meb_monitor;
 			}
 			io::ProcessGlobalLogs(out, log_verbosity);
 			out << YAML::Key << "energy balance" << YAML::Value << io::FormatScientific(balance);
