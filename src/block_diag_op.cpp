@@ -509,6 +509,9 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 	MFEM_ASSERT(oper != NULL, "the Operator is not set (use SetOperator).");
 	MFEM_ASSERT(prec != NULL, "the Solver is not set (use SetSolver).");
 
+	mfem::StopWatch timer;
+	timer.Start();
+
 	if (!iterative_mode) {
 		x = 0.0;
 	}
@@ -526,6 +529,7 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 		final_norm = rel_tol;
 		initial_norm = 1.0;
 		Floor(x);
+		TimingLog.Log("energy balance solve", timer.RealTime());
 		return;
 	}
 
@@ -574,6 +578,7 @@ void EnergyBalanceNewtonSolver::Mult(const mfem::Vector &b, mfem::Vector &x) con
 	converged = exit_code > 0; 
 	final_iter = it; 
 	final_norm = norm;
+	TimingLog.Log("energy balance solve", timer.RealTime());
 }
 
 void DenseBlockDiagonalNonlinearSolver::SetOperator(const mfem::Operator &op) 
