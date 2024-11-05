@@ -32,6 +32,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/restart.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/coefficient.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/trt_ndsa.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/mem_pool.hpp
 )
 
 LIST(APPEND srcs 
