@@ -34,6 +34,7 @@ git clone https://github.com/ThePhD/sol2.git
 git clone https://github.com/google/googletest.git 
 git clone https://github.com/LLNL/sundials.git 
 git clone https://github.com/Nek5000/gslib
+git clone https://github.com/LLNL/Umpire.git
 
 # --- build hypre --- 
 cd ${TPL}/hypre/src/cmbuild 
@@ -155,6 +156,14 @@ cmake .. \
  -DCMAKE_BUILD_TYPE=Release 
 make install 
 
+# --- umpire --- 
+cd ${TPL}/Umpire
+git submodule init && git submodule update 
+mkdir build install 
+cd build 
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../install 
+make install 
+
 # --- finally build allium --- 
 cd ${ROOT}
 mkdir build 
@@ -166,6 +175,7 @@ cmake .. \
  -Dyaml-cpp_DIR=${TPL}/yaml-cpp/install/lib64/cmake/yaml-cpp \
  -Dsol2_DIR=${TPL}/sol2/install/share/cmake/sol2 \
  -DGTest_ROOT=${TPL}/googletest/install/lib64/cmake/GTest \
+ -Dumpire_DIR=${TPL}/Umpire/install/lib/cmake/umpire
  -DENABLE_UNIT_TESTS=TRUE \
  -DENABLE_CHIVE_TESTS=TRUE \
  -DCMAKE_BUILD_TYPE=Release 
