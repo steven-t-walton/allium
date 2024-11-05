@@ -12,7 +12,7 @@ class MultiGroupEnergyGrid; // forward declare to prevent compile dependency
 class MultiGroupCoefficient;
 class InverseAdvectionOperator : public mfem::Operator 
 {
-private:
+protected:
 	mfem::ParMesh &mesh; 
 	mfem::ParFiniteElementSpace &fes; 
 	const AngularQuadrature &quad; 
@@ -80,7 +80,7 @@ public:
 		MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int lump=0); 
 	~InverseAdvectionOperator(); 
 
-	void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
+	virtual void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
 
 	// must be called before Mult 
 	// pre-assembles components of local sweep matrix 
@@ -104,6 +104,7 @@ public:
 	}
 	void SetFixupMonitorData(mfem::Vector &x) { fixup_monitor = &x; }
 	void WriteGraphToDot(std::string prefix) const; 
+	void WriteGlobalGraphToDot(std::string prefix) const;
 
 	// lumping type accessors 
 	int GetLumpingType() const { return lump; }
@@ -111,12 +112,27 @@ public:
 	friend class AdvectionOperator; 
 };
 
+class ParallelBlockJacobiSweepOperator : public InverseAdvectionOperator
+{
+private:
+
+public:
+	ParallelBlockJacobiSweepOperator(mfem::ParFiniteElementSpace &fes, const AngularQuadrature &quad, 
+		MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int lump)
+		: InverseAdvectionOperator(fes, quad, total, bc_map, lump)
+	{
+		psi_fnbr = 0.0;
+	}
+	void Mult(const mfem::Vector &source, mfem::Vector &psi) const;
+	void Exchange(const mfem::Vector &psi); 
+};
+
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 
 	const mfem::Array<double> &energy_grid, PhaseSpaceCoefficient &source_coef, 
 	PhaseSpaceCoefficient &inflow_coef, TransportVectorView source_view); 
 void FormTransportSource(
 	mfem::FiniteElementSpace &fes, const AngularQuadrature &quad,const MultiGroupEnergyGrid &energy_grid, 
-	PhaseSpaceCoefficient &inflow_coef, PhaseSpaceCoefficient &source_coef, 
+	PhaseSpaceCoefficient &source_coef, PhaseSpaceCoefficient &inflow_coef, 
 	mfem::Vector &source);
 
 // assemble face mass matrices using the FaceElementTransformations object 

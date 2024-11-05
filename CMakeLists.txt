@@ -91,6 +91,8 @@ message(STATUS "found sol2 v${sol2_VERSION}")
 # required for superlu 
 find_package(OpenMP REQUIRED)
 
+find_package(umpire REQUIRED)
+
 # set location of quadrature files 
 set(LS_QUADRATURE_DIR "${CMAKE_SOURCE_DIR}/data/lsquad")
 message(STATUS "angular quadrature dir: ${LS_QUADRATURE_DIR}")
@@ -127,7 +129,7 @@ add_subdirectory(src)
 # create a library 
 # includes all third party libraries 
 add_library(allium ${SOURCES} ${HEADERS})
-target_link_libraries(allium PUBLIC ${MFEM_LIBRARIES} igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX)
+target_link_libraries(allium PUBLIC ${MFEM_LIBRARIES} igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX umpire)
 target_include_directories(allium PUBLIC ${MFEM_INCLUDE_DIRS} ${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
 
 # add executables in exe directory 
@@ -137,6 +139,7 @@ LIST(APPEND EXE
 	exe/green.cpp
 	exe/write_opac.cpp
 	exe/error.cpp
+	exe/pbj.cpp
 )
 
 foreach(exe ${EXE})
