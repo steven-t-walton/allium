@@ -320,7 +320,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	auto pool = DynamicPoolAllocator::Get();
 	struct SentMessage {
 		MPI_Request request; 
-		char *buffer_ptr;
+		UmpireUniquePtr<char> buffer;
 	};
 	std::deque<SentMessage> sent_messages;
 
@@ -520,15 +520,14 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 					const int elems_size = nodes.size();
 					// +2 for meta data describing size of int and double arrays 
 					const int pack_size = sizeof(int)*(elems_size+2) + sizeof(double)*buffer_size;
-					auto *buffer_ptr = static_cast<char*>(pool.allocate(pack_size));
+					message.buffer = CreateUmpireUniquePtr<char>(pack_size, pool);
+					auto *buffer_ptr = message.buffer.get();
 					MPI_Pack(&elems_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
 					MPI_Pack(&buffer_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
 					MPI_Pack(nodes.data(), nodes.size(), MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
 					MPI_Pack(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, buffer_ptr, 
 						pack_size, &loc, MPI_COMM_WORLD);
 					MPI_Isend(buffer_ptr, loc, MPI_PACKED, nbr_rank, message_count++, MPI_COMM_WORLD, &message.request);
-
-					message.buffer_ptr = buffer_ptr;
 				}
 				send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
 				send_count++;
@@ -547,25 +546,24 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			// get the size of the packed buffer 
 			int buffer_size, node_count, data_count, loc = 0;
 			MPI_Get_count(&status, MPI_PACKED, &buffer_size);
-			auto *recv_buffer = static_cast<char*>(pool.allocate(buffer_size));
+			auto recv_buffer = CreateUmpireUniquePtr<char>(buffer_size, pool);
 
 			// get the packed message 
-			MPI_Recv(recv_buffer, buffer_size, MPI_PACKED, source, 
+			MPI_Recv(recv_buffer.get(), buffer_size, MPI_PACKED, source, 
 				tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
 			// unpack number of elements 
-			MPI_Unpack(recv_buffer, buffer_size, &loc, &node_count, 1, MPI_INT, MPI_COMM_WORLD);
+			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, &node_count, 1, MPI_INT, MPI_COMM_WORLD);
 			// unpack number of doubles 
-			MPI_Unpack(recv_buffer, buffer_size, &loc, &data_count, 1, MPI_INT, MPI_COMM_WORLD);
+			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, &data_count, 1, MPI_INT, MPI_COMM_WORLD);
 			// unpack the list of elements 
 			assert(node_buffer.Size() >= node_count);
-			MPI_Unpack(recv_buffer, buffer_size, &loc, 
+			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, 
 				node_buffer.GetData(), node_count, MPI_INT, MPI_COMM_WORLD);
 			// unpack the data 
 			assert(par_data_buffer.Size() >= data_count);
-			MPI_Unpack(recv_buffer, buffer_size, &loc, 
+			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, 
 				par_data_buffer.GetData(), data_count, MPI_DOUBLE, MPI_COMM_WORLD);
-			pool.deallocate(recv_buffer);
 
 			const auto fn = proc_to_fn.at(source); 
 			int buffer_idx = 0; 
@@ -605,7 +603,6 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			// if recvd, remove from list 
 			MPI_Test(&it->request, &ready, MPI_STATUS_IGNORE);
 			if (ready) {
-				pool.deallocate(it->buffer_ptr);
 				it = sent_messages.erase(it);
 			}
 			// else keep it around 
@@ -622,15 +619,13 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// use barrier to avoid tag clash? 
 	MPI_Barrier(MPI_COMM_WORLD); 
 
-	// clean up remaining sent message buffers 
-	for (auto &message : sent_messages) {
-		pool.deallocate(message.buffer_ptr);
-	}
-
 	timer.Stop();
 	TimingLog.Log("sweep", timer.RealTime());
 
 	if (rank==0) EventLog.Register("sweeps");
+
+	// sent_messages going out of scope 
+	// automatically deallocates any remaining buffers 
 }
 
 void InverseAdvectionOperator::AssembleLocalMatrices() 
