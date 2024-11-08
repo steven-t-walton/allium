@@ -22,7 +22,7 @@ public:
 class ZeroAndScaleFixupOperator : public NegativeFluxFixupOperator
 {
 private:
-	mutable mfem::Vector weights; 
+	// mutable mfem::Vector weights; 
 public:
 	ZeroAndScaleFixupOperator(double min) : NegativeFluxFixupOperator(min) { }
 	bool Apply(const mfem::DenseMatrix &A, const mfem::Vector &rhs, mfem::Vector &solution) const override;

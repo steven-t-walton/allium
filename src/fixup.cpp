@@ -24,7 +24,8 @@ bool ZeroAndScaleFixupOperator::Apply(const mfem::DenseMatrix &A,
 	}
 
 	const int height = A.Height();
-	weights.SetSize(height); 
+	mfem::Vector weights(height);
+	// weights.SetSize(height); 
 	for (int i=0; i<height; i++) {
 		weights(i) = 0.0;
 		for (int j=0; j<height; j++) {
