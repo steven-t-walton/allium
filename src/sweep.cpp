@@ -6,6 +6,7 @@
 #include "multigroup.hpp"
 #include "mem_pool.hpp"
 #include <list>
+#include <omp.h>
 
 InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 	MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int use_lumping)
@@ -269,14 +270,13 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	const auto Nomega = quad.Size(); 
 	const auto G = psi_ext.extent(0); 
 	const auto rank = mesh.GetMyRank(); 
-	// place to store face ids/element, dofs/element, and dofs of neighboring elements 
-	mfem::Array<int> faces, dofs, dofs2; 
+
+	mfem::Array<int> dofs;
 
 	// igraph vectors to store neighbors in graph traversal 
-	igraph_vector_int_t nbrs, nbr_nbrs, edges; 
+	igraph_vector_int_t nbrs, nbr_nbrs; 
 	igraph_vector_int_init(&nbrs, 0); 
 	igraph_vector_int_init(&nbr_nbrs, 0); 
-	igraph_vector_int_init(&edges, 0);
 
 	// mdspan views into data 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
@@ -327,35 +327,42 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// count messages sents 
 	auto message_count = 0; // incremented at each message, used as message tag 
 
-	// persistent storage of local system 
-	mfem::DenseMatrix grad, A, lu; 
-	mfem::Vector rhs, sol, psi2, psi_fixup, nor(dim), ones, fixup_weights; 
-
 	// --- do sweep --- 
 	// vertices traversed, only count owned elements 
 	int nsweep = 0; 
 	while (nsweep < Ne*Nomega) {
+		const auto wave_front_size = local.size();
+		#pragma omp parallel 
+		{
+
+		// persistent storage of local system 
+		mfem::DenseMatrix grad, A, lu; 
+		mfem::Vector rhs, sol, psi2, nor(dim); 
+		// place to store face ids/element, dofs/element, and dofs of neighboring elements 
+		mfem::Array<int> faces, dofs_thread, dofs2; 
+		igraph_vector_int_t edges;
+		igraph_vector_int_init(&edges, 0);
+
 		// --- sweep on processor-local domain --- 
-		int send_count = 0;
-		while (not(local.empty()) and send_count < max_sends_per_recv) {
-			nsweep++; //increment sweep counter to know when to stop 
-			// get first element of queue 
-			const auto node = local.front();
-			local.pop_front(); 
+		#pragma omp for 
+		for (int sweep_idx=0; sweep_idx<wave_front_size; sweep_idx++) {
+			// nsweep++; //increment sweep counter to know when to stop 
+			// // get first element of queue 
+			// const auto node = local.front();
+			// local.pop_front(); 
+
+			const auto node = local[sweep_idx];
 
 			// --- do work --- 
 			// deconstruct angle/space id
 			const auto a = node % Nomega; 
 			const auto e = node / Nomega; 
 			const auto &Omega = quad.GetOmega(a); 
-			mfem::VectorConstantCoefficient Q(Omega); 
-			const auto &el = *fes.GetFE(e); 
-			auto &trans = *mesh.GetElementTransformation(e); 
-			fes.GetElementDofs(e, dofs); 
-			rhs.SetSize(dofs.Size()); 
+			fes.GetElementDofs(e, dofs_thread); 
+			rhs.SetSize(dofs_thread.Size()); 
 
 			// --- assemble gradient term ---
-			grad.SetSize(dofs.Size()); 
+			grad.SetSize(dofs_thread.Size()); 
 			grad = 0.0; 
 			for (auto d=0; d<dim; d++) {
 				grad.Add(Omega(d), *grad_mat_view(d,e)); 
@@ -388,7 +395,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				A.Add(1.0, *mass_mat_view(g,e)); 
 
 				// --- load source into local vector --- 
-				for (auto i=0; i<dofs.Size(); i++) { rhs[i] = source_view(g,a,dofs[i]); }
+				for (auto i=0; i<dofs_thread.Size(); i++) { rhs[i] = source_view(g,a,dofs_thread[i]); }
 
 				// add inflow terms to RHS 
 				for (const auto eid : edges_in_view) {
@@ -406,8 +413,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 					if (nbr_e == e) { // reflection 
 						const auto &elmat = *face_mat_view(fid, idx, idx); 
-						psi2.SetSize(dofs.Size()); 
-						for (auto i=0; i<dofs.Size(); i++) { psi2(i) = psi_view(g, nbr_a, dofs[i]); }
+						psi2.SetSize(dofs_thread.Size()); 
+						for (auto i=0; i<dofs_thread.Size(); i++) { psi2(i) = psi_view(g, nbr_a, dofs_thread[i]); }
 						elmat.AddMult(psi2, rhs, -dot);
 					} 
 
@@ -443,8 +450,19 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				} 
 
 				// scatter back 
-				for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = sol(i); }
+				for (int i=0; i<dofs_thread.Size(); i++) { psi_view(g, a, dofs_thread[i]) = sol(i); }
 			}
+		} // end wave front computation 
+
+		igraph_vector_int_destroy(&edges); 
+		} // end omp parallel 
+
+		// process computed wave front
+		// find next wave front
+		nsweep += wave_front_size;
+		for (int sweep_idx=0; sweep_idx<wave_front_size; sweep_idx++) {
+			const auto node = local.front();
+			local.pop_front();
 
 			// --- compute next + send data to other processors --- 
 			degrees[node] = -1; // already visited 
@@ -453,7 +471,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
 			std::set<int> send_fn_set; // store unique set of processors to send data to 
 			for (const auto &nbr : nbrs_view) {
-				degrees[(int)nbr] -= 1; // reduce degree since node has been visited 
+				degrees[(int)nbr]--; // reduce degree since node has been visited 
 				// if nbr is off-processor, add to send_set regardless of degree 
 				if (nbr >= Ne*Nomega) {
 					// get neighbor of neighbor to find number of processors to send data to 
@@ -478,62 +496,63 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			for (const auto &fn : send_fn_set) {
 				send_list.Append({fn, node}); 
 			}
-
-			// send data if send buffer full or no more local work to do 
-			if (send_list.Size() >= send_buffer_size or (local.empty() and num_face_nbrs>0)) {
-				send_list.Sort(); send_list.Unique(); 
-				mfem::Table send_table(num_face_nbrs, send_list); 
-				for (auto fn=0; fn<num_face_nbrs; fn++) {
-					if (send_table.RowSize(fn) == 0) continue; 					
-					const auto nbr_rank = mesh.GetFaceNbrRank(fn); 
-					int buffer_size = 0;
-					auto nodes = std::span<const int>(send_table.GetRow(fn), send_table.RowSize(fn)); 
-					for (auto n : nodes) {
-						fes.GetElementDofs(n / Nomega, dofs); 
-						buffer_size += dofs.Size(); 
-					}
-
-					buffer_size *= G; 
-					assert(par_data_buffer.Size() >= buffer_size); 
-					int idx = 0;
-					for (auto n : nodes) {
-						const auto e = n / Nomega; 
-						const auto a = n % Nomega; 
-						fes.GetElementDofs(e, dofs); 
-						for (auto g=0; g<G; g++) {
-							for (auto i=0; i<dofs.Size(); i++) {
-								par_data_buffer[idx++] = psi_view(g,a,dofs[i]); 
-							}
-						}
-					}
-
-					// pack nodes and par_data_buffer into a single 
-					// byte array so that only one message is sent per 
-					// face neighbor 
-					// the packed message is prepended by the integer number 
-					// of elements being sent and the integer number of doubles 
-					// being sent 
-					sent_messages.emplace_back();
-					auto &message = sent_messages.back();
-
-					int loc = 0;
-					const int elems_size = nodes.size();
-					// +2 for meta data describing size of int and double arrays 
-					const int pack_size = sizeof(int)*(elems_size+2) + sizeof(double)*buffer_size;
-					message.buffer = CreateUmpireUniquePtr<char>(pack_size, pool);
-					auto *buffer_ptr = message.buffer.get();
-					MPI_Pack(&elems_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
-					MPI_Pack(&buffer_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
-					MPI_Pack(nodes.data(), nodes.size(), MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
-					MPI_Pack(par_data_buffer.GetData(), buffer_size, MPI_DOUBLE, buffer_ptr, 
-						pack_size, &loc, MPI_COMM_WORLD);
-					MPI_Isend(buffer_ptr, loc, MPI_PACKED, nbr_rank, message_count++, MPI_COMM_WORLD, &message.request);
-				}
-				send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
-				send_count++;
-			}
 		}
 
+		// send parallel data from wave front computation 
+		if (send_list.Size()) {
+			send_list.Sort(); send_list.Unique(); 
+			mfem::Table send_table(num_face_nbrs, send_list); 
+			for (auto fn=0; fn<num_face_nbrs; fn++) {
+				if (send_table.RowSize(fn) == 0) continue; 					
+				const auto nbr_rank = mesh.GetFaceNbrRank(fn); 
+				int buffer_size = 0;
+				auto nodes = std::span<const int>(send_table.GetRow(fn), send_table.RowSize(fn)); 
+				for (auto n : nodes) {
+					fes.GetElementDofs(n / Nomega, dofs); 
+					buffer_size += dofs.Size(); 
+				}
+
+				buffer_size *= G; 
+				UmpireVector data_buffer(buffer_size, pool);
+				// assert(par_data_buffer.Size() >= buffer_size); 
+				int idx = 0;
+				for (auto n : nodes) {
+					const auto e = n / Nomega; 
+					const auto a = n % Nomega; 
+					fes.GetElementDofs(e, dofs); 
+					for (auto g=0; g<G; g++) {
+						for (auto i=0; i<dofs.Size(); i++) {
+							data_buffer[idx++] = psi_view(g,a,dofs[i]); 
+						}
+					}
+				}
+
+				// pack nodes and par_data_buffer into a single 
+				// byte array so that only one message is sent per 
+				// face neighbor 
+				// the packed message is prepended by the integer number 
+				// of elements being sent and the integer number of doubles 
+				// being sent 
+				sent_messages.emplace_back();
+				auto &message = sent_messages.back();
+
+				int loc = 0;
+				const int elems_size = nodes.size();
+				// +2 for meta data describing size of int and double arrays 
+				const int pack_size = sizeof(int)*(elems_size+2) + sizeof(double)*buffer_size;
+				message.buffer = CreateUmpireUniquePtr<char>(pack_size, pool);
+				auto *buffer_ptr = message.buffer.get();
+				MPI_Pack(&elems_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
+				MPI_Pack(&buffer_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
+				MPI_Pack(nodes.data(), nodes.size(), MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
+				MPI_Pack(data_buffer.GetData(), buffer_size, MPI_DOUBLE, buffer_ptr, 
+					pack_size, &loc, MPI_COMM_WORLD);
+				MPI_Isend(buffer_ptr, loc, MPI_PACKED, nbr_rank, message_count++, MPI_COMM_WORLD, &message.request);
+			}
+			send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
+		}
+
+		// check for parallel messages 
 		while (true) {
 			int avail; 
 			MPI_Status status; 
@@ -556,14 +575,17 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, &node_count, 1, MPI_INT, MPI_COMM_WORLD);
 			// unpack number of doubles 
 			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, &data_count, 1, MPI_INT, MPI_COMM_WORLD);
+
+			// store elements and data 
+			UmpireArray<int> node_buffer(node_count, pool);
+			UmpireVector data_buffer(data_count, pool);
+
 			// unpack the list of elements 
-			assert(node_buffer.Size() >= node_count);
 			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, 
 				node_buffer.GetData(), node_count, MPI_INT, MPI_COMM_WORLD);
 			// unpack the data 
-			assert(par_data_buffer.Size() >= data_count);
 			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, 
-				par_data_buffer.GetData(), data_count, MPI_DOUBLE, MPI_COMM_WORLD);
+				data_buffer.GetData(), data_count, MPI_DOUBLE, MPI_COMM_WORLD);
 
 			const auto fn = proc_to_fn.at(source); 
 			int buffer_idx = 0; 
@@ -579,7 +601,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				fes.GetFaceNbrElementVDofs(local_e-Ne, dofs); 	
 				for (int g=0; g<G; g++) {
 					for (auto i=0; i<dofs.Size(); i++) {
-						psi_fnbr_view(g,a,dofs[i]) = par_data_buffer[buffer_idx++];
+						psi_fnbr_view(g,a,dofs[i]) = data_buffer[buffer_idx++];
 					}
 				}
 
@@ -614,7 +636,6 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	// clean up data 
 	igraph_vector_int_destroy(&nbrs); 
 	igraph_vector_int_destroy(&nbr_nbrs); 
-	igraph_vector_int_destroy(&edges); 
 
 	// use barrier to avoid tag clash? 
 	MPI_Barrier(MPI_COMM_WORLD); 
