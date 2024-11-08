@@ -74,6 +74,22 @@ public:
 	}
 };
 
+template<typename T> 
+class UmpireArray : public mfem::Array<T>
+{
+private:
+	umpire::Allocator allocator;
+public:
+	UmpireArray(int size, umpire::Allocator allocator)
+		: allocator(allocator), 
+		  mfem::Array<T>(static_cast<T*>(allocator.allocate(size*sizeof(T))), size)
+	{ }
+	~UmpireArray()
+	{
+		allocator.deallocate(static_cast<T*>(mfem::Array<T>::GetMemory()));
+	}
+};
+
 // generic framework for std::unique_ptr 
 // to umpire-managed resources 
 namespace internal
