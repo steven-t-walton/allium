@@ -203,6 +203,13 @@ inline double IntegrateNormalizedPlanckSecondDerivative(double E, double T) {
 	return IntegrateNormalizedPlanckSecondDerivative(x);
 }
 
+inline double PlanckFunction(double E, double T)
+{
+	const auto x = E/T;
+	if (x < 1e-30) return 0.0; 
+	else return internal::coef * x * x * x / std::expm1(x);
+}
+
 namespace internal {
 
 // evaluate spectrum over all groups at a given temperature 

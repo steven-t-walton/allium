@@ -2,6 +2,7 @@
 
 #include "mfem.hpp"
 #include "multigroup.hpp"
+#include "brunner_opacity.hpp"
 
 class OpacityCoefficient : public mfem::VectorCoefficient {
 protected:
@@ -107,9 +108,13 @@ private:
 	using OpacityFunction = std::function<double(double,double,double)>; // density, temperature, energy
 	OpacityFunction opacity_func;
 	const mfem::IntegrationRule *rule = nullptr;
+	using WeightFunction = std::function<double(double,double)>; // energy, temperature -> weight 
+	WeightFunction weight_func;
 public:
-	MultiGroupFunctionOpacityCoefficient(const mfem::Array<double> &bounds, OpacityFunction opacity_func)
-		: bounds(bounds), opacity_func(opacity_func), OpacityCoefficient(bounds.Size()-1)
+	MultiGroupFunctionOpacityCoefficient(const mfem::Array<double> &bounds, 
+		OpacityFunction opacity_func, WeightFunction _weight_func=nullptr)
+		: bounds(bounds), opacity_func(opacity_func), weight_func(_weight_func), 
+		  OpacityCoefficient(bounds.Size()-1)
 	{ }
 	void SetIntegrationOrder(int order)
 	{
@@ -117,6 +122,25 @@ public:
 	}
 	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
 	const OpacityFunction &GetOpacityFunction() const { return opacity_func; }
+};
+
+class BrunnerOpacityCoefficient : public OpacityCoefficient
+{
+private:
+	BrunnerOpac::AnalyticEdgeOpacity *opac; 
+	BrunnerOpac::MultiGroupIntegrator *integrator;
+
+	std::vector<double> planckAvg, rossAvg, Bg, Rg;
+public:
+	BrunnerOpacityCoefficient(const mfem::Array<double> &bounds, double c0, double c1, 
+		double c2, double Emin, double Eedge, 
+		double delta_s, double delta_w, int lines);
+	~BrunnerOpacityCoefficient()
+	{
+		delete opac; 
+		delete integrator;
+	}
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
 };
 
 // helper class for representing a discrete multigroup opacity 

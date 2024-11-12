@@ -474,7 +474,7 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 	OpacityCoefficient *opac;
 	std::string type = table["type"]; 
 	io::ValidateOption<std::string>("opacity type", type, 
-		{"constant", "analytic gray", "analytic", "analytic edge"}, root); 
+		{"constant", "analytic gray", "analytic", "analytic edge", "brunner"}, root); 
 	out << YAML::Key << "type" << YAML::Value << type; 
 	if (type == "constant") {
 		sol::table values = table["values"];
@@ -535,7 +535,16 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 		const int Nlines = table["Nlines"];
 		const int int_order = table["int_order"].get_or(1);
 		EdgeLineOpacityFunction func(c0, c1, c2, Emin, Eedge, delta_s, delta_w, nT, Nlines);
-		auto *ptr = new MultiGroupFunctionOpacityCoefficient(grid.Bounds(), func);
+		std::function<double(double,double)> weight_func; 
+		sol::optional<std::string> weight_type_avail = table["weight"];
+		if (weight_type_avail) {
+			const std::string weight_type = weight_type_avail.value();
+			io::ValidateOption<std::string>("opacity weight", weight_type, {"planck"}, root);
+			if (weight_type == "planck") {
+				weight_func = PlanckFunction;
+			}
+		}
+		auto *ptr = new MultiGroupFunctionOpacityCoefficient(grid.Bounds(), func, weight_func);
 		if (int_order > 1) ptr->SetIntegrationOrder(int_order);
 		out << YAML::Key << "c0" << YAML::Value << c0;
 		out << YAML::Key << "c1" << YAML::Value << c1;
@@ -548,6 +557,27 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 		out << YAML::Key << "Nlines" << YAML::Value << Nlines;
 		out << YAML::Key << "integration order" << YAML::Value << int_order;
 		opac = ptr;
+	}
+
+	else if (type == "brunner") {
+		const double c0 = table["c0"];
+		const double c1 = table["c1"];
+		const double c2 = table["c2"];
+		const double Emin = table["Emin"];
+		const double Eedge = table["Eedge"];
+		const double delta_s = table["delta_s"];
+		const double delta_w = table["delta_w"];
+		const int Nlines = table["Nlines"];
+		opac = new BrunnerOpacityCoefficient(
+			grid.Bounds(), c0, c1, c2, Emin, Eedge, delta_s, delta_w, Nlines);
+		out << YAML::Key << "c0" << YAML::Value << c0;
+		out << YAML::Key << "c1" << YAML::Value << c1;
+		out << YAML::Key << "c2" << YAML::Value << c2;
+		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin);
+		out << YAML::Key << "Eedge" << YAML::Value << FormatScientific(Eedge);
+		out << YAML::Key << "delta_s" << YAML::Value << FormatScientific(delta_s);
+		out << YAML::Key << "delta_w" << YAML::Value << FormatScientific(delta_w);
+		out << YAML::Key << "Nlines" << YAML::Value << Nlines;
 	}
 	return opac;
 }

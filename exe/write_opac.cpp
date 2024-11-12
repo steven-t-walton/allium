@@ -68,20 +68,20 @@ int main(int argc, char *argv[]) {
 				out << val;
 			}
 			out << YAML::EndSeq;
-
-			out << YAML::Key << "groups" << YAML::Value << YAML::BeginSeq;
-			mfem::Vector vals; 
-			mfem::IsoparametricTransformation trans; 
-			trans.SetIdentityTransformation(mfem::Geometry::SEGMENT);
-			mfem::IntegrationPoint ip;
-			mfem::ConstantCoefficient T(temperature), rho(density);
-			opacity->SetTemperature(T); opacity->SetDensity(rho);
-			opacity->Eval(vals, trans, ip);
-			for (int g=0; g<vals.Size(); g++) {
-				out << vals(g);
-			}
-			out << YAML::EndSeq;
 		}
+
+		out << YAML::Key << "groups" << YAML::Value << YAML::BeginSeq;
+		mfem::Vector vals; 
+		mfem::IsoparametricTransformation trans; 
+		trans.SetIdentityTransformation(mfem::Geometry::SEGMENT);
+		mfem::IntegrationPoint ip;
+		mfem::ConstantCoefficient T(temperature), rho(density);
+		opacity->SetTemperature(T); opacity->SetDensity(rho);
+		opacity->Eval(vals, trans, ip);
+		for (int g=0; g<vals.Size(); g++) {
+			out << vals(g);
+		}
+		out << YAML::EndSeq;
 		out << YAML::EndMap;
 		delete opacity;
 	}

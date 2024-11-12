@@ -65,14 +65,64 @@ void MultiGroupFunctionOpacityCoefficient::Eval(
 	}
 
 	else {
-		for (int g=0; g<vdim; g++) {
-			const auto dE = bounds[g+1] - bounds[g];
-			v(g) = 0.0;
-			for (int n=0; n<rule->GetNPoints(); n++) {
-				const auto &ip = rule->IntPoint(n);
-				const double E = bounds[g] + dE * ip.x;
-				v(g) += ip.weight * opacity_func(rho, T, E); 
+		if (weight_func) {
+			for (int g=0; g<vdim; g++) {
+				const auto dE = bounds[g+1] - bounds[g];
+				v(g) = 0.0;
+				double weight_sum = 0.0;
+				for (int n=0; n<rule->GetNPoints(); n++) {
+					const auto &ip = rule->IntPoint(n);
+					const double E = bounds[g] + dE * ip.x;
+					const double weight = weight_func(E,T);
+					v(g) += ip.weight * opacity_func(rho, T, E) * weight;
+					weight_sum += weight * ip.weight; 
+				}
+				v(g) /= weight_sum;
+			}			
+		}
+
+		else {
+			for (int g=0; g<vdim; g++) {
+				const auto dE = bounds[g+1] - bounds[g];
+				v(g) = 0.0;
+				for (int n=0; n<rule->GetNPoints(); n++) {
+					const auto &ip = rule->IntPoint(n);
+					const double E = bounds[g] + dE * ip.x;
+					v(g) += ip.weight * opacity_func(rho, T, E); 
+				}
 			}
 		}
+	}
+}
+
+BrunnerOpacityCoefficient::BrunnerOpacityCoefficient(
+	const mfem::Array<double> &bounds, 
+	double c0, double c1, double c2, double Emin, double Eedge, 
+	double delta_s, double delta_w, int lines)
+	: OpacityCoefficient(bounds.Size()-1)
+{
+	opac = new BrunnerOpac::AnalyticEdgeOpacity(Emin, Eedge, c0, c1, c2, delta_w, delta_s, lines);
+	std::vector<double> bounds_std(bounds.Size());
+	for (int i=0; i<bounds.Size(); i++) {
+		bounds_std[i] = bounds[i];
+	}
+	integrator = new BrunnerOpac::MultiGroupIntegrator(*opac, bounds_std);
+
+	planckAvg.resize(vdim); 
+	rossAvg.resize(vdim);
+	Bg.resize(vdim);
+	Rg.resize(vdim);
+}
+
+void BrunnerOpacityCoefficient::Eval(
+	mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) 
+{
+	const auto T = temperature->Eval(trans, ip);
+	const auto rho = density->Eval(trans, ip);	
+	double planckMean, rossMean;
+	integrator->computeGroupAverages(T, rho, planckAvg, rossAvg, Bg, Rg, planckMean, rossMean);
+	v.SetSize(vdim);
+	for (int i=0; i<vdim; i++) {
+		v(i) = planckAvg[i] * rho;
 	}
 }
