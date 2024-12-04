@@ -4,7 +4,7 @@
 #include "lumping.hpp"
 #include "multigroup.hpp"
 
-double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
+double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump, bool pbj=false) {
 	mfem::ParMesh mesh(MPI_COMM_WORLD, smesh); 
 	const auto dim = mesh.Dimension();
 	LevelSymmetricQuadrature quad(6, dim); 
@@ -51,6 +51,10 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
 		bc_map[attr] = INFLOW;
 	}
 	InverseAdvectionOperator Linv(fes, quad, total_coef, bc_map, lump); 
+	if (pbj) {
+		Linv.UseParallelBlockJacobi(true);
+		Linv.Exchange(psi);		
+	}
 
 	mfem::ParBilinearForm Ms_form(&fes); 
 	if (IsMassLumped(lump))
@@ -62,7 +66,7 @@ double LinearTransportError(mfem::Mesh &smesh, int fe_order, int lump) {
 
 	mfem::ParGridFunction phi(&fes), phi_old(&fes); 
 	phi_old = 0.0; 
-	for (auto it=0; it<50; it++) {		
+	for (auto it=0; it<200; it++) {		
 		Ms_form.Mult(phi_old, phi); 
 		D.MultTranspose(phi, psi); 
 		psi += source; 
@@ -133,6 +137,61 @@ TEST(LumpedLinearTransport, MMS2Dp1) {
 	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
 	double E1 = LinearTransportError(mesh1, fe_order, 7); 
 	double E2 = LinearTransportError(mesh2, fe_order, 7); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
+}
+
+TEST(LinearTransportPBJ, MMS2Dp1) {
+	auto Ne = 10; 
+	const auto fe_order = 1; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	double E1 = LinearTransportError(mesh1, fe_order, 0, true); 
+	double E2 = LinearTransportError(mesh2, fe_order, 0, true); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
+}
+
+TEST(LinearTransportPBJ, MMS2DTRI) {
+	auto Ne = 10; 
+	const auto fe_order = 1; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::TRIANGLE, true, 1.0, 1.0, false); 
+	double E1 = LinearTransportError(mesh1, fe_order, 0, true); 
+	double E2 = LinearTransportError(mesh2, fe_order, 0, true); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
+}
+
+TEST(LinearTransportPBJ, MMS2Dp2) {
+	auto Ne = 10; 
+	const auto fe_order = 2; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	double E1 = LinearTransportError(mesh1, fe_order, 0, true); 
+	double E2 = LinearTransportError(mesh2, fe_order, 0, true); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
+}
+
+TEST(LinearTransportPBJ, MMS2Dp3) {
+	auto Ne = 10; 
+	const auto fe_order = 3; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	double E1 = LinearTransportError(mesh1, fe_order, 0, true); 
+	double E2 = LinearTransportError(mesh2, fe_order, 0, true); 
+	double ooa = log2(E1/E2); 
+	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
+}
+
+TEST(LumpedLinearTransportPBJ, MMS2Dp1) {
+	auto Ne = 10; 
+	const auto fe_order = 1; 
+	mfem::Mesh mesh1 = mfem::Mesh::MakeCartesian2D(Ne,Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	mfem::Mesh mesh2 = mfem::Mesh::MakeCartesian2D(2*Ne, 2*Ne, mfem::Element::QUADRILATERAL, true, 1.0, 1.0, false); 
+	double E1 = LinearTransportError(mesh1, fe_order, 7, true); 
+	double E2 = LinearTransportError(mesh2, fe_order, 7, true); 
 	double ooa = log2(E1/E2); 
 	EXPECT_NEAR(ooa, fe_order+1, 0.2); 
 }
