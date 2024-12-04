@@ -574,14 +574,11 @@ int main(int argc, char *argv[]) {
 	// build sweep operator 
 	InverseAdvectionOperator Linv(fes, *quad, total_mg, bc_map, lumping); 
 	if (sweep_opts_avail) {
-		sol::table sweep_opts = sweep_opts_avail.value(); 
-		bool write_graph = sweep_opts["write_graph"].get_or(false); 
-		if (write_graph) 
-			Linv.WriteGraphToDot("graph"); 
-		sol::optional<int> send_buffer_size = sweep_opts["send_buffer_size"]; 
-		if (send_buffer_size) 
-			Linv.SetSendBufferSize(send_buffer_size.value()); 
+		sol::table sweep_opts = sweep_opts_avail.value();
+		io::SetSweepOptions(sweep_opts, Linv, root);
+		out << YAML::Key << "sweep options" << YAML::Value << sweep_opts;
 	}
+	if (Linv.IsParallelBlockJacobi()) Linv.Exchange(psi);
 
 	// common parameters to discretization
 	mfem::Vector normal(dim); 
@@ -715,12 +712,17 @@ int main(int argc, char *argv[]) {
 
 		// form source for schur complement solve 
 		// b -> D L^{-1} b
+		// turn off PBJ for elimination of angular flux 
+		const bool pbj = Linv.IsParallelBlockJacobi();
+		Linv.UseParallelBlockJacobi(false);
 		Linv.Mult(source_vec, psi); 
 		mfem::Vector schur_source(phi_size); 
 		D.Mult(psi, schur_source);
 
 		if (prec_avail) { outer_solver->SetPreconditioner(*prec); }
 		outer_solver->SetOperator(T); 
+		// set PBJ to original state 
+		Linv.UseParallelBlockJacobi(pbj);
 		TransportIterationMonitor monitor(out, T, prec.get(), inner_it_solver); 
 		outer_solver->SetMonitor(monitor); 
 		setup_timer.Stop(); 
@@ -733,6 +735,8 @@ int main(int argc, char *argv[]) {
 		Ms_form.Mult(phi, scat_source); 
 		D.MultTranspose(scat_source, psi); 
 		psi += source_vec; 
+		// ensure PBJ off for back solve 
+		Linv.UseParallelBlockJacobi(false);
 		Linv.Mult(psi, psi); 
 		// compute phi and J 
 		Dlin_aniso.Mult(psi, moment_solution); 
