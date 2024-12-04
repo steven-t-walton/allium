@@ -75,13 +75,24 @@ protected:
 	bool apply_fixup = false; 
 	const NegativeFluxFixupOperator *fixup_op = nullptr; 
 	mfem::Vector *fixup_monitor = nullptr;
+
+	bool pbj = false;
+	int num_pbj_sweeps = 1;
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad, 
 		MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int lump=0); 
 	~InverseAdvectionOperator(); 
 
-	virtual void Mult(const mfem::Vector &source, mfem::Vector &psi) const; 
-
+	void Mult(const mfem::Vector &source, mfem::Vector &psi) const;
+private:
+	void Mult_Upwind(const mfem::Vector &source, mfem::Vector &psi) const; 
+	void Mult_BlockJacobi(const mfem::Vector &source, mfem::Vector &psi) const;
+public:
+	// load the psi_fnbr data structure from psi 
+	// only needed for PBJ where psi_fnbr represents 
+	// the initial guess for lagged parallel data 
+	void Exchange(const mfem::Vector &psi); 
+	
 	// must be called before Mult 
 	// pre-assembles components of local sweep matrix 
 	// to save cost 
@@ -92,6 +103,12 @@ public:
 	void SetTimeAbsorption(const double sigma); 
 	// access set time absorption value 
 	double GetTimeAbsorption() const { return time_absorption; }
+
+	// use parallel block jacobi sweep 
+	void UseParallelBlockJacobi(bool use=true) { pbj = use; }
+	bool IsParallelBlockJacobi() const { return pbj; }
+	// how many PBJ sweeps to do per call to Mult 
+	void SetNumPBJSweeps(int n) { num_pbj_sweeps = n; }
 
 	void SetSendBufferSize(int s);
 	void SetMaxSendsPerReceive(int s) { max_sends_per_recv = s; }
@@ -110,21 +127,6 @@ public:
 	int GetLumpingType() const { return lump; }
 
 	friend class AdvectionOperator; 
-};
-
-class ParallelBlockJacobiSweepOperator : public InverseAdvectionOperator
-{
-private:
-
-public:
-	ParallelBlockJacobiSweepOperator(mfem::ParFiniteElementSpace &fes, const AngularQuadrature &quad, 
-		MultiGroupCoefficient &total, const BoundaryConditionMap &bc_map, int lump)
-		: InverseAdvectionOperator(fes, quad, total, bc_map, lump)
-	{
-		psi_fnbr = 0.0;
-	}
-	void Mult(const mfem::Vector &source, mfem::Vector &psi) const;
-	void Exchange(const mfem::Vector &psi); 
 };
 
 void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &quad, 

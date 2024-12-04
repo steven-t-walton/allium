@@ -216,6 +216,7 @@ InverseAdvectionOperator::InverseAdvectionOperator(mfem::ParFiniteElementSpace &
 	const auto Ndof_fnbr = fes.GetFaceNbrVSize(); // spatial DOF in ghost buffer 
 	psi_fnbr_ext = TransportVectorExtents(G, Nomega, Ndof_fnbr); 
 	psi_fnbr.SetSize(TotalExtent(psi_fnbr_ext)); 
+	psi_fnbr = 0.0;
 
 	// allocate local buffer through call to set send buffer size 
 	// call with default value for send_buffer_size 
@@ -258,6 +259,24 @@ InverseAdvectionOperator::~InverseAdvectionOperator()
 
 void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) const 
 {
+	if (pbj) {
+		// if more than one sweep, have to save the source term 
+		// to be correct for in place calls to Mult 
+		if (num_pbj_sweeps > 1) {
+			mfem::Vector tmp(source); 
+			for (int i=0; i<num_pbj_sweeps; i++) {
+				Mult_BlockJacobi(tmp, psi); 				
+			}
+		} else {
+			// do 1 PBJ sweep in place 
+			Mult_BlockJacobi(source, psi);
+		}
+	}
+	else Mult_Upwind(source, psi);
+}
+
+void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vector &psi) const 
+{
 	mfem::StopWatch timer; 
 	timer.Start();
 	assert(source.Size() == Width()); 
@@ -274,9 +293,8 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	mfem::Array<int> dofs;
 
 	// igraph vectors to store neighbors in graph traversal 
-	igraph_vector_int_t nbrs, nbr_nbrs; 
+	igraph_vector_int_t nbrs; 
 	igraph_vector_int_init(&nbrs, 0); 
-	igraph_vector_int_init(&nbr_nbrs, 0); 
 
 	// mdspan views into data 
 	TransportVectorView psi_view(psi.GetData(), psi_ext); 
@@ -474,15 +492,9 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 				degrees[(int)nbr]--; // reduce degree since node has been visited 
 				// if nbr is off-processor, add to send_set regardless of degree 
 				if (nbr >= Ne*Nomega) {
-					// get neighbor of neighbor to find number of processors to send data to 
-					igraph_neighbors(&graph, &nbr_nbrs, node, IGRAPH_OUT);
-					auto nbr_nbrs_view = std::span(VECTOR(nbr_nbrs), igraph_vector_int_size(&nbr_nbrs)); 	
-					for (const auto &nbr_nbr : nbr_nbrs_view) {
-						if (nbr_nbr < Ne*Nomega) continue; // only send to off-proc neighbors 
-						const auto nbr_id = (int)nbr_nbr - Ne*Nomega; 
-						const auto fn = fnbr_to_fn[nbr_id / Nomega]; 
-						send_fn_set.insert(fn); 
-					}
+					const auto nbr_id = (int)nbr - Ne*Nomega; 
+					const auto fn = fnbr_to_fn[nbr_id / Nomega]; 
+					send_fn_set.insert(fn); 
 				} 
 				// neighbor is local, add to queue 
 				else {
@@ -635,7 +647,6 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	}
 	// clean up data 
 	igraph_vector_int_destroy(&nbrs); 
-	igraph_vector_int_destroy(&nbr_nbrs); 
 
 	// use barrier to avoid tag clash? 
 	MPI_Barrier(MPI_COMM_WORLD); 
@@ -647,6 +658,242 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 
 	// sent_messages going out of scope 
 	// automatically deallocates any remaining buffers 
+}
+
+void InverseAdvectionOperator::Mult_BlockJacobi(const mfem::Vector &source, mfem::Vector &psi) const
+{
+	mfem::StopWatch timer; 
+	timer.Start();
+	assert(source.Size() == Width()); 
+	assert(psi.Size() == Height()); 
+	assert(mass_matrices[0]); 
+
+	const auto dim = mesh.Dimension(); 
+	const auto Ne = mesh.GetNE(); 
+	const auto Nomega = quad.Size(); 
+	const auto G = psi_ext.extent(0); 
+	const auto rank = mesh.GetMyRank(); 
+
+	// mdspan views into data 
+	TransportVectorView psi_view(psi.GetData(), psi_ext), psi_fnbr_view(psi_fnbr.GetData(), psi_fnbr_ext); 
+	TransportVectorView source_view(source.GetData(), psi_ext); 
+
+	// igraph vectors to store neighbors in graph traversal 
+	igraph_vector_int_t nbrs, edges; 
+	igraph_vector_int_init(&nbrs, 0); 
+	igraph_vector_int_init(&edges, 0);
+
+	// --- determine roots of graph --- 
+	igraph_vector_int_t degrees_view; 
+	igraph_vector_int_view(&degrees_view, degrees.GetData(), degrees.Size()); 
+	// count edges incoming to each vertex 
+	igraph_degree(&graph, &degrees_view, igraph_vss_all(), IGRAPH_IN, 0);
+	// list of nodes to visit (not including those that depend on another processor) 
+	// initialize with roots of graph 
+	for (int i=Ne*Nomega; i<degrees.Size(); i++) {
+		igraph_neighbors(&graph, &nbrs, i, IGRAPH_OUT); 
+		auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 		
+		for (const auto &nbr : nbrs_view) {
+			if (nbr < Ne*Nomega) degrees[nbr]--;
+		}
+	}
+	std::deque<int> local; 
+	for (int i=0; i<Ne*Nomega; i++) {
+		if (degrees[i] == 0) local.push_back(i);
+	}
+
+	// mdspan views into pre-assembled matrices 
+	auto mass_mat_view = Kokkos::mdspan(mass_matrices.GetData(), G, fes.GetNE()); 
+	auto grad_mat_view = Kokkos::mdspan(grad_matrices.GetData(), dim, fes.GetNE()); 
+	auto face_mat_view = Kokkos::mdspan(face_matrices.GetData(), mesh.GetNumFaces(), 2, 2); 
+
+	mfem::Array<int> faces, dofs, dofs2; 
+	mfem::DenseMatrix grad, A, lu; 
+	mfem::Vector rhs, sol, psi2, psi_fixup, nor(dim);
+
+	int nsweep = 0;
+
+	// --- do sweep --- 
+	while (not(local.empty())) {
+		// get first element of queue 
+		const auto node = local.front();
+		local.pop_front(); 
+		nsweep++;
+
+		// --- do work --- 
+		// deconstruct angle/space id
+		const auto a = node % Nomega; 
+		const auto e = node / Nomega; 
+		const auto &Omega = quad.GetOmega(a); 
+		mfem::VectorConstantCoefficient Q(Omega); 
+		const auto &el = *fes.GetFE(e); 
+		auto &trans = *mesh.GetElementTransformation(e); 
+		fes.GetElementDofs(e, dofs); 
+		rhs.SetSize(dofs.Size()); 
+
+		// --- assemble gradient term ---
+		grad.SetSize(dofs.Size()); 
+		grad = 0.0; 
+		for (auto d=0; d<dim; d++) {
+			grad.Add(Omega(d), *grad_mat_view(d,e)); 
+		}
+
+		// --- assemble outflow face terms --- 
+		element_to_face->GetRow(e, faces);
+		for (auto f : faces) {
+			const auto info = mesh.GetFaceInformation(f); 
+			bool keep_order = e == info.element[0].index; 
+			for (auto d=0; d<dim; d++) { nor(d) = normals(f*dim + d); }
+			if (!keep_order) nor *= -1.0; 
+			const double dot = Omega * nor; 
+			const auto idx = keep_order ? 0 : 1; 
+
+			// outflow 
+			if (dot > 0) {
+				const auto &elmat = *face_mat_view(f, idx, idx); 
+				grad.Add(dot, elmat); 
+			}
+		}
+
+		// --- assemble and solve all groups --- 
+		igraph_incident(&graph, &edges, node, IGRAPH_IN); 
+		auto edges_in_view = std::span(VECTOR(edges), igraph_vector_int_size(&edges)); 
+		for (int g=0; g<G; g++) {
+			// copy group-independent terms 
+			A = grad; 
+			// add total mass matrix for group g 
+			A.Add(1.0, *mass_mat_view(g,e)); 
+
+			// --- load source into local vector --- 
+			for (auto i=0; i<dofs.Size(); i++) { rhs[i] = source_view(g,a,dofs[i]); }
+
+			// add inflow terms to RHS 
+			for (const auto eid : edges_in_view) {
+				const auto nbr = IGRAPH_FROM(&graph, eid); 
+				const auto nbr_e = nbr / Nomega; 
+				const auto nbr_a = nbr % Nomega; 
+				const auto fid = edge_to_face_id[(int)eid]; 
+				for (auto d=0; d<dim; d++) { nor(d) = normals(fid * dim + d); }
+				const auto info = mesh.GetFaceInformation(fid); 
+				bool keep_order = e == info.element[0].index; 
+				if (!keep_order) nor *= -1.0; 
+				const double dot = Omega * nor; 
+				const auto idx = keep_order ? 0 : 1; 
+				const auto nbr_idx = (idx + 1) % 2; 
+
+				if (nbr_e == e) { // reflection 
+					const auto &elmat = *face_mat_view(fid, idx, idx); 
+					psi2.SetSize(dofs.Size()); 
+					for (auto i=0; i<dofs.Size(); i++) { psi2(i) = psi_view(g, nbr_a, dofs[i]); }
+					elmat.AddMult(psi2, rhs, -dot);
+				} 
+
+				else { // inflow from neighbor
+					const auto &elmat = *face_mat_view(fid, idx, nbr_idx); 
+					// face neighbor data 
+					if (info.IsShared()) {
+						fes.GetFaceNbrElementVDofs(nbr_e-Ne, dofs2); 
+						psi2.SetSize(dofs2.Size()); 
+						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_fnbr(a + g*Nomega + Nomega*G*dofs2[i]); }
+					}
+					// local data 
+					else {
+						fes.GetElementDofs(nbr_e, dofs2); 
+						psi2.SetSize(dofs2.Size()); 
+						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(g, a, dofs2[i]); }						
+					}
+					elmat.AddMult(psi2, rhs, -dot); 
+				}
+			}
+
+			if (is_time_dependent) {
+				A.Add(time_absorption, *time_mass_matrices[e]);
+			}
+			// solve, solution overwritten into rhs, matrix is modified 
+			lu = A; 
+			sol = rhs; 
+			mfem::LinearSolve(lu, sol.GetData()); 
+
+			if (fixup_op and apply_fixup) {
+				const bool applied = fixup_op->Apply(A, rhs, sol);
+				if (fixup_monitor and applied) (*fixup_monitor)(e + g*fes.GetNE())++;
+			} 
+
+			// scatter back 
+			for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = sol(i); }
+		}
+
+		// --- compute next + send data to other processors --- 
+		degrees[node] = -1; // already visited 
+		// get neighbors 
+		igraph_neighbors(&graph, &nbrs, node, IGRAPH_OUT);  
+		auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
+		for (const auto &nbr : nbrs_view) {
+			degrees[(int)nbr] -= 1; // reduce degree since node has been visited 
+			if (nbr < Ne *Nomega and degrees[(int)nbr] == 0) {
+				local.push_back(nbr); 						
+			}					
+		}
+	}
+
+	if (nsweep != Ne*Nomega) MFEM_WARNING("rank " << rank << " didn't sweep all");
+
+	const_cast<InverseAdvectionOperator&>(*this).Exchange(psi);
+
+	igraph_vector_int_destroy(&nbrs);
+	igraph_vector_int_destroy(&edges);
+
+	timer.Stop();
+	TimingLog.Log("sweep", timer.RealTime());
+
+	if (rank==0) EventLog.Register("sweeps");
+}
+
+void InverseAdvectionOperator::Exchange(const mfem::Vector &psi)
+{
+	const auto dim = mesh.Dimension(); 
+	const auto Ne = mesh.GetNE(); 
+	const auto Nomega = quad.Size(); 
+	const auto G = psi_ext.extent(0); 
+
+	TransportVectorView psi_view(psi.GetData(), psi_ext); 
+	if (fes.GetFaceNbrVSize() > 0) {
+		int *send_offset = fes.send_face_nbr_ldof.GetI(); 
+		const int *d_send_offset = fes.send_face_nbr_ldof.GetJ(); 
+		int *recv_offset = fes.face_nbr_ldof.GetI(); 
+		const int *d_recv_offset = fes.face_nbr_ldof.GetJ();
+		MPI_Comm comm = fes.GetComm(); 
+		const int num_face_nbrs = mesh.GetNFaceNeighbors(); 
+
+		// load data into send buffer 
+		const auto num_send_dofs = fes.send_face_nbr_ldof.Size_of_connections(); 
+		mfem::Vector send_buffer(num_send_dofs * G * Nomega); 
+		for (int i=0; i<fes.send_face_nbr_ldof.Size_of_connections(); i++) {
+			for (int g=0; g<G; g++) {
+				for (int a=0; a<Nomega; a++) {
+					send_buffer(a + g*Nomega + Nomega*G*i) = psi_view(g,a,d_send_offset[i]); 
+				}
+			}
+		}
+
+		auto *requests = new MPI_Request[2*num_face_nbrs]; 
+		auto *send_requests = requests; 
+		auto *recv_requests = requests + num_face_nbrs; 
+		auto *statuses = new MPI_Status[num_face_nbrs]; 
+		for (int fn=0; fn<num_face_nbrs; fn++) {
+			const int nbr_rank = mesh.GetFaceNbrRank(fn); 
+			int tag = 0; 
+			MPI_Isend(&send_buffer.GetData()[send_offset[fn]*G*Nomega], 
+				(send_offset[fn+1] - send_offset[fn])*G*Nomega, MPI_DOUBLE, 
+				nbr_rank, tag, comm, &send_requests[fn]); 
+			MPI_Irecv(&psi_fnbr.GetData()[recv_offset[fn]*G*Nomega], 
+				(recv_offset[fn+1] - recv_offset[fn])*G*Nomega,
+				MPI_DOUBLE, nbr_rank, tag, comm, &recv_requests[fn]); 
+		}
+		MPI_Waitall(num_face_nbrs, send_requests, statuses); 
+		MPI_Waitall(num_face_nbrs, recv_requests, statuses); 
+		delete[] requests; delete[] statuses; 
+	}
 }
 
 void InverseAdvectionOperator::AssembleLocalMatrices() 
@@ -882,258 +1129,6 @@ void FormTransportSource(mfem::ParFiniteElementSpace &fes, AngularQuadrature &qu
 				source_view(g,a,i) = bform[i]; 
 			}
 		}		
-	}
-}
-
-void ParallelBlockJacobiSweepOperator::Mult(const mfem::Vector &source, mfem::Vector &psi) const
-{
-	mfem::StopWatch timer; 
-	timer.Start();
-	assert(source.Size() == Width()); 
-	assert(psi.Size() == Height()); 
-	assert(mass_matrices[0]); 
-
-	const auto dim = mesh.Dimension(); 
-	const auto Ne = mesh.GetNE(); 
-	const auto Nomega = quad.Size(); 
-	const auto G = psi_ext.extent(0); 
-	const auto rank = mesh.GetMyRank(); 
-
-	// mdspan views into data 
-	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	TransportVectorView source_view(source.GetData(), psi_ext); 
-
-	// igraph vectors to store neighbors in graph traversal 
-	igraph_vector_int_t nbrs, edges; 
-	igraph_vector_int_init(&nbrs, 0); 
-	igraph_vector_int_init(&edges, 0);
-
-	// --- determine roots of graph --- 
-	igraph_vector_int_t degrees_view; 
-	igraph_vector_int_view(&degrees_view, degrees.GetData(), degrees.Size()); 
-	// count edges incoming to each vertex 
-	igraph_degree(&graph, &degrees_view, igraph_vss_all(), IGRAPH_IN, 0);
-	// list of nodes to visit (not including those that depend on another processor) 
-	// initialize with roots of graph 
-	std::deque<int> local, par; 
-	for (int i=0; i<degrees.Size(); i++) {
-		if (degrees[i] == 0) {
-			if (i < Ne*Nomega) {
-				local.push_back(i); 
-			} else {
-				par.push_back(i);
-			}
-		}
-	}
-
-	// mark parallel inflows as visited
-	// visit  neighbors and to queue 
-	while (not(par.empty())) {
-		const auto node = par.front();
-		par.pop_front();
-
-		if (node < Ne*Nomega) continue;
-
-		degrees[node] = -1;
-		igraph_neighbors(&graph, &nbrs, node, IGRAPH_OUT);  
-		auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
-		for (const auto &nbr : nbrs_view) {
-			if (nbr >= Ne*Nomega) continue;
-			degrees[(int)nbr] -= 1; // reduce degree since node has been visited 
-			if (degrees[(int)nbr] == 0) {
-				local.push_back(nbr); 						
-			}
-		}
-	}
-
-	// mdspan views into pre-assembled matrices 
-	auto mass_mat_view = Kokkos::mdspan(mass_matrices.GetData(), G, fes.GetNE()); 
-	auto grad_mat_view = Kokkos::mdspan(grad_matrices.GetData(), dim, fes.GetNE()); 
-	auto face_mat_view = Kokkos::mdspan(face_matrices.GetData(), mesh.GetNumFaces(), 2, 2); 
-
-	mfem::Array<int> faces, dofs, dofs2; 
-	mfem::DenseMatrix grad, A, lu; 
-	mfem::Vector rhs, sol, psi2, psi_fixup, nor(dim);
-
-	// --- do sweep --- 
-	while (not(local.empty())) {
-		// get first element of queue 
-		const auto node = local.front();
-		local.pop_front(); 
-
-		if (node >= Ne*Nomega) continue;
-
-		// --- do work --- 
-		// deconstruct angle/space id
-		const auto a = node % Nomega; 
-		const auto e = node / Nomega; 
-		const auto &Omega = quad.GetOmega(a); 
-		mfem::VectorConstantCoefficient Q(Omega); 
-		const auto &el = *fes.GetFE(e); 
-		auto &trans = *mesh.GetElementTransformation(e); 
-		fes.GetElementDofs(e, dofs); 
-		rhs.SetSize(dofs.Size()); 
-
-		// --- assemble gradient term ---
-		grad.SetSize(dofs.Size()); 
-		grad = 0.0; 
-		for (auto d=0; d<dim; d++) {
-			grad.Add(Omega(d), *grad_mat_view(d,e)); 
-		}
-
-		// --- assemble outflow face terms --- 
-		element_to_face->GetRow(e, faces);
-		for (auto f : faces) {
-			const auto info = mesh.GetFaceInformation(f); 
-			bool keep_order = e == info.element[0].index; 
-			for (auto d=0; d<dim; d++) { nor(d) = normals(f*dim + d); }
-			if (!keep_order) nor *= -1.0; 
-			const double dot = Omega * nor; 
-			const auto idx = keep_order ? 0 : 1; 
-
-			// outflow 
-			if (dot > 0) {
-				const auto &elmat = *face_mat_view(f, idx, idx); 
-				grad.Add(dot, elmat); 
-			}
-		}
-
-		// --- assemble and solve all groups --- 
-		igraph_incident(&graph, &edges, node, IGRAPH_IN); 
-		auto edges_in_view = std::span(VECTOR(edges), igraph_vector_int_size(&edges)); 
-		for (int g=0; g<G; g++) {
-			// copy group-independent terms 
-			A = grad; 
-			// add total mass matrix for group g 
-			A.Add(1.0, *mass_mat_view(g,e)); 
-
-			// --- load source into local vector --- 
-			for (auto i=0; i<dofs.Size(); i++) { rhs[i] = source_view(g,a,dofs[i]); }
-
-			// add inflow terms to RHS 
-			for (const auto eid : edges_in_view) {
-				const auto nbr = IGRAPH_FROM(&graph, eid); 
-				const auto nbr_e = nbr / Nomega; 
-				const auto nbr_a = nbr % Nomega; 
-				const auto fid = edge_to_face_id[(int)eid]; 
-				for (auto d=0; d<dim; d++) { nor(d) = normals(fid * dim + d); }
-				const auto info = mesh.GetFaceInformation(fid); 
-				bool keep_order = e == info.element[0].index; 
-				if (!keep_order) nor *= -1.0; 
-				const double dot = Omega * nor; 
-				const auto idx = keep_order ? 0 : 1; 
-				const auto nbr_idx = (idx + 1) % 2; 
-
-				if (nbr_e == e) { // reflection 
-					const auto &elmat = *face_mat_view(fid, idx, idx); 
-					psi2.SetSize(dofs.Size()); 
-					for (auto i=0; i<dofs.Size(); i++) { psi2(i) = psi_view(g, nbr_a, dofs[i]); }
-					elmat.AddMult(psi2, rhs, -dot);
-				} 
-
-				else { // inflow from neighbor
-					const auto &elmat = *face_mat_view(fid, idx, nbr_idx); 
-					// face neighbor data 
-					if (info.IsShared()) {
-						fes.GetFaceNbrElementVDofs(nbr_e-Ne, dofs2); 
-						psi2.SetSize(dofs2.Size()); 
-						// for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_fnbr_view(g, a, dofs2[i]); }
-						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_fnbr(a + g*Nomega + Nomega*G*dofs2[i]); }
-					}
-					// local data 
-					else {
-						fes.GetElementDofs(nbr_e, dofs2); 
-						psi2.SetSize(dofs2.Size()); 
-						for (int i=0; i<dofs2.Size(); i++) { psi2(i) = psi_view(g, a, dofs2[i]); }						
-					}
-					elmat.AddMult(psi2, rhs, -dot); 
-				}
-			}
-
-			if (is_time_dependent) {
-				A.Add(time_absorption, *time_mass_matrices[e]);
-			}
-			// solve, solution overwritten into rhs, matrix is modified 
-			lu = A; 
-			sol = rhs; 
-			mfem::LinearSolve(lu, sol.GetData()); 
-
-			if (fixup_op and apply_fixup) {
-				const bool applied = fixup_op->Apply(A, rhs, sol);
-				if (fixup_monitor and applied) (*fixup_monitor)(e + g*fes.GetNE())++;
-			} 
-
-			// scatter back 
-			for (int i=0; i<dofs.Size(); i++) { psi_view(g, a, dofs[i]) = sol(i); }
-		}
-
-		// --- compute next + send data to other processors --- 
-		degrees[node] = -1; // already visited 
-		// get neighbors 
-		igraph_neighbors(&graph, &nbrs, node, IGRAPH_OUT);  
-		auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 
-		for (const auto &nbr : nbrs_view) {
-			degrees[(int)nbr] -= 1; // reduce degree since node has been visited 
-			if (degrees[(int)nbr] == 0) {
-				local.push_back(nbr); 						
-			}					
-		}
-	}
-
-	const_cast<ParallelBlockJacobiSweepOperator&>(*this).Exchange(psi);
-
-	igraph_vector_int_destroy(&nbrs);
-	igraph_vector_int_destroy(&edges);
-
-	timer.Stop();
-	TimingLog.Log("sweep", timer.RealTime());
-
-	if (rank==0) EventLog.Register("sweeps");
-}
-
-void ParallelBlockJacobiSweepOperator::Exchange(const mfem::Vector &psi)
-{
-	const auto dim = mesh.Dimension(); 
-	const auto Ne = mesh.GetNE(); 
-	const auto Nomega = quad.Size(); 
-	const auto G = psi_ext.extent(0); 
-
-	TransportVectorView psi_view(psi.GetData(), psi_ext); 
-	if (fes.GetFaceNbrVSize() > 0) {
-		int *send_offset = fes.send_face_nbr_ldof.GetI(); 
-		const int *d_send_offset = fes.send_face_nbr_ldof.GetJ(); 
-		int *recv_offset = fes.face_nbr_ldof.GetI(); 
-		MPI_Comm comm = fes.GetComm(); 
-		const int num_face_nbrs = mesh.GetNFaceNeighbors(); 
-
-		// load data into send buffer 
-		const auto num_send_dofs = fes.send_face_nbr_ldof.Size_of_connections(); 
-		mfem::Vector send_buffer(num_send_dofs * G * Nomega); 
-		for (int i=0; i<fes.send_face_nbr_ldof.Size_of_connections(); i++) {
-			for (int g=0; g<G; g++) {
-				for (int a=0; a<Nomega; a++) {
-					send_buffer(a + g*Nomega + Nomega*G*i) = psi_view(g,a,d_send_offset[i]); 
-				}
-			}
-		}
-
-		auto *requests = new MPI_Request[2*num_face_nbrs]; 
-		auto *send_requests = requests; 
-		auto *recv_requests = requests + num_face_nbrs; 
-		auto *statuses = new MPI_Status[num_face_nbrs]; 
-		for (int fn=0; fn<num_face_nbrs; fn++) {
-			const int nbr_rank = mesh.GetFaceNbrRank(fn); 
-			int tag = 0; 
-			MPI_Isend(&send_buffer.GetData()[send_offset[fn]*G*Nomega], 
-				(send_offset[fn+1] - send_offset[fn])*G*Nomega, MPI_DOUBLE, 
-				nbr_rank, tag, comm, &send_requests[fn]); 
-			MPI_Irecv(&psi_fnbr.GetData()[recv_offset[fn]*G*Nomega], 
-				(recv_offset[fn+1] - recv_offset[fn])*G*Nomega,
-				MPI_DOUBLE, nbr_rank, tag, comm, &recv_requests[fn]); 
-		}
-		MPI_Waitall(num_face_nbrs, send_requests, statuses); 
-		MPI_Waitall(num_face_nbrs, recv_requests, statuses); 
-		delete[] requests; delete[] statuses; 
 	}
 }
 

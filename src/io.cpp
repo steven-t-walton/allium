@@ -733,9 +733,13 @@ void SetSweepOptions(sol::table &table, InverseAdvectionOperator &Linv, bool roo
 	for (const auto &it : table) {
 		auto key = it.first.as<std::string>(); 
 		ValidateOption<std::string>("sweep", key, 
-			{"write_graph", "send_buffer_size", "max_sends_per_recv"}, 
+			{"write_graph", "send_buffer_size", "max_sends_per_recv", "parallel_block_jacobi", "num_pbj_sweeps"}, 
 			root); 
 	}
+	bool pbj = table["parallel_block_jacobi"].get_or(false);
+	int num_pbj_sweeps = table["num_pbj_sweeps"].get_or(1);
+	Linv.UseParallelBlockJacobi(pbj);
+	if (pbj) Linv.SetNumPBJSweeps(num_pbj_sweeps);
 	bool write_graph = table["write_graph"].get_or(false); 
 	if (write_graph) 
 		Linv.WriteGraphToDot("graph"); 
