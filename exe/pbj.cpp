@@ -71,10 +71,10 @@ int main(int argc, char *argv[]) {
 		bc_map[attr] = INFLOW;
 	}
 
-	ParallelBlockJacobiSweepOperator Linv(fes, quad, total, bc_map, 7);
+	InverseAdvectionOperator Linv(fes, quad, total, bc_map, 7);
+	Linv.UseParallelBlockJacobi(true);
 	Linv.WriteGlobalGraphToDot("graph");
 	Linv.Exchange(psi);
-	// InverseAdvectionOperator Linv(fes, quad, total, bc_map, 7);
 
 	ConstantPhaseSpaceCoefficient inflow_coef(1.0);
 	ConstantPhaseSpaceCoefficient source_coef(0.0);
@@ -98,8 +98,8 @@ int main(int argc, char *argv[]) {
 	out << YAML::Key << "time" << YAML::Value << io::FormatScientific(timer.RealTime());
 	out << YAML::EndMap << YAML::Newline; 
 
-	// mfem::VisItDataCollection dc("solution", &mesh);
-	// mfem::ParGridFunction gf(&fes, psi, 0);
-	// dc.RegisterField("psi", &gf);
-	// dc.Save();
+// 	mfem::VisItDataCollection dc("solution", &mesh);
+// 	mfem::ParGridFunction gf(&fes, psi, 0);
+// 	dc.RegisterField("psi", &gf);
+// 	dc.Save();
 }
