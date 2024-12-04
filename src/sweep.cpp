@@ -4,7 +4,6 @@
 #include "log.hpp"
 #include "lumping.hpp"
 #include "multigroup.hpp"
-#include "mem_pool.hpp"
 #include <list>
 #include <omp.h>
 
@@ -335,10 +334,9 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 	// when it has buffer issues and requires 
 	// the receiver to post a MPI_Recv before send 
 	// can complete 
-	auto pool = DynamicPoolAllocator::Get();
 	struct SentMessage {
 		MPI_Request request; 
-		UmpireUniquePtr<char> buffer;
+		mfem::Array<char> buffer;
 	};
 	std::deque<SentMessage> sent_messages;
 
@@ -525,7 +523,7 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 				}
 
 				buffer_size *= G; 
-				UmpireVector data_buffer(buffer_size, pool);
+				mfem::Vector data_buffer(buffer_size);
 				// assert(par_data_buffer.Size() >= buffer_size); 
 				int idx = 0;
 				for (auto n : nodes) {
@@ -552,8 +550,8 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 				const int elems_size = nodes.size();
 				// +2 for meta data describing size of int and double arrays 
 				const int pack_size = sizeof(int)*(elems_size+2) + sizeof(double)*buffer_size;
-				message.buffer = CreateUmpireUniquePtr<char>(pack_size, pool);
-				auto *buffer_ptr = message.buffer.get();
+				message.buffer.SetSize(pack_size);
+				auto *buffer_ptr = message.buffer.GetData();
 				MPI_Pack(&elems_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
 				MPI_Pack(&buffer_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
 				MPI_Pack(nodes.data(), nodes.size(), MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
@@ -577,26 +575,26 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 			// get the size of the packed buffer 
 			int buffer_size, node_count, data_count, loc = 0;
 			MPI_Get_count(&status, MPI_PACKED, &buffer_size);
-			auto recv_buffer = CreateUmpireUniquePtr<char>(buffer_size, pool);
+			mfem::Array<char> recv_buffer(buffer_size);
 
 			// get the packed message 
-			MPI_Recv(recv_buffer.get(), buffer_size, MPI_PACKED, source, 
+			MPI_Recv(recv_buffer.GetData(), buffer_size, MPI_PACKED, source, 
 				tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
 			// unpack number of elements 
-			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, &node_count, 1, MPI_INT, MPI_COMM_WORLD);
+			MPI_Unpack(recv_buffer.GetData(), buffer_size, &loc, &node_count, 1, MPI_INT, MPI_COMM_WORLD);
 			// unpack number of doubles 
-			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, &data_count, 1, MPI_INT, MPI_COMM_WORLD);
+			MPI_Unpack(recv_buffer.GetData(), buffer_size, &loc, &data_count, 1, MPI_INT, MPI_COMM_WORLD);
 
 			// store elements and data 
-			UmpireArray<int> node_buffer(node_count, pool);
-			UmpireVector data_buffer(data_count, pool);
+			mfem::Array<int> node_buffer(node_count);
+			mfem::Vector data_buffer(data_count);
 
 			// unpack the list of elements 
-			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, 
+			MPI_Unpack(recv_buffer.GetData(), buffer_size, &loc, 
 				node_buffer.GetData(), node_count, MPI_INT, MPI_COMM_WORLD);
 			// unpack the data 
-			MPI_Unpack(recv_buffer.get(), buffer_size, &loc, 
+			MPI_Unpack(recv_buffer.GetData(), buffer_size, &loc, 
 				data_buffer.GetData(), data_count, MPI_DOUBLE, MPI_COMM_WORLD);
 
 			const auto fn = proc_to_fn.at(source); 
