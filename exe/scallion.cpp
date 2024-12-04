@@ -25,6 +25,7 @@
 #include "coefficient.hpp"
 #include "linalg.hpp"
 #include "fixed_point.hpp"
+#include "utils.hpp"
 
 class ScallionInnerSolverMonitor : public mfem::IterativeSolverMonitor
 {
@@ -400,7 +401,16 @@ int main(int argc, char *argv[]) {
 	const auto dim = ser_mesh.Dimension(); 
 
 	// --- create parallel mesh --- 
-	mfem::ParMesh mesh(MPI_COMM_WORLD, ser_mesh); 
+	sol::optional<int> part_type = mesh_node["partitioning"];
+	int *partitioning = nullptr;
+	if (part_type and part_type.value() > 1) {
+		mfem::Array<int> attrs(nattr); 
+		for (int i=0; i<nattr; i++) { attrs[i] = i+1; }
+		PWOpacityCoefficient total_coef(attrs, total_list); 
+		VectorComponentSumCoefficient total(total_coef);
+		partitioning = utils::GenerateMetisPartitioning(ser_mesh, mfem::Mpi::WorldSize(), total, part_type.value());
+	}
+	mfem::ParMesh mesh(MPI_COMM_WORLD, ser_mesh, partitioning); 
 	par_ref += mesh_node["parallel_refinements"].get_or(0); 
 	for (int pr=0; pr<par_ref; pr++) {
 		mesh.UniformRefinement(); 
@@ -670,6 +680,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "faces" << YAML::Value << IsFaceLumped(lump); 
 	out << YAML::EndMap; 
 	if (sweep_opts_avail) out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value(); 
+	if (Linv.IsParallelBlockJacobi()) Linv.Exchange(psi);
 
 	std::unique_ptr<io::NegativeFluxFixup> nff;
 	sol::optional<sol::table> fixup_avail = driver["fixup"]; 
@@ -1393,6 +1404,7 @@ int main(int argc, char *argv[]) {
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_base_list[i]; }
+	delete[] partitioning;
 
 	wall_timer.Stop(); 
 	double wall_time = wall_timer.RealTime(); 
