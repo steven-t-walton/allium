@@ -1,26 +1,24 @@
 #include "fixup.hpp"
-#include "log.hpp"
 
-bool ZeroFixupOperator::Apply(const mfem::DenseMatrix &A, const mfem::Vector &rhs, mfem::Vector &solution) const
+int ZeroFixupOperator::Apply(const mfem::DenseMatrix &A, const mfem::Vector &rhs, mfem::Vector &solution) const
 {
-	bool applied = false;
+	int applied = 0;
 	for (auto &x : solution) {
 		if (x <= minimum_solution) {
 			x = minimum_solution; 
-			applied = true;
+			applied = 1;
 		}
 	}
-	if (applied) EventLog.Register("fixup applied");
 	return applied;
 }
 
-bool ZeroAndScaleFixupOperator::Apply(const mfem::DenseMatrix &A, 
+int ZeroAndScaleFixupOperator::Apply(const mfem::DenseMatrix &A, 
 	const mfem::Vector &rhs, mfem::Vector &solution) const 
 {
 	const auto norm = solution.Norml2();
 	const auto rel_min = minimum_solution * norm;
 	if (solution.Min() > minimum_solution) {
-		return false; 
+		return 0; 
 	}
 
 	const int height = A.Height();
@@ -44,7 +42,7 @@ bool ZeroAndScaleFixupOperator::Apply(const mfem::DenseMatrix &A,
 	const double original_balance = rhs.Sum();
 	const double new_balance = weights * solution;
 	if (original_balance < 0.0 or new_balance < 0.0) {
-		EventLog.Register("fixup failed");
+		return -1;
 	}
 
 	else if (original_balance == 0.0 or new_balance == 0.0) {
@@ -53,18 +51,17 @@ bool ZeroAndScaleFixupOperator::Apply(const mfem::DenseMatrix &A,
 
 	else {
 		solution *= (original_balance/new_balance); 
-		EventLog.Register("fixup applied");
 	}
 
-	return true;
+	return 1;
 }
 
-bool LocalOptimizationFixupOperator::Apply(const mfem::DenseMatrix &A, 
+int LocalOptimizationFixupOperator::Apply(const mfem::DenseMatrix &A, 
 	const mfem::Vector &rhs, mfem::Vector &solution) const 
 {
 	const double original_balance = rhs.Sum();
 	if (solution.Min() > minimum_solution or original_balance <= minimum_solution) {
-		return false; 
+		return 0; 
 	}
 
 	const int height = A.Height();
@@ -83,18 +80,17 @@ bool LocalOptimizationFixupOperator::Apply(const mfem::DenseMatrix &A,
 	source = solution;
 	opt.Mult(source, solution); 
 	if (opt.GetConverged()) {
-		EventLog.Register("fixup applied");
+		return 1;
 	} else {
-		EventLog.Register("fixup failed");
+		return -1;
 	}
-	return true;
+	return 1;
 }
 
-bool RyosukeFixupOperator::Apply(const mfem::DenseMatrix &A, const mfem::Vector &rhs, mfem::Vector &solution) const
+int RyosukeFixupOperator::Apply(const mfem::DenseMatrix &A, const mfem::Vector &rhs, mfem::Vector &solution) const
 {
 	const auto sz = solution.Size(); 
-	const auto count = perform_nff(sz, solution.GetData(), A.GetData(), rhs.GetData());
-	return count > 0;
+	return perform_nff(sz, solution.GetData(), A.GetData(), rhs.GetData());
 }
 
 unsigned RyosukeFixupOperator::perform_nff(unsigned sz, double *x, double *A, double *b) const
@@ -170,9 +166,9 @@ unsigned RyosukeFixupOperator::perform_nff(unsigned sz, double *x, double *A, do
 		}
 	}
 	if (rebalance_fail) {
-		EventLog.Register("rebalance failed");
+		return -1;
 	} else {
-		EventLog.Register("fixup applied");
+		return 1;
 	}
 
 	return 1;

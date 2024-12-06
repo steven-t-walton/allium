@@ -357,6 +357,7 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 	mfem::Array<int> faces, dofs_thread, dofs2; 
 	igraph_vector_int_t edges;
 	igraph_vector_int_init(&edges, 0);
+	int fixup_success = 0, fixup_failed = 0;
 
 	while (nsweep < Ne*Nomega) {
 		const auto wave_front_size = local.size();
@@ -462,7 +463,9 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 				mfem::LinearSolve(lu, sol.GetData()); 
 
 				if (fixup_op and apply_fixup) {
-					const bool applied = fixup_op->Apply(A, rhs, sol);
+					const auto applied = fixup_op->Apply(A, rhs, sol);
+					if (applied==1) fixup_success++;
+					else if (applied == -1) fixup_failed++;
 					if (fixup_monitor and applied) (*fixup_monitor)(e + g*fes.GetNE())++;
 				} 
 
@@ -641,6 +644,11 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 		} // end omp single 
 	}
 	// clean up thread data 
+	#pragma omp critical 
+	{
+		EventLog.Log("fixup applied", fixup_success);
+		EventLog.Log("fixup failed", fixup_failed);		
+	}
 	igraph_vector_int_destroy(&edges); 
 	} // end omp parallel 
 	
@@ -694,7 +702,7 @@ void InverseAdvectionOperator::Mult_BlockJacobi(const mfem::Vector &source, mfem
 		igraph_neighbors(&graph, &nbrs, i, IGRAPH_OUT); 
 		auto nbrs_view = std::span(VECTOR(nbrs), igraph_vector_int_size(&nbrs)); 		
 		for (const auto &nbr : nbrs_view) {
-			if (nbr < Ne*Nomega) degrees[nbr]--;
+			if (nbr < Ne*Nomega) degrees[(int)nbr]--;
 		}
 	}
 	std::deque<int> local; 
@@ -1083,7 +1091,7 @@ void InverseAdvectionOperator::WriteGlobalGraphToDot(std::string prefix) const
 			from -= Ne * Nomega;
 			const auto e = from / Nomega;
 			const auto a = from % Nomega;
-			out << "   " << fnbr_to_global[e] + a;
+			out << "   " << fnbr_to_global[(int)e] + a;
 		}
 
 		out << " -> "; 
@@ -1094,7 +1102,7 @@ void InverseAdvectionOperator::WriteGlobalGraphToDot(std::string prefix) const
 			to -= Ne * Nomega;
 			const auto e = to / Nomega;
 			const auto a = to % Nomega;
-			out << fnbr_to_global[e] + a;			
+			out << fnbr_to_global[(int)e] + a;			
 		}
 		out << ";\n";
 
