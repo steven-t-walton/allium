@@ -615,7 +615,7 @@ void DenseBlockDiagonalNonlinearSolver::Mult(const mfem::Vector &b, mfem::Vector
 		// conform to iterative solver interface 
 		if (!local_solver.GetConverged()) {
 			converged = false; 
-			EventLog["local nonlinear solve failed"]++;				
+			EventLog.Register("local nonlinear solve failed");				
 		}
 		final_iter = std::max(final_iter, local_solver.GetNumIterations()); 
 		final_norm = std::max(local_solver.GetFinalNorm(), final_norm); 

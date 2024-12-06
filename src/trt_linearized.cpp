@@ -300,7 +300,7 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 		for (int i=0; i<T.Size(); i++) {
 			double Tnew = T(i) + dT(i); 
 			if (Tnew < 0.0) {
-				EventLog["under relax"] += 1; 
+				EventLog.Register("under relax"); 
 				T(i) = T(i) + 0.05*dT(i); 
 			} else {
 				T(i) = Tnew; 

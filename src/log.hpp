@@ -14,6 +14,10 @@ enum LogOperation {
 template<LogOperation F, typename T, typename U>
 void Log(T &map, const std::string key, const U &val)
 {
+	// don't add zero 
+	if constexpr (F == LogOperation::SUM) {
+		if (val == 0) return;		
+	}
 	auto it = map.find(key);
 	if (it == map.end()) {
 		map[key] = val;
