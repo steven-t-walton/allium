@@ -336,7 +336,9 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 	// can complete 
 	struct SentMessage {
 		MPI_Request request; 
-		mfem::Array<char> buffer;
+		// for some reason Array<char> gives non-deterministic result... 
+		mfem::Memory<char> buffer; 
+		SentMessage(std::size_t size) : buffer(size) { }
 	};
 	std::deque<SentMessage> sent_messages;
 
@@ -346,19 +348,18 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 	// --- do sweep --- 
 	// vertices traversed, only count owned elements 
 	int nsweep = 0; 
+	#pragma omp parallel 
+	{
+	// persistent storage of local system 
+	mfem::DenseMatrix grad, A, lu; 
+	mfem::Vector rhs, sol, psi2, nor(dim); 
+	// place to store face ids/element, dofs/element, and dofs of neighboring elements 
+	mfem::Array<int> faces, dofs_thread, dofs2; 
+	igraph_vector_int_t edges;
+	igraph_vector_int_init(&edges, 0);
+
 	while (nsweep < Ne*Nomega) {
 		const auto wave_front_size = local.size();
-		#pragma omp parallel 
-		{
-
-		// persistent storage of local system 
-		mfem::DenseMatrix grad, A, lu; 
-		mfem::Vector rhs, sol, psi2, nor(dim); 
-		// place to store face ids/element, dofs/element, and dofs of neighboring elements 
-		mfem::Array<int> faces, dofs_thread, dofs2; 
-		igraph_vector_int_t edges;
-		igraph_vector_int_init(&edges, 0);
-
 		// --- sweep on processor-local domain --- 
 		#pragma omp for 
 		for (int sweep_idx=0; sweep_idx<wave_front_size; sweep_idx++) {
@@ -470,9 +471,8 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 			}
 		} // end wave front computation 
 
-		igraph_vector_int_destroy(&edges); 
-		} // end omp parallel 
-
+		#pragma omp single 
+		{
 		// process computed wave front
 		// find next wave front
 		nsweep += wave_front_size;
@@ -537,27 +537,25 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 					}
 				}
 
+				const int elems_size = nodes.size();
+				// +2 for meta data describing size of int and double arrays 
+				const int pack_size = sizeof(int)*(elems_size+2) + sizeof(double)*buffer_size;
+
 				// pack nodes and par_data_buffer into a single 
 				// byte array so that only one message is sent per 
 				// face neighbor 
 				// the packed message is prepended by the integer number 
 				// of elements being sent and the integer number of doubles 
 				// being sent 
-				sent_messages.emplace_back();
-				auto &message = sent_messages.back();
+				auto &message = sent_messages.emplace_back(pack_size);
 
 				int loc = 0;
-				const int elems_size = nodes.size();
-				// +2 for meta data describing size of int and double arrays 
-				const int pack_size = sizeof(int)*(elems_size+2) + sizeof(double)*buffer_size;
-				message.buffer.SetSize(pack_size);
-				auto *buffer_ptr = message.buffer.GetData();
-				MPI_Pack(&elems_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
-				MPI_Pack(&buffer_size, 1, MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
-				MPI_Pack(nodes.data(), nodes.size(), MPI_INT, buffer_ptr, pack_size, &loc, MPI_COMM_WORLD);
-				MPI_Pack(data_buffer.GetData(), buffer_size, MPI_DOUBLE, buffer_ptr, 
+				MPI_Pack(&elems_size, 1, MPI_INT, message.buffer, pack_size, &loc, MPI_COMM_WORLD);
+				MPI_Pack(&buffer_size, 1, MPI_INT, message.buffer, pack_size, &loc, MPI_COMM_WORLD);
+				MPI_Pack(nodes.data(), nodes.size(), MPI_INT, message.buffer, pack_size, &loc, MPI_COMM_WORLD);
+				MPI_Pack(data_buffer.GetData(), buffer_size, MPI_DOUBLE, message.buffer, 
 					pack_size, &loc, MPI_COMM_WORLD);
-				MPI_Isend(buffer_ptr, loc, MPI_PACKED, nbr_rank, message_count++, MPI_COMM_WORLD, &message.request);
+				MPI_Isend(message.buffer, loc, MPI_PACKED, nbr_rank, message_count++, MPI_COMM_WORLD, &message.request);
 			}
 			send_list.SetSize(0); // set size to 0, keeps capacity from reserve call above 
 		}
@@ -575,27 +573,29 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 			// get the size of the packed buffer 
 			int buffer_size, node_count, data_count, loc = 0;
 			MPI_Get_count(&status, MPI_PACKED, &buffer_size);
-			mfem::Array<char> recv_buffer(buffer_size);
+			mfem::Memory<char> recv_buffer(buffer_size);
 
 			// get the packed message 
-			MPI_Recv(recv_buffer.GetData(), buffer_size, MPI_PACKED, source, 
+			MPI_Recv(recv_buffer, buffer_size, MPI_PACKED, source, 
 				tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
 			// unpack number of elements 
-			MPI_Unpack(recv_buffer.GetData(), buffer_size, &loc, &node_count, 1, MPI_INT, MPI_COMM_WORLD);
+			MPI_Unpack(recv_buffer, buffer_size, &loc, &node_count, 1, MPI_INT, MPI_COMM_WORLD);
 			// unpack number of doubles 
-			MPI_Unpack(recv_buffer.GetData(), buffer_size, &loc, &data_count, 1, MPI_INT, MPI_COMM_WORLD);
+			MPI_Unpack(recv_buffer, buffer_size, &loc, &data_count, 1, MPI_INT, MPI_COMM_WORLD);
 
 			// store elements and data 
 			mfem::Array<int> node_buffer(node_count);
 			mfem::Vector data_buffer(data_count);
 
 			// unpack the list of elements 
-			MPI_Unpack(recv_buffer.GetData(), buffer_size, &loc, 
+			MPI_Unpack(recv_buffer, buffer_size, &loc, 
 				node_buffer.GetData(), node_count, MPI_INT, MPI_COMM_WORLD);
 			// unpack the data 
-			MPI_Unpack(recv_buffer.GetData(), buffer_size, &loc, 
+			MPI_Unpack(recv_buffer, buffer_size, &loc, 
 				data_buffer.GetData(), data_count, MPI_DOUBLE, MPI_COMM_WORLD);
+
+			recv_buffer.Delete();
 
 			const auto fn = proc_to_fn.at(source); 
 			int buffer_idx = 0; 
@@ -630,32 +630,34 @@ void InverseAdvectionOperator::Mult_Upwind(const mfem::Vector &source, mfem::Vec
 		}
 
 		// clear sent buffers if message has been recvd 
-		int ready;
-		for (auto it=sent_messages.begin(); it != sent_messages.end(); ) {
-			// if recvd, remove from list 
-			MPI_Test(&it->request, &ready, MPI_STATUS_IGNORE);
+		std::erase_if(sent_messages, [](SentMessage &message){
+			int ready; 
+			MPI_Test(&message.request, &ready, MPI_STATUS_IGNORE); 
 			if (ready) {
-				it = sent_messages.erase(it);
+				message.buffer.Delete();
 			}
-			// else keep it around 
-			// until it is recvd 
-			else
-				it++;
-		}
+			return (ready) ? true : false; 
+		});
+		} // end omp single 
 	}
+	// clean up thread data 
+	igraph_vector_int_destroy(&edges); 
+	} // end omp parallel 
+	
 	// clean up data 
 	igraph_vector_int_destroy(&nbrs); 
 
 	// use barrier to avoid tag clash? 
 	MPI_Barrier(MPI_COMM_WORLD); 
 
+	for (auto &message : sent_messages) {
+		message.buffer.Delete();
+	}
+
 	timer.Stop();
 	TimingLog.Log("sweep", timer.RealTime());
 
 	if (rank==0) EventLog.Register("sweeps");
-
-	// sent_messages going out of scope 
-	// automatically deallocates any remaining buffers 
 }
 
 void InverseAdvectionOperator::Mult_BlockJacobi(const mfem::Vector &source, mfem::Vector &psi) const
