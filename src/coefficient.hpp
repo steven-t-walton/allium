@@ -1,6 +1,7 @@
 #pragma once 
 
 #include "mfem.hpp"
+#include "constants.hpp"
 
 class MatrixTransposeVectorProductCoefficient : public mfem::VectorCoefficient
 {
@@ -95,5 +96,19 @@ public:
 	{
 		coef.Eval(eval, trans, ip);
 		return eval.Sum();
+	}
+};
+
+class RadiationTemperatureCoefficient : public mfem::Coefficient
+{
+private:
+	mfem::Coefficient &radE; 
+public:
+	RadiationTemperatureCoefficient(mfem::Coefficient &radE) : radE(radE) { }
+	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override
+	{
+		const double E = radE.Eval(trans, ip); 
+		const double Ehat = std::max(E, 1e-10);
+		return std::pow(Ehat, 0.25) / constants::RadiationConstant; 
 	}
 };

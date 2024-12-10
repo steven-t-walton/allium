@@ -421,6 +421,8 @@ int main(int argc, char *argv[]) {
 	io::PrintMeshCharacteristics(out, mesh, ser_ref, par_ref);
 	out << YAML::EndMap; // end mesh map 
 
+	io::PrintParallelInformation(out, MPI_COMM_WORLD);
+
 	// --- load algorithmic parameters --- 
 	sol::table driver = lua["driver"]; 
 	const int log_verbosity = driver["log_verbosity"].get_or(1);
@@ -574,7 +576,9 @@ int main(int argc, char *argv[]) {
 	mfem::ParGridFunction F(&vfes, moments, fes.GetVSize());
 
 	// piecewise constant temperature 
-	mfem::ParGridFunction Tpw(&fes0); 
+	mfem::ParGridFunction Tpw(&fes0), Epw(&fes0), Trad(&fes0); 
+	mfem::GridFunctionCoefficient Epw_coef(&Epw);
+	RadiationTemperatureCoefficient Trad_coef(Epw_coef);
 
 	// --- load initial conditions ---
 	// two options are supported
@@ -620,6 +624,8 @@ int main(int argc, char *argv[]) {
 		ProjectPsi(fes, *quad, energy_grid, planck_coef, psi0);
 		psi = psi0;
 	}
+	Epw.ProjectGridFunction(E);
+	Trad.ProjectCoefficient(Trad_coef);
 
 	// initial opacity 
 	total_coef.SetTemperature(Tcoef); 
@@ -1104,8 +1110,10 @@ int main(int argc, char *argv[]) {
 			const bool restart_mode = viz["restart_mode"].get_or(false) and restart_table_avail;
 			dc->SetPrecision(precision); 
 			dc->RegisterField("E", &E); 
+			dc->RegisterField("Epw", &Epw);
 			dc->RegisterField("F", &F);
 			dc->RegisterField("T", &T); 
+			dc->RegisterField("Trad", &Trad); 
 			dc->RegisterField("Tpw", &Tpw); 
 			dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
 			dc->RegisterField("sigmaE", &totalE.GetGridFunction());
@@ -1247,6 +1255,8 @@ int main(int argc, char *argv[]) {
 		// get peicewise constant version of temperature 
 		// used for comparison to other codes 
 		Tpw.ProjectGridFunction(T); 
+		Epw.ProjectGridFunction(E);
+		Trad.ProjectCoefficient(Trad_coef);
 
 		// --- update time step info --- 
 		time += time_step; 
