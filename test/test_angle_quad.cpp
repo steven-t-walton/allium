@@ -132,3 +132,12 @@ TEST(AbuShumays, Quadratic) {
 		EXPECT_NEAR(val, 4*M_PI, 1e-11); 				
 	}
 }
+
+TEST(ChebyshevLegendre, Quadratic) {
+	auto f = [](const mfem::Vector &Omega) {
+		return 2*Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
+	}; 
+	ChebyshevLegendreQuadrature quad(4,4, 2);
+	double val = Integrate(quad, f); 
+	EXPECT_NEAR(val, 4*M_PI, 1e-11); 				
+}

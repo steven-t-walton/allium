@@ -30,6 +30,11 @@ public:
 	AbuShumaysQuadrature(int _order, int _dim); 
 };
 
+class ChebyshevLegendreQuadrature : public AngularQuadrature {
+public:
+	ChebyshevLegendreQuadrature(int cheb, int leg, int dim); 
+};
+
 class SingleAngleQuadratureRule : public AngularQuadrature {
 public:
 	SingleAngleQuadratureRule(const AngularQuadrature &rule, int angle)
