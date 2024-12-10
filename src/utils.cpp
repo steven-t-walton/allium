@@ -34,6 +34,8 @@ int *GenerateMetisPartitioning(mfem::Mesh &mesh, int nparts, mfem::Coefficient &
 		std::sort(J+I[i], J+I[i+1], std::greater<int>());
 	}
 
+	if (method < 0 or method > 3) MFEM_ABORT("bad method");
+
 	mfem::Array<int> edge_weights_int(connectivity.Size_of_connections());
 	if (method & 1) {
 		mfem::Vector edge_weights(connectivity.Size_of_connections());
