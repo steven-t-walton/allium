@@ -476,18 +476,10 @@ int main(int argc, char *argv[]) {
 	PWPhaseSpaceCoefficient inflow(battrs, inflow_list); 
 
 	// --- angular quadrature rule --- 
-	const int sn_order = driver["sn_order"]; 
-	const std::string sn_type = io::GetAndValidateOption(driver, "sn_quadrature_type", 
-		{"level symmetric", "abu shumays", "chebyshev-legendre"}, "level symmetric", root); 
-	std::unique_ptr<AngularQuadrature> quad; 
-	if (sn_type == "level symmetric") {
-		quad = std::make_unique<LevelSymmetricQuadrature>(sn_order, dim); 
-	} 
-	else if (sn_type == "abu shumays") {
-		quad = std::make_unique<AbuShumaysQuadrature>(sn_order, dim); 
-	} else if (sn_type == "chebyshev-legendre") {
-		quad = std::make_unique<ChebyshevLegendreQuadrature>(4,4, dim);
-	}
+	sol::optional<sol::table> sn_table_avail = lua["sn"]; 
+	if (!sn_table_avail) MFEM_ABORT("must define angular quadrature table");
+	sol::table sn_table = sn_table_avail.value();
+	auto quad = std::unique_ptr<AngularQuadrature>(io::CreateAngularQuadrature(sn_table, out, dim, root));
 	const auto Nomega = quad->Size(); 
 
 	// size of psi 
@@ -523,9 +515,6 @@ int main(int argc, char *argv[]) {
 	out << YAML::Key << "driver" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "fe order" << YAML::Value << fe_order; 
 		out << YAML::Key << "opacity fe order" << YAML::Value << sigma_fe_order; 
-		out << YAML::Key << "sn order" << YAML::Value << sn_order; 
-		out << YAML::Key << "sn quadrature type" << YAML::Value << sn_type; 
-		out << YAML::Key << "num angles" << YAML::Value << Nomega; 			
 		out << YAML::Key << "basis type" << YAML::Value << basis_type_str; 
 		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
 		out << YAML::Key << "time integration" << YAML::Value << YAML::BeginMap; 

@@ -419,6 +419,48 @@ void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, i
 	out << YAML::EndMap; 
 }
 
+AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out, int dim, bool root)
+{
+	std::string type = table["type"]; 
+	ValidateOption<std::string>("sn quadrature type", type, 
+		{"legendre", "level symmetric", "abu shumays", "chebyshev-legendre"}, root);
+	AngularQuadrature *quad;
+	const int order = table["order"];
+	if (dim==1) type = "legendre";
+
+	out << YAML::Key << "sn quadrature" << YAML::Value << YAML::BeginMap; 
+	out << YAML::Key << "type" << YAML::Value << type; 
+	out << YAML::Key << "order" << YAML::Key << order; 
+
+	if (type == "legendre") {
+		quad = new LegendreQuadrature(order, dim); 
+	}
+
+	else if (type == "level symmetric") {
+		quad = new LevelSymmetricQuadrature(order, dim); 
+	}
+
+	else if (type == "abu shumays") {
+		quad = new AbuShumaysQuadrature(order, dim); 
+	}
+
+	else if (type == "chebyshev-legendre") {
+		const bool tri = table["triangular"].get_or(false);
+		if (tri) {
+			out << YAML::Key << "azimuthal order" << YAML::Value << "triangular";
+			quad = new TriangularChebyshevLegendreQuadrature(order, dim);
+		}
+		else {
+			const int az_order = table["azimuthal_order"].get_or(order); 
+			out << YAML::Key << "azimuthal order" << YAML::Value << az_order;
+			quad = new ChebyshevLegendreQuadrature(order, az_order, dim);
+		}
+	}
+	out << YAML::Key << "number of angles" << YAML::Key << quad->Size(); 
+	out << YAML::EndMap;
+	return quad;
+}
+
 void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm)
 {
 	int ranks, threads; 

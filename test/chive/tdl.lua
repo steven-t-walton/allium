@@ -28,9 +28,13 @@ mesh = {
 	extents = {1,1}
 }
 
+sn = {
+	type = "level symmetric", 
+	order = 4
+}
+
 driver = {
 	fe_order = 1, 
-	sn_order = 4, 
 	solver = {
 		type = "sli", 
 		abstol = 1e-6, 

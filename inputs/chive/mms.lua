@@ -61,9 +61,13 @@ mesh = {
 	extents = {1,1} 
 }
 
+sn = {
+	type = "level symmetric", 
+	order = 20
+}
+
 driver = {
 	fe_order = 1, 
-	sn_order = 20, 
 	solver = {
 		type = "fp", 
 		abstol = 1e-10, 

@@ -67,9 +67,13 @@ cg_solver = {
 	iterative_mode = false,
 }
 
+sn = {
+	type = "level symmetric", 
+	order = 8
+}
+
 driver = {
 	fe_order = 1, 
-	sn_order = 8,
 	basis_type = "lobatto",
 	solver = {
 		type = "gmres", 

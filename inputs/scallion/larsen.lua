@@ -3,6 +3,11 @@ mesh = {
 	extents = {4}, 
 }
 
+sn = {
+	type = "level symmetric", 
+	order = 6
+}
+
 energy = {
 	min = 1e-2, 
 	max = 1e6, 
@@ -120,7 +125,6 @@ driver = {
 	fe_order = 1, 
 	sigma_fe_order = 0, 
 	gray_sigma_fe_order = 1,
-	sn_order = 6, 
 	basis_type = "lobatto", 
 	solver = linearized,
 	lump = 7, 

@@ -20,6 +20,11 @@ private:
 	int GetIndexForAngle(const mfem::Vector &angle) const; 
 };
 
+class LegendreQuadrature : public AngularQuadrature {
+public:
+	LegendreQuadrature(int order, int dim); 
+};
+
 class LevelSymmetricQuadrature : public AngularQuadrature {
 public:
 	LevelSymmetricQuadrature(int _order, int _dim); 
@@ -33,6 +38,11 @@ public:
 class ChebyshevLegendreQuadrature : public AngularQuadrature {
 public:
 	ChebyshevLegendreQuadrature(int cheb, int leg, int dim); 
+};
+
+class TriangularChebyshevLegendreQuadrature : public AngularQuadrature {
+public:
+	TriangularChebyshevLegendreQuadrature(int leg, int dim); 
 };
 
 class SingleAngleQuadratureRule : public AngularQuadrature {

@@ -3,6 +3,11 @@ mesh = {
 	extents = {0.25}, 
 }
 
+sn = {
+	type = "level symmetric", 
+	order = 6
+}
+
 function initial_condition(x,y,z)
 	return 0.025
 end 
@@ -98,7 +103,6 @@ linearized = {
 driver = {
 	fe_order = 1, 
 	sigma_fe_order = 0, 
-	sn_order = 6, 
 	basis_type = "lobatto", 
 	lump = 7, 
 	fixup = {

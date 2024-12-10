@@ -70,9 +70,13 @@ amg_opts = {
 	interpolation = 0
 }
 
+sn = {
+	type = "level symmetric", 
+	order = 12
+}
+
 driver = {
 	fe_order = 1, 
-	sn_order = 12,
 	basis_type = "lobatto",
 	solver = {
 		type = "sli", 

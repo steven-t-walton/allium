@@ -8,6 +8,7 @@
 #include "opacity.hpp"
 #include "sweep.hpp"
 #include "fixup.hpp"
+#include "angular_quadrature.hpp"
 
 namespace io 
 {
@@ -98,6 +99,8 @@ void SetMeshAttributes(mfem::Mesh &mesh, std::function<std::string(double,double
 void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f, 
 	const std::unordered_map<std::string,int> &map, bool root=true);
 void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, int pr);
+
+AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out, int dim, bool root=true);
 
 void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm); 
 

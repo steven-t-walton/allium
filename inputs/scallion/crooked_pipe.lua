@@ -71,6 +71,11 @@ mesh = {
 	parallel_refinements = 0,
 }
 
+sn = {
+	type = "level symmetric", 
+	order = 6
+}
+
 picard = {
 	type = "picard", 
 	nonlinear_solver = {
@@ -123,7 +128,6 @@ linearized = {
 driver = {
 	fe_order = 1, 
 	sigma_fe_order = 0, 
-	sn_order = 6, 
 	basis_type = "lobatto", 
 	solver = linearized, 
 	lump = 7, 

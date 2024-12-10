@@ -17,7 +17,7 @@ TEST(AngularQuadrature, isotropic) {
 		return 1; 
 	}; 
 
-	for (auto d=1; d<4; d++) {
+	for (auto d=2; d<4; d++) {
 		for (auto order=2; order<25; order+=2) {
 			LevelSymmetricQuadrature quad(order,d); 
 			double val = Integrate(quad, f); 
@@ -42,7 +42,7 @@ TEST(AngularQuadrature, quadratic) {
 
 TEST(AngularQuadrature, NPoints1D) {
 	for (auto order=2; order<25; order+=2) {
-		LevelSymmetricQuadrature quad(order, 1); 
+		LegendreQuadrature quad(order, 1); 
 		EXPECT_EQ(quad.Size(), order); 
 	}	
 }
@@ -52,7 +52,7 @@ TEST(AngularQuadrature, GaussLegendre1D) {
 		return Omega(0)*Omega(0)/4/M_PI; 
 	};
 	for (auto order=2; order<25; order+=2) {
-		LevelSymmetricQuadrature quad(order,1); 
+		LegendreQuadrature quad(order,1); 
 		double val = Integrate(quad, f); 
 		EXPECT_NEAR(val, 1./3, 1e-13); 
 	}
@@ -138,6 +138,15 @@ TEST(ChebyshevLegendre, Quadratic) {
 		return 2*Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
 	}; 
 	ChebyshevLegendreQuadrature quad(4,4, 2);
+	double val = Integrate(quad, f); 
+	EXPECT_NEAR(val, 4*M_PI, 1e-11); 				
+}
+
+TEST(TriangularChebyshevLegendre, Quadratic) {
+	auto f = [](const mfem::Vector &Omega) {
+		return 2*Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
+	}; 
+	TriangularChebyshevLegendreQuadrature quad(4, 2);
 	double val = Integrate(quad, f); 
 	EXPECT_NEAR(val, 4*M_PI, 1e-11); 				
 }

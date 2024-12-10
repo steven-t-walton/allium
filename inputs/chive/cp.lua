@@ -59,6 +59,11 @@ mesh = {
 	parallel_refinements = 0,
 }
 
+sn = {
+	type = "level symmetric", 
+	order = 12
+}
+
 amg_opts = {
 	max_iter = 1, 
 	relax_sweeps = 1, 
@@ -78,7 +83,6 @@ amg_opts = {
 
 driver = {
 	fe_order = 1, 
-	sn_order = 12,
 	basis_type = "lobatto",
 	solver = {
 		type = "sli", 

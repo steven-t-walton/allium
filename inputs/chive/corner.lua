@@ -52,9 +52,13 @@ mesh = {
 	parallel_refinements = 0,
 }
 
+sn = {
+	type = "level symmetric", 
+	order = 20
+}
+
 driver = {
 	fe_order = 1, 
-	sn_order = 20, 
 	solver = {
 		type = "gmres", 
 		abstol = 1e-5, 

@@ -29,9 +29,13 @@ function boundary_map(x,y,z)
 	end
 end 
 
+sn = {
+	type = "level symmetric", 
+	order = 4
+}
+
 driver = {
 	fe_order = 1, 
-	sn_order = 4, 
 	solver = {
 		type = "fp", 
 		abstol = 1e-10, 
