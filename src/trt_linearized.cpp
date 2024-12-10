@@ -236,6 +236,7 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	const bool use_fixup = Linv.IsFixupOn(); 
 	// disable fixup for newton operations 
 	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(false); 
+	const bool pbj = Linv.IsParallelBlockJacobi();
 
 	for (auto *ptr : opacities) {
 		ptr->Project();
@@ -262,7 +263,9 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	em_source += phi_source; 
 	D.MultTranspose(em_source, psi); 
 	psi += source_psi; 
+	Linv.UseParallelBlockJacobi(false);
 	Linv.Mult(psi, psi);
+	Linv.UseParallelBlockJacobi(pbj);
 	D.Mult(psi, phi_source); 
 
 	// apply I - D Linv dB (dBt)^{-1} Msigma 
@@ -285,7 +288,9 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	// re-enable fixup if on at entry 
 	// returns Linv to original state => doesn't violate const contract 
 	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(use_fixup); 
+	Linv.UseParallelBlockJacobi(false);
 	Linv.Mult(psi, psi);
+	Linv.UseParallelBlockJacobi(pbj);
 
 	// solve for temperature update 
 	if (rebalance_solver) {
