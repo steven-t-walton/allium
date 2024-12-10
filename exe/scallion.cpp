@@ -476,13 +476,15 @@ int main(int argc, char *argv[]) {
 	// --- angular quadrature rule --- 
 	const int sn_order = driver["sn_order"]; 
 	const std::string sn_type = io::GetAndValidateOption(driver, "sn_quadrature_type", 
-		{"level symmetric", "abu shumays"}, "level symmetric", root); 
+		{"level symmetric", "abu shumays", "chebyshev-legendre"}, "level symmetric", root); 
 	std::unique_ptr<AngularQuadrature> quad; 
 	if (sn_type == "level symmetric") {
 		quad = std::make_unique<LevelSymmetricQuadrature>(sn_order, dim); 
 	} 
 	else if (sn_type == "abu shumays") {
 		quad = std::make_unique<AbuShumaysQuadrature>(sn_order, dim); 
+	} else if (sn_type == "chebyshev-legendre") {
+		quad = std::make_unique<ChebyshevLegendreQuadrature>(4,4, dim);
 	}
 	const auto Nomega = quad->Size(); 
 

@@ -138,6 +138,35 @@ AbuShumaysQuadrature::AbuShumaysQuadrature(int _order, int _dim)
 #endif 
 }
 
+ChebyshevLegendreQuadrature::ChebyshevLegendreQuadrature(int cheb, int leg, int dim)
+	: AngularQuadrature(dim)
+{
+	auto file_name = std::string(CL_QUADRATURE_DIR) + "/cl" + std::to_string(cheb) + "_" + std::to_string(leg) + ".yaml"; 
+	// check if it exists 
+	std::ifstream inp(file_name); 
+	if (inp.fail()) { 
+		MFEM_ABORT("don't have it"); 
+	}
+	inp.close(); 
+
+	// load with yaml 
+	auto node = YAML::LoadFile(file_name); 
+	auto mu = node["mu"].as<std::vector<double>>();
+	auto eta = node["eta"].as<std::vector<double>>(); 
+	auto xi = node["xi"].as<std::vector<double>>();
+	auto w = node["w"].as<std::vector<double>>();  
+	const auto num_dirs = mu.size();
+	Omegas.resize(num_dirs, mfem::Vector(dim)); 
+	weights.resize(num_dirs, 0.0); 
+	for (int i=0; i<num_dirs; i++) {
+		auto &Omega = Omegas[i];
+		Omega(0) = mu[i]; 
+		Omega(1) = eta[i]; 
+		weights[i] = w[i];
+	}
+	weights_sum = std::accumulate(weights.begin(), weights.end(), 0.0); 
+}
+
 double ComputeAlpha(const AngularQuadrature &quad, const mfem::Vector &dir) 
 {
 	mfem::Vector nor(dir.Size()); 
