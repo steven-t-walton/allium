@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <regex>
 #include <filesystem>
+#include <omp.h>
 
 namespace io 
 {
@@ -412,11 +413,26 @@ void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, i
 		out << YAML::Key << "min" << YAML::Value << kmin; 
 		out << YAML::Key << "max" << YAML::Value << kmax; 
 	out << YAML::EndMap; 
-	out << YAML::Key << "MPI ranks" << YAML::Value << nranks; 
 	out << YAML::Key << "refinements" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "serial" << YAML::Value << sr; 
 		out << YAML::Key << "parallel" << YAML::Value << pr; 
 	out << YAML::EndMap; 
+}
+
+void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm)
+{
+	int ranks, threads; 
+	MPI_Comm_size(comm, &ranks); 
+	#pragma omp parallel 
+	{
+		threads = omp_get_num_threads();
+	}
+	const auto total = ranks * threads; 
+	out << YAML::Key << "parallel" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "MPI ranks" << YAML::Value << ranks; 
+		out << YAML::Key << "OpenMP threads" << YAML::Value << threads; 
+		out << YAML::Key << "total" << YAML::Value << total; 
+	out << YAML::EndMap;
 }
 
 MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, bool root)

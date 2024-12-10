@@ -99,6 +99,8 @@ void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,dou
 	const std::unordered_map<std::string,int> &map, bool root=true);
 void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, int pr);
 
+void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm); 
+
 MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, bool root=true);
 OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid, 
 	YAML::Emitter &out, bool root=true);
