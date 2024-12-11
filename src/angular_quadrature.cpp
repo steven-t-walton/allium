@@ -189,32 +189,28 @@ ProductQuadrature::ProductQuadrature(int dim, int polar, int azimuthal, int pola
 	int num_dirs; 
 	if (triangular) {
 		num_dirs = polar * (polar + 1);
-		if (dim==2) {
-			polar /= 2; 
-			num_dirs /= 2;
-		}
 	} else {
-		if (dim==2) polar /= 2;
 		num_dirs = polar * azimuthal * 2;
 	}
+	if (dim==2) num_dirs /= 2;
 
 	Omegas.resize(num_dirs, mfem::Vector(dim));
 	weights.resize(num_dirs);
 
 	int idx = 0; 
 	std::array<double,2> signs = {1.0, -1.0}; 
-	double scale = (dim==2) ? 4.0 : 2.0;
+	const double scale = (dim==2) ? 4.0 : 2.0;
 
 	for (int l=0; l<polar; l++) {
 		const auto &lob_ip = rule.IntPoint(l);
 		const auto Naz = levels[l];
-		for (int s=0; s<2; s++) {
+		for (int s=0; s<((dim==2) ? 1 : 2); s++) {
 			for (int c=0; c<Naz; c++) {
 				auto &Omega = Omegas[idx];
 				const auto phi = constants::pi*(2*(c+1) - 1) / 2 / Naz;
 				Omega(0) = std::sin(theta[l]) * std::cos(phi); 
-				Omega(1) = signs[s] * std::sin(theta[l]) * std::sin(phi);
-				if (dim > 2) Omega(2) = std::cos(theta[l]);
+				Omega(1) = std::cos(theta[l]);
+				if (dim > 2) Omega(2) = std::sin(theta[l]) * std::sin(phi);
 				weights[idx] = scale * lob_ip.weight * constants::pi / Naz;
 				idx++;
 			}
