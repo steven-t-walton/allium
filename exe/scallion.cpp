@@ -481,6 +481,7 @@ int main(int argc, char *argv[]) {
 	if (!sn_table_avail) MFEM_ABORT("must define angular quadrature table");
 	sol::table sn_table = sn_table_avail.value();
 	auto quad = std::unique_ptr<AngularQuadrature>(io::CreateAngularQuadrature(sn_table, out, dim, root));
+	io::PrintAngularQuadrature(out, *quad);
 	const auto Nomega = quad->Size(); 
 
 	// size of psi 
@@ -616,8 +617,6 @@ int main(int argc, char *argv[]) {
 		ProjectPsi(fes, *quad, energy_grid, planck_coef, psi0);
 		psi = psi0;
 	}
-	Epw.ProjectGridFunction(E);
-	Trad.ProjectCoefficient(Trad_coef);
 
 	// initial opacity 
 	total_coef.SetTemperature(Tcoef); 
@@ -634,6 +633,10 @@ int main(int argc, char *argv[]) {
 	to_gray_op_moments.Mult(moments_nu, moments);
 	E *= 1.0/constants::SpeedOfLight;
 	mfem::ProductOperator Dgray(&to_gray_op, &D, false, false);
+
+	// project initial radiation temperature
+	Epw.ProjectGridFunction(E);
+	Trad.ProjectCoefficient(Trad_coef);
 
 	// opacity weighting operators 
 	// energy density weighted 

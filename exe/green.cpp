@@ -531,7 +531,9 @@ int main(int argc, char *argv[]) {
 	mfem::VectorGridFunctionCoefficient Fho_coef(&Fho);
 
 	// piecewise constant temperature 
-	mfem::ParGridFunction Tpw(&fes0); 
+	mfem::ParGridFunction Tpw(&fes0), Epw(&fes0), Trad(&fes0); 
+	mfem::GridFunctionCoefficient Epw_coef(&Epw);
+	RadiationTemperatureCoefficient Trad_coef(Epw_coef, constants::SpeedOfLight);
 
 	// --- load initial conditions ---
 	// two options are supported
@@ -583,6 +585,8 @@ int main(int argc, char *argv[]) {
 		F = 0.0; 
 		F0 = 0.0;
 	}
+	Epw.ProjectGridFunction(E);
+	Trad.ProjectCoefficient(Trad_coef);
 
 	// allocate data for total opacity 
 	ProjectedVectorCoefficient total(sigma_fes, total_coef);
@@ -876,10 +880,12 @@ int main(int argc, char *argv[]) {
 			const bool restart_mode = viz["restart_mode"].get_or(false) and restart_table_avail;
 			dc->SetPrecision(precision); 
 			dc->RegisterField("E", &E); 
+			dc->RegisterField("Epw", &Epw);
 			dc->RegisterField("Eho", &Enu);
 			dc->RegisterField("F", &F);
 			dc->RegisterField("Fho", &Fho);
 			dc->RegisterField("T", &T); 
+			dc->RegisterField("Trad", &Trad);
 			dc->RegisterField("Tpw", &Tpw); 
 			dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
 			dc->RegisterField("sigmaE", &totalE.GetGridFunction());
@@ -1211,6 +1217,8 @@ int main(int argc, char *argv[]) {
 		// get peicewise constant version of temperature 
 		// used for comparison to other codes 
 		Tpw.ProjectGridFunction(T); 
+		Epw.ProjectGridFunction(E);
+		Trad.ProjectCoefficient(Trad_coef);
 
 		// recompute opacities 
 		if (opacity_int_type == EXPLICIT) {

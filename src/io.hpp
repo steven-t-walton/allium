@@ -101,6 +101,7 @@ void SetMeshBdrAttributes(mfem::Mesh &mesh, std::function<std::string(double,dou
 void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, int pr);
 
 AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out, int dim, bool root=true);
+void PrintAngularQuadrature(YAML::Emitter &out, const AngularQuadrature &quad); 
 
 void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm); 
 
