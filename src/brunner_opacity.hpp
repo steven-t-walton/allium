@@ -14,7 +14,7 @@ namespace BrunnerOpac
 // in Eq. 24 of that document.
 class AnalyticEdgeOpacity
 {
-  public:
+public:
 	// epsilonMin: below this photon energy, the opacity is a constant
 	// epsilonEdge: the photon energy of the shell edge
 	// C0: The overall strength of the opacity
@@ -59,7 +59,7 @@ class AnalyticEdgeOpacity
 	// Compute locations to break numerical integrations into subregions near features
 	std::vector<double> computeBreaks() const;
 
-  private:
+private:
 	// The lowest photon energy used to compute an opacity,
 	// mimicking a plasma frequency cut-off, $\epsilon_\text{min}$
 	double epsilonMin;
@@ -84,7 +84,7 @@ class AnalyticEdgeOpacity
 // the lowest bound is zero and the upper bound is effectively infinity.
 class MultiGroupIntegrator
 {
-  public:
+public:
 	MultiGroupIntegrator(const AnalyticEdgeOpacity opac_, std::vector<double> groupBounds_)
 		: opac{opac_},
 		  opacBreaks{opac.computeBreaks()},
@@ -125,7 +125,7 @@ class MultiGroupIntegrator
 												const std::vector<double> &allRanges,
 												const double safetyFactor) const;
 
-  private:
+private:
 	// The detailed opacity we'll integrate.
 	AnalyticEdgeOpacity opac;
 	// integration sub-ranges proposed by opacity around edges and lines, etc.
