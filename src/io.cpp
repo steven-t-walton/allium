@@ -467,6 +467,22 @@ AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out
 	return quad;
 }
 
+void PrintAngularQuadrature(YAML::Emitter &out, const AngularQuadrature &quad)
+{
+	out << YAML::Key << "angular quadrature rule" << YAML::Value << YAML::BeginSeq; 
+	for (int a=0; a<quad.Size(); a++) {
+		const auto &Omega = quad.GetOmega(a); 
+		const auto w = quad.GetWeight(a); 
+		out << YAML::Flow << YAML::BeginSeq; 
+		for (int d=0; d<Omega.Size(); d++) {
+			out << Omega(d); 
+		}
+		out << w; 
+		out << YAML::EndSeq; 
+	}
+	out << YAML::EndSeq; 
+}
+
 void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm)
 {
 	int ranks, threads; 

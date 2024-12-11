@@ -158,10 +158,12 @@ ProductQuadrature::ProductQuadrature(int dim, int polar, int azimuthal, int pola
 {
 	if (dim != 2 and dim != 3) MFEM_ABORT("only 2/3D");
 	int polar_degree; 
+	bool has_poles = false;
 	if (polar_type == mfem::Quadrature1D::GaussLegendre) {
 		polar_degree = 2*azimuthal - 1;
 	} else if (polar_type == mfem::Quadrature1D::GaussLobatto) {
 		polar_degree = 2*azimuthal - 3;
+		has_poles = true;
 	} else { MFEM_ABORT("azimuthal type not defined")}
 	mfem::IntegrationRules rules(0, polar_type);
 	const auto &rule = rules.Get(mfem::Geometry::SEGMENT, polar_degree); 
@@ -185,14 +187,13 @@ ProductQuadrature::ProductQuadrature(int dim, int polar, int azimuthal, int pola
 	} else {
 		std::fill(levels.begin(), levels.end(), azimuthal);
 	}
-
-	int num_dirs; 
-	if (triangular) {
-		num_dirs = polar * (polar + 1);
-	} else {
-		num_dirs = polar * azimuthal * 2;
+	if (has_poles) {
+		levels[0] = 1; 
+		levels[polar - 1] = 1;
 	}
-	if (dim==2) num_dirs /= 2;
+
+	int num_dirs = std::accumulate(levels.begin(), levels.end(), 0);
+	if (dim==3) num_dirs *= 2;
 
 	Omegas.resize(num_dirs, mfem::Vector(dim));
 	weights.resize(num_dirs);
@@ -208,8 +209,8 @@ ProductQuadrature::ProductQuadrature(int dim, int polar, int azimuthal, int pola
 			for (int c=0; c<Naz; c++) {
 				auto &Omega = Omegas[idx];
 				const auto phi = constants::pi*(2*(c+1) - 1) / 2 / Naz;
-				Omega(0) = std::sin(theta[l]) * std::cos(phi); 
-				Omega(1) = std::cos(theta[l]);
+				Omega(0) = std::cos(theta[l]);
+				Omega(1) = std::sin(theta[l]) * std::cos(phi); 
 				if (dim > 2) Omega(2) = std::sin(theta[l]) * std::sin(phi);
 				weights[idx] = scale * lob_ip.weight * constants::pi / Naz;
 				idx++;
