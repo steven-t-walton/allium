@@ -103,12 +103,14 @@ class RadiationTemperatureCoefficient : public mfem::Coefficient
 {
 private:
 	mfem::Coefficient &radE; 
+	double scale;
 public:
-	RadiationTemperatureCoefficient(mfem::Coefficient &radE) : radE(radE) { }
+	RadiationTemperatureCoefficient(mfem::Coefficient &radE, double scale=1.0) : radE(radE), scale(scale)
+	{ }
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override
 	{
 		const double E = radE.Eval(trans, ip); 
 		const double Ehat = std::max(E, 1e-10);
-		return std::pow(Ehat, 0.25) / constants::RadiationConstant; 
+		return std::pow(Ehat / scale, 0.25) / constants::RadiationConstant; 
 	}
 };
