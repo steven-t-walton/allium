@@ -141,6 +141,10 @@ public:
 		delete integrator;
 	}
 	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+	double Eval(double rho, double T, double E) const 
+	{
+		return opac->computeSigma(E, T, rho); 
+	}
 };
 
 // helper class for representing a discrete multigroup opacity 

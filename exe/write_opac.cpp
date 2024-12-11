@@ -59,6 +59,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "density" << YAML::Value << density;
 
 		auto *analytic_opacity = dynamic_cast<MultiGroupFunctionOpacityCoefficient*>(opacity);
+		auto *brunner_opacity = dynamic_cast<BrunnerOpacityCoefficient*>(opacity);
 		if (analytic_opacity) {
 			out << YAML::Key << "values" << YAML::Value << YAML::BeginSeq; 
 			const auto &f = analytic_opacity->GetOpacityFunction();
@@ -66,6 +67,16 @@ int main(int argc, char *argv[]) {
 				const auto E = energies[i];
 				const auto val = f(density, temperature, E);
 				out << val;
+			}
+			out << YAML::EndSeq;
+		}
+
+		if (brunner_opacity) {
+			out << YAML::Key << "values" << YAML::Value << YAML::BeginSeq;
+			for (int i=0; i<energies.Size(); i++) {
+				const auto E = energies[i]; 
+				const auto val = brunner_opacity->Eval(density, temperature, E);
+				out << val; 
 			}
 			out << YAML::EndSeq;
 		}
