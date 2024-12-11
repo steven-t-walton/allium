@@ -49,7 +49,8 @@ int *GenerateMetisPartitioning(mfem::Mesh &mesh, int nparts, mfem::Coefficient &
 				auto &trans_to = *mesh.GetElementTransformation(row[j]);
 				auto vto = coef.Eval(trans_to, mfem::Geometries.GetCenter(trans_to.GetGeometryType()));
 				auto hto = mesh.GetElementSize(row[j]);
-				edge_weights(idx++) = std::exp(-vfrom*hfrom/2 - vto*hto/2);
+				// edge_weights(idx++) = std::exp(-vfrom*hfrom/2 - vto*hto/2);
+				edge_weights(idx++) = 1.0 / (vfrom*hfrom/2 + vto*hto/2); 
 			}
 		}
 		auto scale = 1e4;
