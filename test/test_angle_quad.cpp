@@ -133,20 +133,18 @@ TEST(AbuShumays, Quadratic) {
 	}
 }
 
-TEST(ChebyshevLegendre, Quadratic) {
+TEST(Product, Quadratic) {
 	auto f = [](const mfem::Vector &Omega) {
 		return 2*Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
 	}; 
-	ChebyshevLegendreQuadrature quad(4,4, 2);
-	double val = Integrate(quad, f); 
-	EXPECT_NEAR(val, 4*M_PI, 1e-11); 				
-}
-
-TEST(TriangularChebyshevLegendre, Quadratic) {
-	auto f = [](const mfem::Vector &Omega) {
-		return 2*Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
-	}; 
-	TriangularChebyshevLegendreQuadrature quad(4, 2);
-	double val = Integrate(quad, f); 
-	EXPECT_NEAR(val, 4*M_PI, 1e-11); 				
+	std::array<int,2> polar_type = {mfem::Quadrature1D::GaussLegendre, mfem::Quadrature1D::GaussLobatto};
+	for (auto tri : {true, false}) {
+		for (auto &pt : polar_type) {
+			for (int order=4; order<14; order+=2) {
+				ProductQuadrature quad(2, order, order, pt, tri); 
+				double val = Integrate(quad, f); 
+				EXPECT_NEAR(val, 4*M_PI, 1e-11); 					
+			}
+		}		
+	}
 }

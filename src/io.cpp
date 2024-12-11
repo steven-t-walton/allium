@@ -423,7 +423,7 @@ AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out
 {
 	std::string type = table["type"]; 
 	ValidateOption<std::string>("sn quadrature type", type, 
-		{"legendre", "level symmetric", "abu shumays", "chebyshev-legendre"}, root);
+		{"legendre", "level symmetric", "abu shumays", "product"}, root);
 	AngularQuadrature *quad;
 	const int order = table["order"];
 	if (dim==1) type = "legendre";
@@ -444,16 +444,22 @@ AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out
 		quad = new AbuShumaysQuadrature(order, dim); 
 	}
 
-	else if (type == "chebyshev-legendre") {
+	else if (type == "product") {
+		const std::string polar_type_str = io::GetAndValidateOption<std::string>(
+			table, "polar_type", {"legendre", "lobatto"}, "legendre", root);
+		out << YAML::Key << "polar type" << YAML::Value << polar_type_str;
 		const bool tri = table["triangular"].get_or(false);
+		int polar_type;
+		if (polar_type_str == "legendre") polar_type = mfem::Quadrature1D::GaussLegendre;
+		else if (polar_type_str == "lobatto") polar_type = mfem::Quadrature1D::GaussLobatto;
 		if (tri) {
 			out << YAML::Key << "azimuthal order" << YAML::Value << "triangular";
-			quad = new TriangularChebyshevLegendreQuadrature(order, dim);
+			quad = new ProductQuadrature(dim, order, order, polar_type, true);
 		}
 		else {
 			const int az_order = table["azimuthal_order"].get_or(order); 
 			out << YAML::Key << "azimuthal order" << YAML::Value << az_order;
-			quad = new ChebyshevLegendreQuadrature(order, az_order, dim);
+			quad = new ProductQuadrature(dim, order, az_order, polar_type, false);
 		}
 	}
 	out << YAML::Key << "number of angles" << YAML::Key << quad->Size(); 

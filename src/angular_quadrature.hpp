@@ -35,14 +35,11 @@ public:
 	AbuShumaysQuadrature(int _order, int _dim); 
 };
 
-class ChebyshevLegendreQuadrature : public AngularQuadrature {
+class ProductQuadrature : public AngularQuadrature {
 public:
-	ChebyshevLegendreQuadrature(int cheb, int leg, int dim); 
-};
-
-class TriangularChebyshevLegendreQuadrature : public AngularQuadrature {
-public:
-	TriangularChebyshevLegendreQuadrature(int leg, int dim); 
+	ProductQuadrature(int dim, int polar, int azimuthal, 
+		int polar_type = mfem::Quadrature1D::GaussLegendre, 
+		bool triangular = false);
 };
 
 class SingleAngleQuadratureRule : public AngularQuadrature {

@@ -153,101 +153,74 @@ AbuShumaysQuadrature::AbuShumaysQuadrature(int _order, int _dim)
 #endif 
 }
 
-ChebyshevLegendreQuadrature::ChebyshevLegendreQuadrature(int cheb, int leg, int dim)
+ProductQuadrature::ProductQuadrature(int dim, int polar, int azimuthal, int polar_type, bool triangular)
 	: AngularQuadrature(dim)
 {
 	if (dim != 2 and dim != 3) MFEM_ABORT("only 2/3D");
-	int leg_degree = 2*leg - 1; 
-	const auto &rule = mfem::IntRules.Get(mfem::Geometry::SEGMENT, leg_degree); 
-	if (rule.GetNPoints() != leg) MFEM_ABORT("wrong legendre rule");
-	if (dim==2) leg /= 2;
+	int polar_degree; 
+	if (polar_type == mfem::Quadrature1D::GaussLegendre) {
+		polar_degree = 2*azimuthal - 1;
+	} else if (polar_type == mfem::Quadrature1D::GaussLobatto) {
+		polar_degree = 2*azimuthal - 3;
+	} else { MFEM_ABORT("azimuthal type not defined")}
+	mfem::IntegrationRules rules(0, polar_type);
+	const auto &rule = rules.Get(mfem::Geometry::SEGMENT, polar_degree); 
+	if (rule.GetNPoints() != polar) MFEM_ABORT("wrong polar rule");
 
-	std::vector<double> cheb_ip(cheb); 
-	for (int i=1; i<cheb+1; i++) {
-		cheb_ip[i-1] = constants::pi*(2*i - 1)/2/cheb; 
-	}
-
-	std::vector<double> theta(leg);
-	for (int i=0; i<leg; i++) {
+	std::vector<double> theta(polar);
+	for (int i=0; i<polar; i++) {
 		const auto &ip = rule.IntPoint(i);
 		theta[i] = std::acos(2*ip.x - 1.0);
 	}
 
-	const auto num_dirs = cheb * 2 * leg;
+	const int mid = polar/2;
+	std::vector<int> levels(polar);
+	if (triangular) {
+		for (int i=0; i<mid; i++) {
+			levels[i] = i+2;
+		}
+		for (int i=0; i<mid; i++) {
+			levels[mid+i] = levels[mid-i-1];
+		}		
+	} else {
+		std::fill(levels.begin(), levels.end(), azimuthal);
+	}
+
+	int num_dirs; 
+	if (triangular) {
+		num_dirs = polar * (polar + 1);
+		if (dim==2) {
+			polar /= 2; 
+			num_dirs /= 2;
+		}
+	} else {
+		if (dim==2) polar /= 2;
+		num_dirs = polar * azimuthal * 2;
+	}
+
 	Omegas.resize(num_dirs, mfem::Vector(dim));
 	weights.resize(num_dirs);
 
 	int idx = 0; 
 	std::array<double,2> signs = {1.0, -1.0}; 
 	double scale = (dim==2) ? 4.0 : 2.0;
-	for (int l=0; l<leg; l++) {
-		const auto &leg_ip = rule.IntPoint(l);
+
+	for (int l=0; l<polar; l++) {
+		const auto &lob_ip = rule.IntPoint(l);
+		const auto Naz = levels[l];
 		for (int s=0; s<2; s++) {
-			for (int c=0; c<cheb; c++) {
+			for (int c=0; c<Naz; c++) {
 				auto &Omega = Omegas[idx];
-				Omega(0) = std::sin(theta[l]) * std::cos(cheb_ip[c]); 
-				Omega(1) = signs[s] * std::sin(theta[l]) * std::sin(cheb_ip[c]);
+				const auto phi = constants::pi*(2*(c+1) - 1) / 2 / Naz;
+				Omega(0) = std::sin(theta[l]) * std::cos(phi); 
+				Omega(1) = signs[s] * std::sin(theta[l]) * std::sin(phi);
 				if (dim > 2) Omega(2) = std::cos(theta[l]);
-				weights[idx] = scale * leg_ip.weight * constants::pi / cheb;
+				weights[idx] = scale * lob_ip.weight * constants::pi / Naz;
 				idx++;
 			}
 		}
 	}
-	weights_sum = std::accumulate(weights.begin(), weights.end(), 0.0); 
-}
-
-TriangularChebyshevLegendreQuadrature::TriangularChebyshevLegendreQuadrature(int leg, int dim)
-	: AngularQuadrature(dim)
-{
-	if (dim != 2 and dim != 3) MFEM_ABORT("only 2/3D");
-	int leg_degree = 2*leg - 1; 
-	const auto &rule = mfem::IntRules.Get(mfem::Geometry::SEGMENT, leg_degree); 
-	if (rule.GetNPoints() != leg) MFEM_ABORT("wrong legendre rule");
-
-	std::vector<double> theta(leg);
-	for (int i=0; i<leg; i++) {
-		const auto &ip = rule.IntPoint(i);
-		theta[i] = std::acos(2*ip.x - 1.0);
-	}
-
-	auto num_dirs = leg * (leg + 1);
-	if (dim==2) {
-		leg /= 2; 
-		num_dirs /= 2;
-	}
-	Omegas.resize(num_dirs, mfem::Vector(dim));
-	weights.resize(num_dirs);
-
-	int idx = 0; 
-	std::array<double,2> signs = {1.0, -1.0}; 
-	const double scale = (dim==2) ? 4.0 : 2.0;
-	const int mid = leg/2;
-	std::vector<int> levels(leg);
-	for (int i=0; i<mid; i++) {
-		levels[i] = i;
-	}
-	for (int i=0; i<mid; i++) {
-		levels[mid+i] = levels[mid-i-1];
-	}
-	for (int l=0; l<leg; l++) {
-		const auto Nc = levels[l] + 2;
-		const auto &leg_ip = rule.IntPoint(l);
-		std::vector<double> cheb_ip(Nc);
-		for (int i=1; i<Nc+1; i++) {
-			cheb_ip[i-1] = constants::pi * (2*i - 1)/2/Nc;
-		}
-		for (int s=0; s<2; s++) {
-			for (int c=0; c<Nc; c++) {
-				auto &Omega = Omegas[idx];
-				Omega(0) = std::sin(theta[l]) * std::cos(cheb_ip[c]); 
-				Omega(1) = signs[s] * std::sin(theta[l]) * std::sin(cheb_ip[c]);
-				if (dim > 2) Omega(2) = std::cos(theta[l]);
-				weights[idx] = scale * leg_ip.weight * constants::pi / Nc;
-				idx++;
-			}
-		}
-	}
-	weights_sum = std::accumulate(weights.begin(), weights.end(), 0.0); 
+	weights_sum = std::accumulate(weights.begin(), weights.end(), 0.0); 	
 }
 
 double ComputeAlpha(const AngularQuadrature &quad, const mfem::Vector &dir) 
