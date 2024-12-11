@@ -401,14 +401,15 @@ int main(int argc, char *argv[]) {
 	const auto dim = ser_mesh.Dimension(); 
 
 	// --- create parallel mesh --- 
-	sol::optional<int> part_type = mesh_node["partitioning"];
+	const int part_type = mesh_node["partitioning"].get_or(0);
+	out << YAML::Key << "partitioning scheme" << YAML::Value << part_type;
 	int *partitioning = nullptr;
-	if (part_type and part_type.value() > 1) {
+	if (part_type > 0) {
 		mfem::Array<int> attrs(nattr); 
 		for (int i=0; i<nattr; i++) { attrs[i] = i+1; }
 		PWOpacityCoefficient total_coef(attrs, total_list); 
 		VectorComponentSumCoefficient total(total_coef);
-		partitioning = utils::GenerateMetisPartitioning(ser_mesh, mfem::Mpi::WorldSize(), total, part_type.value());
+		partitioning = utils::GenerateMetisPartitioning(ser_mesh, mfem::Mpi::WorldSize(), total, part_type);
 	}
 	mfem::ParMesh mesh(MPI_COMM_WORLD, ser_mesh, partitioning); 
 	par_ref += mesh_node["parallel_refinements"].get_or(0); 
