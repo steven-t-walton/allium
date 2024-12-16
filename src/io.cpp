@@ -463,6 +463,9 @@ AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out
 		}
 	}
 	out << YAML::Key << "number of angles" << YAML::Key << quad->Size(); 
+	const bool print = table["print"].get_or(true);
+	if (print)
+		PrintAngularQuadrature(out, *quad);
 	out << YAML::EndMap;
 	return quad;
 }
@@ -648,8 +651,11 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 		const double delta_s = table["delta_s"];
 		const double delta_w = table["delta_w"];
 		const int Nlines = table["Nlines"];
+		const auto weight_str = io::GetAndValidateOption<std::string>(
+			table, "weight", {"planck", "rosseland"}, "planck", root);
+		const bool planck_weight = weight_str == "planck";
 		opac = new BrunnerOpacityCoefficient(
-			grid.Bounds(), c0, c1, c2, Emin, Eedge, delta_s, delta_w, Nlines);
+			grid.Bounds(), c0, c1, c2, Emin, Eedge, delta_s, delta_w, Nlines, planck_weight);
 		out << YAML::Key << "c0" << YAML::Value << c0;
 		out << YAML::Key << "c1" << YAML::Value << c1;
 		out << YAML::Key << "c2" << YAML::Value << c2;
@@ -658,6 +664,7 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 		out << YAML::Key << "delta_s" << YAML::Value << FormatScientific(delta_s);
 		out << YAML::Key << "delta_w" << YAML::Value << FormatScientific(delta_w);
 		out << YAML::Key << "Nlines" << YAML::Value << Nlines;
+		out << YAML::Key << "weight function" << YAML::Value << weight_str;
 	}
 	return opac;
 }

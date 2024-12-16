@@ -481,7 +481,6 @@ int main(int argc, char *argv[]) {
 	if (!sn_table_avail) MFEM_ABORT("must define angular quadrature table");
 	sol::table sn_table = sn_table_avail.value();
 	auto quad = std::unique_ptr<AngularQuadrature>(io::CreateAngularQuadrature(sn_table, out, dim, root));
-	io::PrintAngularQuadrature(out, *quad);
 	const auto Nomega = quad->Size(); 
 
 	// size of psi 
