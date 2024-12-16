@@ -129,12 +129,13 @@ class BrunnerOpacityCoefficient : public OpacityCoefficient
 private:
 	BrunnerOpac::AnalyticEdgeOpacity *opac; 
 	BrunnerOpac::MultiGroupIntegrator *integrator;
+	bool planck_weight;
 
 	std::vector<double> planckAvg, rossAvg, Bg, Rg;
 public:
 	BrunnerOpacityCoefficient(const mfem::Array<double> &bounds, double c0, double c1, 
 		double c2, double Emin, double Eedge, 
-		double delta_s, double delta_w, int lines);
+		double delta_s, double delta_w, int lines, bool planck_weight=true);
 	~BrunnerOpacityCoefficient()
 	{
 		delete opac; 

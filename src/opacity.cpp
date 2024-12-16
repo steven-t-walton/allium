@@ -98,8 +98,8 @@ void MultiGroupFunctionOpacityCoefficient::Eval(
 BrunnerOpacityCoefficient::BrunnerOpacityCoefficient(
 	const mfem::Array<double> &bounds, 
 	double c0, double c1, double c2, double Emin, double Eedge, 
-	double delta_s, double delta_w, int lines)
-	: OpacityCoefficient(bounds.Size()-1)
+	double delta_s, double delta_w, int lines, bool planck_weight)
+	: planck_weight(planck_weight), OpacityCoefficient(bounds.Size()-1)
 {
 	opac = new BrunnerOpac::AnalyticEdgeOpacity(Emin, Eedge, c0, c1, c2, delta_w, delta_s, lines);
 	std::vector<double> bounds_std(bounds.Size());
@@ -123,6 +123,7 @@ void BrunnerOpacityCoefficient::Eval(
 	integrator->computeGroupAverages(T, rho, planckAvg, rossAvg, Bg, Rg, planckMean, rossMean);
 	v.SetSize(vdim);
 	for (int i=0; i<vdim; i++) {
-		v(i) = planckAvg[i] * rho;
+		if (planck_weight) v(i) = planckAvg[i] * rho; 
+		else v(i) = rossAvg[i] * rho;
 	}
 }
