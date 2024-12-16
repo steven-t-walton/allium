@@ -160,9 +160,9 @@ ProductQuadrature::ProductQuadrature(int dim, int polar, int azimuthal, int pola
 	int polar_degree; 
 	bool has_poles = false;
 	if (polar_type == mfem::Quadrature1D::GaussLegendre) {
-		polar_degree = 2*azimuthal - 1;
+		polar_degree = 2*polar - 1;
 	} else if (polar_type == mfem::Quadrature1D::GaussLobatto) {
-		polar_degree = 2*azimuthal - 3;
+		polar_degree = 2*polar - 3;
 		has_poles = true;
 	} else { MFEM_ABORT("azimuthal type not defined")}
 	mfem::IntegrationRules rules(0, polar_type);
