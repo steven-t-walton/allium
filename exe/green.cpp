@@ -192,13 +192,32 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "planck" << YAML::Value << constants::Planck; 
 	out << YAML::EndMap; 
 
+	// --- check for ipcress opacity data --- 
+	// the opacity data defines the energy bounds => must load first 
+	sol::optional<std::string> ipcress_file_avail = lua["ipcress_file"]; 
+	std::unique_ptr<IpcressData> ipcress_data; 
+	if (ipcress_file_avail) {
+		const std::string file_name = ipcress_file_avail.value();
+		ipcress_data = std::make_unique<IpcressData>(file_name);
+		io::PrintIpcressInformation(out, *ipcress_data);
+	}
+
 	// --- load energy grid --- 
 	// do this first since materials depend on energy 
 	// discretization 
 	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap; 
-	sol::table energy_table = lua["energy"];
-	if (!energy_table.valid()) MFEM_ABORT("must supply energy table");
-	auto energy_grid = io::CreateEnergyGrid(energy_table, out, root);
+	MultiGroupEnergyGrid energy_grid;
+	if (ipcress_data) {
+		energy_grid = MultiGroupEnergyGrid(ipcress_data->GetGroupBounds());
+		out << YAML::Key << "groups" << YAML::Value << energy_grid.Size(); 
+		out << YAML::Key << "bounds" << YAML::Value;
+		io::PrintArray(out, energy_grid.Bounds()); 
+	}
+	else {
+		sol::table energy_table = lua["energy"];
+		if (!energy_table.valid()) MFEM_ABORT("must supply energy table");
+		energy_grid = io::CreateEnergyGrid(energy_table, out, root);		
+	}
 	out << YAML::EndMap; // end energy block 
 	const auto G = energy_grid.Size();
 
@@ -220,6 +239,8 @@ int main(int argc, char *argv[]) {
 	std::vector<sol::object> lua_source_objs(nattr); 
 	mfem::Array<OpacityCoefficient*> total_list(nattr); 
 	mfem::Array<PhaseSpaceCoefficient*> source_list(nattr); 
+	io::OpacityFactory opac_fact(energy_grid, out, root);
+	if (ipcress_data) opac_fact.SetIpcressData(*ipcress_data);
 	out << YAML::Key << "materials" << YAML::Value << YAML::BeginMap; 
 	for (auto i=0; i<attr_list.size(); i++) {
 		sol::table data = materials[attr_list[i].c_str()]; 
@@ -228,7 +249,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "attribute" << YAML::Value << i+1; 
 		out << YAML::Key << "opacity" << YAML::Key << YAML::BeginMap; 
 		sol::table total = data["total"]; 
-		total_list[i] = io::CreateOpacity(total, energy_grid, out, root);
+		total_list[i] = opac_fact.CreateOpacity(total);
 		out << YAML::EndMap;
 		cv_list(i) = data["heat_capacity"]; 
 		density_list(i) = data["density"].get_or(1.0); 
@@ -1336,12 +1357,6 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "energy balance" << YAML::Value << io::FormatScientific(balance);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
 		out << YAML::EndMap << YAML::Newline; 
-
-		// warn if temperature is such that the 
-		// energy group structure can't fully integrate
-		// the planck spectrum 
-		CheckPlanckSpectrumCovered(MPI_COMM_WORLD, energy_grid.MinEnergy(), 
-			energy_grid.MaxEnergy(), T, 1e-10);
 
 		// warn if max cycles reached 
 		if (cycle == max_cycles and root) 
