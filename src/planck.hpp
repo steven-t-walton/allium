@@ -217,17 +217,21 @@ namespace internal {
 // so that F_g = F(E_{g+1},T) - F(E_g,T) 
 // this function minimizes calls to F by re-using evaluations 
 // from the previous group 
+// overrides F(lower bound) = 0.0 and F(upper bound) = 1.0 
+// so that the entire planck spectrum is integrated 
+// regardless of the group bounds 
 template<double (*F)(double,double)>
 inline void EvalSpectrum(const mfem::Array<double> &energy_grid, double T, mfem::Vector &spectrum)
 {
 	const auto G = energy_grid.Size() - 1;
 	spectrum.SetSize(G);
-	double prev = 0.0; 
-	for (int g=0; g<G; g++) {
+	double prev = 0.0; // initialize to F(E_0 = 0.0) = 0.0 
+	for (int g=0; g<G-1; g++) {
 		double next = F(energy_grid[g+1], T);
 		spectrum(g) = next - prev;
 		prev = next;
 	}
+	spectrum(G-1) = 1.0 - prev; // force F(E_G) = 1.0 
 }
 
 } // end namespace internal 
@@ -247,9 +251,3 @@ inline void EvalPlanckSecondDerivativeSpectrum(
 {
 	internal::EvalSpectrum<IntegrateNormalizedPlanckSecondDerivative>(energy_grid, T, spectrum);
 }
-// verify group structure produces integral of 
-// normalized planck from Emin to Emax = 1.0 
-// for max/min temperatures in the domain
-// outputs warning if not 
-void CheckPlanckSpectrumCovered(MPI_Comm comm, double Emin, double Emax, 
-	const mfem::Vector &temperature, double tol);

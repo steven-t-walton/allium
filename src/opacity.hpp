@@ -3,6 +3,7 @@
 #include "mfem.hpp"
 #include "multigroup.hpp"
 #include "brunner_opacity.hpp"
+#include "ipcress.hpp"
 
 class OpacityCoefficient : public mfem::VectorCoefficient {
 protected:
@@ -14,6 +15,11 @@ public:
 	}
 	virtual void SetDensity(mfem::Coefficient &rho) {
 		density = &rho; 
+	}
+	virtual void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override =0;
+	virtual double Eval(double rho, double T, double E) const
+	{
+		MFEM_ABORT("functional evaluation not implemented");
 	}
 };
 
@@ -121,6 +127,10 @@ public:
 		rule = &mfem::IntRules.Get(mfem::Geometry::SEGMENT, order);
 	}
 	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
+	double Eval(double rho, double T, double E) const override
+	{
+		return opacity_func(rho, T, E);
+	}
 	const OpacityFunction &GetOpacityFunction() const { return opacity_func; }
 };
 
@@ -142,9 +152,26 @@ public:
 		delete integrator;
 	}
 	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override;
-	double Eval(double rho, double T, double E) const 
+	double Eval(double rho, double T, double E) const override 
 	{
 		return opac->computeSigma(E, T, rho); 
+	}
+};
+
+class IpcressOpacityCoefficient : public OpacityCoefficient
+{
+private:
+	const IpcressData &data; 
+	int matId; 
+	const std::string key;
+public:
+	IpcressOpacityCoefficient(const IpcressData &data, int matId, const std::string &key)
+		: data(data), matId(matId), key(key), OpacityCoefficient(data.NumGroups())
+	{ }
+	void Eval(mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) override; 
+	double Eval(double rho, double T, double E) const override 
+	{
+		return data.Eval(matId, key, rho, T, E) * rho;
 	}
 };
 

@@ -33,6 +33,7 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/coefficient.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/trt_ndsa.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/brunner_opacity.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/ipcress.hpp	
 )
 
 LIST(APPEND srcs 
@@ -60,12 +61,12 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_source.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_integrators.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/moment_discretization.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/planck.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/multigroup.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mg_form.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/restart.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/trt_ndsa.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/brunner_opacity.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/ipcress.cpp	
 )
 
 set(SOURCES ${SOURCES} ${srcs} PARENT_SCOPE)

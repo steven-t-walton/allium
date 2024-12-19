@@ -127,3 +127,14 @@ void BrunnerOpacityCoefficient::Eval(
 		else v(i) = rossAvg[i] * rho;
 	}
 }
+
+void IpcressOpacityCoefficient::Eval(
+	mfem::Vector &v, mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip)
+{
+	const auto T = temperature->Eval(trans, ip);
+	const auto rho = density->Eval(trans, ip);	
+	data.Eval(matId, key, rho, T, v);	
+	for (auto &val : v) {
+		val *= rho;
+	}
+}

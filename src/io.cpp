@@ -669,6 +669,157 @@ OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid,
 	return opac;
 }
 
+OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
+{
+	OpacityCoefficient *opac;
+	std::string type = table["type"]; 
+	io::ValidateOption<std::string>("opacity type", type, 
+		{"constant", "analytic gray", "analytic", "analytic edge", "brunner", "ipcress"}, root); 
+	out << YAML::Key << "type" << YAML::Value << type; 
+	if (type == "constant") {
+		sol::table values = table["values"];
+		mfem::Vector vec(values.size()); 
+		for (int i=0; i<vec.Size(); i++) { vec(i) = values[i+1]; }
+		opac = new ConstantOpacityCoefficient(vec);  
+	}
+
+	else if (type == "analytic gray") {
+		double coef = table["coef"]; 
+		double nrho = table["nrho"]; 
+		double nT = table["nT"]; 
+		opac = new AnalyticGrayOpacityCoefficient(coef, nrho, nT); 
+
+		out << YAML::Key << "coef" << YAML::Value << coef;
+		out << YAML::Key << "nrho" << YAML::Value << nrho; 
+		out << YAML::Key << "nT" << YAML::Value << nT;
+	}
+
+	else if (type == "analytic") {
+		double coef = table["coef"]; 
+		double nrho = table["nrho"]; 
+		double nT = table["nT"]; 
+		double Emin = table["Emin"].get_or(0.0);
+		const int int_order = table["int_order"].get_or(1);
+		sol::optional<sol::table> edge_avail = table["edge"]; 
+		FleckCummingsOpacityFunction func(coef, nrho, nT, Emin);
+
+		out << YAML::Key << "coef" << YAML::Value << coef;
+		out << YAML::Key << "nrho" << YAML::Value << nrho; 
+		out << YAML::Key << "nT" << YAML::Value << nT;
+		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin); 
+		out << YAML::Key << "integration order" << YAML::Value << int_order;
+		if (edge_avail) {
+			sol::table edge_table = edge_avail.value();
+			double edge = edge_table["energy"];
+			double coef = edge_table["coef"];
+			func.SetEdge(edge, coef);
+			out << YAML::Key << "edge" << YAML::Value << YAML::BeginMap; 
+				out << YAML::Key << "energy" << YAML::Value << edge; 
+				out << YAML::Key << "coef" << YAML::Value << coef; 
+			out << YAML::EndMap;
+		}
+		auto *ptr = new MultiGroupFunctionOpacityCoefficient(grid.Bounds(), func);
+		if (int_order > 1) ptr->SetIntegrationOrder(int_order);
+		opac = ptr;
+	} 
+
+	else if (type == "analytic edge") {
+		const double c0 = table["c0"];
+		const double c1 = table["c1"];
+		const double c2 = table["c2"];
+		const double Emin = table["Emin"];
+		const double Eedge = table["Eedge"];
+		const double delta_s = table["delta_s"];
+		const double delta_w = table["delta_w"];
+		const double nT = table["nT"].get_or(-0.5);
+		const int Nlines = table["Nlines"];
+		const int int_order = table["int_order"].get_or(1);
+		EdgeLineOpacityFunction func(c0, c1, c2, Emin, Eedge, delta_s, delta_w, nT, Nlines);
+		std::function<double(double,double)> weight_func; 
+		sol::optional<std::string> weight_type_avail = table["weight"];
+		if (weight_type_avail) {
+			const std::string weight_type = weight_type_avail.value();
+			io::ValidateOption<std::string>("opacity weight", weight_type, {"planck"}, root);
+			if (weight_type == "planck") {
+				weight_func = PlanckFunction;
+			}
+		}
+		auto *ptr = new MultiGroupFunctionOpacityCoefficient(grid.Bounds(), func, weight_func);
+		if (int_order > 1) ptr->SetIntegrationOrder(int_order);
+		out << YAML::Key << "c0" << YAML::Value << c0;
+		out << YAML::Key << "c1" << YAML::Value << c1;
+		out << YAML::Key << "c2" << YAML::Value << c2;
+		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin);
+		out << YAML::Key << "Eedge" << YAML::Value << FormatScientific(Eedge);
+		out << YAML::Key << "delta_s" << YAML::Value << FormatScientific(delta_s);
+		out << YAML::Key << "delta_w" << YAML::Value << FormatScientific(delta_w);
+		out << YAML::Key << "nT" << YAML::Value << nT;
+		out << YAML::Key << "Nlines" << YAML::Value << Nlines;
+		out << YAML::Key << "integration order" << YAML::Value << int_order;
+		opac = ptr;
+	}
+
+	else if (type == "brunner") {
+		const double c0 = table["c0"];
+		const double c1 = table["c1"];
+		const double c2 = table["c2"];
+		const double Emin = table["Emin"];
+		const double Eedge = table["Eedge"];
+		const double delta_s = table["delta_s"];
+		const double delta_w = table["delta_w"];
+		const int Nlines = table["Nlines"];
+		const auto weight_str = io::GetAndValidateOption<std::string>(
+			table, "weight", {"planck", "rosseland"}, "planck", root);
+		const bool planck_weight = weight_str == "planck";
+		opac = new BrunnerOpacityCoefficient(
+			grid.Bounds(), c0, c1, c2, Emin, Eedge, delta_s, delta_w, Nlines, planck_weight);
+		out << YAML::Key << "c0" << YAML::Value << c0;
+		out << YAML::Key << "c1" << YAML::Value << c1;
+		out << YAML::Key << "c2" << YAML::Value << c2;
+		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin);
+		out << YAML::Key << "Eedge" << YAML::Value << FormatScientific(Eedge);
+		out << YAML::Key << "delta_s" << YAML::Value << FormatScientific(delta_s);
+		out << YAML::Key << "delta_w" << YAML::Value << FormatScientific(delta_w);
+		out << YAML::Key << "Nlines" << YAML::Value << Nlines;
+		out << YAML::Key << "weight function" << YAML::Value << weight_str;
+	}
+
+	else if (type == "ipcress") {
+		if (!ipcress_data) MFEM_ABORT("ipcress data not provided");
+		const int mat_id = table["id"]; 
+		const auto weight_str = io::GetAndValidateOption<std::string>(
+			table, "weight", {"planck", "rosseland"}, "rosseland", root);
+		std::string key; 
+		if (weight_str == "planck") key = "pamg";
+		else if (weight_str	== "rosseland") key = "ramg";
+		opac = new IpcressOpacityCoefficient(*ipcress_data, mat_id, key);
+
+		out << YAML::Key << "ipcress id" << YAML::Value << mat_id;
+		out << YAML::Key << "weight function" << YAML::Value << weight_str;
+	}
+	return opac;
+}
+
+void PrintIpcressInformation(YAML::Emitter &out, const IpcressData &data)
+{
+	auto temperature = data.GetField(0, "tgrid");
+	auto density = data.GetField(0, "rgrid");
+	out << YAML::Key << "ipcress" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "file" << YAML::Value << ResolveRelativePath(data.FileName());
+		out << YAML::Key << "materials" << YAML::Value << data.NumMaterials();
+		out << YAML::Key << "temperature" << YAML::Value << YAML::BeginMap;
+			out << YAML::Key << "size" << YAML::Value << temperature.size(); 
+			out << YAML::Key << "min" << YAML::Value << std::exp(temperature.front());
+			out << YAML::Key << "max" << YAML::Value << std::exp(temperature.back());
+		out << YAML::EndMap;
+		out << YAML::Key << "density" << YAML::Value << YAML::BeginMap;
+			out << YAML::Key << "size" << YAML::Value << density.size(); 
+			out << YAML::Key << "min" << YAML::Value << std::exp(density.front());
+			out << YAML::Key << "max" << YAML::Value << std::exp(density.back());
+		out << YAML::EndMap;
+	out << YAML::EndMap;
+}
+
 NegativeFluxFixup *CreateNegativeFluxFixup(sol::table &table, bool root)
 {
 	NegativeFluxFixupOperator *op; 

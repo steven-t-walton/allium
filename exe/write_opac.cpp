@@ -31,10 +31,27 @@ int main(int argc, char *argv[]) {
 	lua.open_libraries(); // allows using standard libraries (e.g. math) in input
 	lua.script_file(input_file); // load from first cmd line argument 
 
+	sol::optional<std::string> ipcress_path_avail = lua["ipcress_file"];
+	std::unique_ptr<IpcressData> ipcress_data;
+	if (ipcress_path_avail) {
+		const std::string file_name = ipcress_path_avail.value();
+		ipcress_data = std::make_unique<IpcressData>(file_name);
+		io::PrintIpcressInformation(out, *ipcress_data);
+	}
+
 	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap; 
-	sol::table energy_table = lua["energy"];
-	if (!energy_table.valid()) MFEM_ABORT("must supply energy table");
-	auto energy_grid = io::CreateEnergyGrid(energy_table, out);
+	MultiGroupEnergyGrid energy_grid;
+	if (ipcress_data) {
+		energy_grid = MultiGroupEnergyGrid(ipcress_data->GetGroupBounds());
+		out << YAML::Key << "groups" << YAML::Value << energy_grid.Size(); 
+		out << YAML::Key << "bounds" << YAML::Value;
+		io::PrintArray(out, energy_grid.Bounds()); 
+	}
+	else {
+		sol::table energy_table = lua["energy"];
+		if (!energy_table.valid()) MFEM_ABORT("must supply energy table");
+		energy_grid = io::CreateEnergyGrid(energy_table, out);		
+	}
 	out << YAML::EndMap; // end energy block 
 
 	double min_energy = energy_grid.MinEnergy();
@@ -49,37 +66,24 @@ int main(int argc, char *argv[]) {
 
 	sol::table materials = lua["materials"];
 	out << YAML::Key << "materials" << YAML::Value << YAML::BeginMap;
+	io::OpacityFactory opac_fact(energy_grid, out, true);
+	if (ipcress_data) opac_fact.SetIpcressData(*ipcress_data);
 	for (const auto &material : materials) {
 		auto key = material.first.as<std::string>(); 
 		sol::table data = material.second;
 		sol::table total = data["total"];
 		out << YAML::Key << key << YAML::Value << YAML::BeginMap;
-		auto *opacity = io::CreateOpacity(total, energy_grid, out);
+		auto *opacity = opac_fact.CreateOpacity(total);
 		const double density = data["density"];
 		out << YAML::Key << "density" << YAML::Value << density;
 
-		auto *analytic_opacity = dynamic_cast<MultiGroupFunctionOpacityCoefficient*>(opacity);
-		auto *brunner_opacity = dynamic_cast<BrunnerOpacityCoefficient*>(opacity);
-		if (analytic_opacity) {
-			out << YAML::Key << "values" << YAML::Value << YAML::BeginSeq; 
-			const auto &f = analytic_opacity->GetOpacityFunction();
-			for (int i=0; i<energies.Size(); i++) {
-				const auto E = energies[i];
-				const auto val = f(density, temperature, E);
-				out << val;
-			}
-			out << YAML::EndSeq;
+		out << YAML::Key << "values" << YAML::Value << YAML::BeginSeq;
+		for (int i=0; i<energies.Size(); i++) {
+			const auto E = energies[i]; 
+			const auto val = opacity->Eval(density, temperature, E);
+			out << val;
 		}
-
-		if (brunner_opacity) {
-			out << YAML::Key << "values" << YAML::Value << YAML::BeginSeq;
-			for (int i=0; i<energies.Size(); i++) {
-				const auto E = energies[i]; 
-				const auto val = brunner_opacity->Eval(density, temperature, E);
-				out << val; 
-			}
-			out << YAML::EndSeq;
-		}
+		out << YAML::EndSeq;
 
 		out << YAML::Key << "groups" << YAML::Value << YAML::BeginSeq;
 		mfem::Vector vals; 

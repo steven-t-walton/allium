@@ -58,7 +58,11 @@ void PrintArray(YAML::Emitter &out, const mfem::Array<T> &x)
 {
 	out << YAML::BeginSeq; 
 	for (const auto &it : x) {
-		out << it;
+		if constexpr (std::is_same<T,double>::value) {
+			out << FormatScientific(it); 
+		} else {
+			out << it;			
+		}
 	}
 	out << YAML::EndSeq;
 }
@@ -106,8 +110,22 @@ void PrintAngularQuadrature(YAML::Emitter &out, const AngularQuadrature &quad);
 void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm); 
 
 MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, bool root=true);
-OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid, 
-	YAML::Emitter &out, bool root=true);
+OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid, YAML::Emitter &out, bool root=true);
+class OpacityFactory
+{
+private:
+	const MultiGroupEnergyGrid &grid;
+	YAML::Emitter &out;
+	bool root;
+	const IpcressData *ipcress_data = nullptr;
+public:
+	OpacityFactory(const MultiGroupEnergyGrid &grid, YAML::Emitter &out, bool root)
+		: grid(grid), out(out), root(root)
+	{ }
+	void SetIpcressData(const IpcressData &data) { ipcress_data = &data; }
+	OpacityCoefficient *CreateOpacity(sol::table &table) const; 
+};
+void PrintIpcressInformation(YAML::Emitter &out, const IpcressData &data);
 
 class NegativeFluxFixup {
 private:
