@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(mfem PATHS @mfem_DIR@)
+find_dependency(igraph PATHS @igraph_DIR@)
+find_dependency(yaml-cpp PATHS @yaml-cpp_DIR@)
+find_dependency(mdspan PATHS @mdspan_DIR@)
+find_dependency(Lua)
+find_dependency(sol2 PATHS @sol2_DIR@)
+find_dependency(OpenMP)
+
+include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@-targets.cmake")
+check_required_components(allium)

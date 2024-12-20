@@ -93,9 +93,9 @@ find_package(OpenMP REQUIRED)
 
 # set location of quadrature files 
 set(LS_QUADRATURE_DIR "${CMAKE_SOURCE_DIR}/data/lsquad")
-message(STATUS "angular quadrature dir: ${LS_QUADRATURE_DIR}")
+message(STATUS "level symmetric dir: ${LS_QUADRATURE_DIR}")
 set(AS_QUADRATURE_DIR "${CMAKE_SOURCE_DIR}/data/abu-shumays-quad")
-set(CL_QUADRATURE_DIR "${CMAKE_SOURCE_DIR}/data/clquad")
+message(STATUS "abu-shumays dir: ${AS_QUADRATURE_DIR}")
 
 # define transport vector layout 
 # LEFT: stride fastest in group, then angle, then space 
@@ -128,8 +128,10 @@ add_subdirectory(src)
 # create a library 
 # includes all third party libraries 
 add_library(allium ${SOURCES} ${HEADERS})
-target_link_libraries(allium PUBLIC ${MFEM_LIBRARIES} igraph::igraph std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX)
-target_include_directories(allium PUBLIC ${MFEM_INCLUDE_DIRS} ${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
+target_link_libraries(allium PUBLIC ${MFEM_LIBRARIES} igraph::igraph 
+	std::mdspan yaml-cpp::yaml-cpp ${LUA_LIBRARIES} sol2::sol2 OpenMP::OpenMP_CXX)
+target_include_directories(allium PUBLIC ${MFEM_INCLUDE_DIRS} 
+	${CMAKE_BINARY_DIR}/config ${PROJECT_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
 
 # add executables in exe directory 
 LIST(APPEND EXE
@@ -189,3 +191,19 @@ if (${ENABLE_SCALLION_TESTS})
 else()
 	message(STATUS "scallion tests disabled")
 endif()
+
+# --- exports for building downstream projects --- 
+# targets file in build directory 
+export(
+	TARGETS allium 
+	FILE "${PROJECT_BINARY_DIR}/${PROJECT_NAME}-targets.cmake"
+	NAMESPACE ${PROJECT_NAME}::
+)
+
+# config file in build tree
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+	"${PROJECT_SOURCE_DIR}/data/${PROJECT_NAME}-config.cmake.in"
+	"${PROJECT_BINARY_DIR}/${PROJECT_NAME}-config.cmake"
+	INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}-${PROJECT_VERSION}
+)
