@@ -462,6 +462,19 @@ AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out
 			quad = new ProductQuadrature(dim, order, az_order, polar_type, false);
 		}
 	}
+	sol::optional<sol::table> rotate_avail = table["rotation"]; 
+	if (rotate_avail) {
+		sol::table rotate = rotate_avail.value();
+		const double theta_x = rotate["x"].get_or(0.0);
+		const double theta_y = rotate["y"].get_or(0.0);
+		const double theta_z = rotate["z"].get_or(0.0);
+		quad->Rotate(theta_x, theta_y, theta_z); 
+		out << YAML::Key << "rotation" << YAML::Value << YAML::Flow << YAML::BeginMap;
+			out << YAML::Key << "x" << YAML::Value << theta_x;
+			out << YAML::Key << "y" << YAML::Value << theta_y; 
+			out << YAML::Key << "z" << YAML::Value << theta_z; 
+		out << YAML::EndMap;
+	}
 	out << YAML::Key << "number of angles" << YAML::Key << quad->Size(); 
 	const bool print = table["print"].get_or(true);
 	if (print)

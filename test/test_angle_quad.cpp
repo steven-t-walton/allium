@@ -2,6 +2,7 @@
 #include "angular_quadrature.hpp"
 #include "tvector.hpp"
 #include "transport_op.hpp"
+#include "constants.hpp"
 
 double Integrate(const AngularQuadrature &quad, std::function<double(const mfem::Vector &)> f) {
 	double r = 0;
@@ -147,4 +148,26 @@ TEST(Product, Quadratic) {
 			}
 		}		
 	}
+}
+
+TEST(Rotate, LS) {
+	auto f = [](const mfem::Vector &Omega) {
+		return 2*Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
+	}; 
+	LevelSymmetricQuadrature quad(4, 2);
+	constexpr double pi = constants::pi;
+	quad.Rotate(pi/2, pi/4, pi/4);
+	double val = Integrate(quad, f);
+	EXPECT_NEAR(val, 4*pi, 1e-11);
+}
+
+TEST(Rotate, Product) {
+	auto f = [](const mfem::Vector &Omega) {
+		return 2*Omega(0)*Omega(0) + Omega(1)*Omega(1) + Omega(0)*Omega(1); 
+	}; 
+	ProductQuadrature quad(2, 4, 6);
+	constexpr double pi = constants::pi;
+	quad.Rotate(pi/2, pi/4, pi/4);
+	double val = Integrate(quad, f);
+	EXPECT_NEAR(val, 4*pi, 1e-11);
 }

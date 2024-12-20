@@ -35,6 +35,49 @@ int AngularQuadrature::GetReflectedAngleIndex(int angle, const mfem::Vector &nor
 	return GetIndexForAngle(Omegap); 
 }
 
+void AngularQuadrature::Rotate(double x, double y, double z)
+{
+	if (dim==1) MFEM_ABORT("rotate only supported in 2/3D");
+	mfem::DenseMatrix X(3,3), Y(3,3), Z(3,3);
+	X(0,0) = 1.0;
+	X(1,1) = std::cos(x); 
+	X(2,2) = std::cos(x);
+	X(1,2) = -std::sin(x);
+	X(2,1) = std::sin(x);
+
+	Y(0,0) = std::cos(y);
+	Y(1,1) = 1.0;
+	Y(2,2) = std::cos(y);
+	Y(0,2) = std::sin(y);
+	Y(2,0) = -std::sin(y);
+
+	Z(0,0) = std::cos(z);
+	Z(1,1) = std::cos(z);
+	Z(2,2) = 1.0;
+	Z(0,1) = -std::sin(z);
+	Z(1,0) = std::sin(z);
+
+	mfem::DenseMatrix XY(3,3), R(3,3);
+	Mult(X,Y, XY);
+	Mult(XY, Z, R);
+
+	mfem::Vector Omega3(3), ROmega(3);
+	for (int a=0; a<Size(); a++) {
+		auto &Omega = Omegas[a];
+		if (Omega.Size()==2) {
+			Omega3(0) = Omega(0);
+			Omega3(1) = Omega(1);
+			Omega3(2) = std::sqrt(1.0 - Omega*Omega); 
+		} else {
+			Omega3 = Omega;
+		}
+		R.Mult(Omega3, ROmega);
+		for (int d=0; d<dim; d++) {
+			Omega(d) = ROmega(d);
+		}
+	}
+}
+
 LegendreQuadrature::LegendreQuadrature(int order, int dim)
 	: AngularQuadrature(dim)
 {

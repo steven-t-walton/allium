@@ -16,6 +16,7 @@ public:
 	double SumWeights() const { return weights_sum; }
 	int Dimension() const { return dim; }
 	int GetReflectedAngleIndex(int angle, const mfem::Vector &nor) const; 
+	void Rotate(double x, double y, double z); 
 private:
 	int GetIndexForAngle(const mfem::Vector &angle) const; 
 };
