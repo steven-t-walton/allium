@@ -515,6 +515,17 @@ void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm)
 	out << YAML::EndMap;
 }
 
+void PrintEnergyGridInformation(YAML::Emitter &out, const MultiGroupEnergyGrid &grid)
+{
+	out << YAML::Key << "groups" << YAML::Value << grid.Size(); 
+	const auto &bounds = grid.Bounds();
+	out << YAML::Key << "bounds" << YAML::Value << YAML::BeginSeq;
+	for (int b=0; b<bounds.Size(); b++) {
+		out << FormatScientific(bounds[b],6);
+	}
+	out << YAML::EndSeq;
+}
+
 MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, bool root)
 {
 	MultiGroupEnergyGrid grid;
@@ -526,7 +537,6 @@ MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, boo
 			bounds[i] = bounds_table[i+1];
 		}
 		grid = MultiGroupEnergyGrid(bounds);
-		out << YAML::Key << "groups" << YAML::Value << grid.Size();
 	} else {
 		const double Emin = table["min"];
 		const double Emax = table["max"]; 
@@ -534,7 +544,6 @@ MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, boo
 
 		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin); 
 		out << YAML::Key << "Emax" << YAML::Value << FormatScientific(Emax);
-		out << YAML::Key << "groups" << YAML::Value << G;
 
 		if (G == 1) {
 			grid = MultiGroupEnergyGrid::MakeGray(Emin, Emax);
@@ -552,134 +561,29 @@ MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, boo
 			}			
 		}
 	}
-
-	const bool print_bounds = table["print_bounds"].get_or(false);
-	if (print_bounds) {
-		const auto &bounds = grid.Bounds();
-		out << YAML::Key << "bounds" << YAML::Value << YAML::BeginSeq;
-		for (int b=0; b<bounds.Size(); b++) {
-			out << FormatScientific(bounds[b],6);
-		}
-		out << YAML::EndSeq;
-	}
 	return grid;
 }
 
-OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid, YAML::Emitter &out, bool root)
+MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, const IpcressData *ipcress, bool root)
 {
-	OpacityCoefficient *opac;
-	std::string type = table["type"]; 
-	io::ValidateOption<std::string>("opacity type", type, 
-		{"constant", "analytic gray", "analytic", "analytic edge", "brunner"}, root); 
-	out << YAML::Key << "type" << YAML::Value << type; 
-	if (type == "constant") {
-		sol::table values = table["values"];
-		mfem::Vector vec(values.size()); 
-		for (int i=0; i<vec.Size(); i++) { vec(i) = values[i+1]; }
-		opac = new ConstantOpacityCoefficient(vec);  
-	}
-
-	else if (type == "analytic gray") {
-		double coef = table["coef"]; 
-		double nrho = table["nrho"]; 
-		double nT = table["nT"]; 
-		opac = new AnalyticGrayOpacityCoefficient(coef, nrho, nT); 
-
-		out << YAML::Key << "coef" << YAML::Value << coef;
-		out << YAML::Key << "nrho" << YAML::Value << nrho; 
-		out << YAML::Key << "nT" << YAML::Value << nT;
-	}
-
-	else if (type == "analytic") {
-		double coef = table["coef"]; 
-		double nrho = table["nrho"]; 
-		double nT = table["nT"]; 
-		double Emin = table["Emin"].get_or(0.0);
-		const int int_order = table["int_order"].get_or(1);
-		sol::optional<sol::table> edge_avail = table["edge"]; 
-		FleckCummingsOpacityFunction func(coef, nrho, nT, Emin);
-
-		out << YAML::Key << "coef" << YAML::Value << coef;
-		out << YAML::Key << "nrho" << YAML::Value << nrho; 
-		out << YAML::Key << "nT" << YAML::Value << nT;
-		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin); 
-		out << YAML::Key << "integration order" << YAML::Value << int_order;
-		if (edge_avail) {
-			sol::table edge_table = edge_avail.value();
-			double edge = edge_table["energy"];
-			double coef = edge_table["coef"];
-			func.SetEdge(edge, coef);
-			out << YAML::Key << "edge" << YAML::Value << YAML::BeginMap; 
-				out << YAML::Key << "energy" << YAML::Value << edge; 
-				out << YAML::Key << "coef" << YAML::Value << coef; 
-			out << YAML::EndMap;
+	MultiGroupEnergyGrid energy_grid;
+	if (table.valid()) {
+		if (ipcress) {
+			const int G = table["num_groups"]; 
+			if (G>1) MFEM_ABORT("ipcress opacity can only be used with ipcress group structure or gray");
+			const auto &bounds = ipcress->GetGroupBounds();
+			energy_grid = MultiGroupEnergyGrid::MakeGray(bounds[0], bounds.Last());			
+		} else {
+			energy_grid = io::CreateEnergyGrid(table, out, root);			
 		}
-		auto *ptr = new MultiGroupFunctionOpacityCoefficient(grid.Bounds(), func);
-		if (int_order > 1) ptr->SetIntegrationOrder(int_order);
-		opac = ptr;
-	} 
-
-	else if (type == "analytic edge") {
-		const double c0 = table["c0"];
-		const double c1 = table["c1"];
-		const double c2 = table["c2"];
-		const double Emin = table["Emin"];
-		const double Eedge = table["Eedge"];
-		const double delta_s = table["delta_s"];
-		const double delta_w = table["delta_w"];
-		const double nT = table["nT"].get_or(-0.5);
-		const int Nlines = table["Nlines"];
-		const int int_order = table["int_order"].get_or(1);
-		EdgeLineOpacityFunction func(c0, c1, c2, Emin, Eedge, delta_s, delta_w, nT, Nlines);
-		std::function<double(double,double)> weight_func; 
-		sol::optional<std::string> weight_type_avail = table["weight"];
-		if (weight_type_avail) {
-			const std::string weight_type = weight_type_avail.value();
-			io::ValidateOption<std::string>("opacity weight", weight_type, {"planck"}, root);
-			if (weight_type == "planck") {
-				weight_func = PlanckFunction;
-			}
+	} else {
+		if (ipcress) {
+			energy_grid = MultiGroupEnergyGrid(ipcress->GetGroupBounds());
+		} else {
+			MFEM_ABORT("group bounds not defined");
 		}
-		auto *ptr = new MultiGroupFunctionOpacityCoefficient(grid.Bounds(), func, weight_func);
-		if (int_order > 1) ptr->SetIntegrationOrder(int_order);
-		out << YAML::Key << "c0" << YAML::Value << c0;
-		out << YAML::Key << "c1" << YAML::Value << c1;
-		out << YAML::Key << "c2" << YAML::Value << c2;
-		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin);
-		out << YAML::Key << "Eedge" << YAML::Value << FormatScientific(Eedge);
-		out << YAML::Key << "delta_s" << YAML::Value << FormatScientific(delta_s);
-		out << YAML::Key << "delta_w" << YAML::Value << FormatScientific(delta_w);
-		out << YAML::Key << "nT" << YAML::Value << nT;
-		out << YAML::Key << "Nlines" << YAML::Value << Nlines;
-		out << YAML::Key << "integration order" << YAML::Value << int_order;
-		opac = ptr;
 	}
-
-	else if (type == "brunner") {
-		const double c0 = table["c0"];
-		const double c1 = table["c1"];
-		const double c2 = table["c2"];
-		const double Emin = table["Emin"];
-		const double Eedge = table["Eedge"];
-		const double delta_s = table["delta_s"];
-		const double delta_w = table["delta_w"];
-		const int Nlines = table["Nlines"];
-		const auto weight_str = io::GetAndValidateOption<std::string>(
-			table, "weight", {"planck", "rosseland"}, "planck", root);
-		const bool planck_weight = weight_str == "planck";
-		opac = new BrunnerOpacityCoefficient(
-			grid.Bounds(), c0, c1, c2, Emin, Eedge, delta_s, delta_w, Nlines, planck_weight);
-		out << YAML::Key << "c0" << YAML::Value << c0;
-		out << YAML::Key << "c1" << YAML::Value << c1;
-		out << YAML::Key << "c2" << YAML::Value << c2;
-		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin);
-		out << YAML::Key << "Eedge" << YAML::Value << FormatScientific(Eedge);
-		out << YAML::Key << "delta_s" << YAML::Value << FormatScientific(delta_s);
-		out << YAML::Key << "delta_w" << YAML::Value << FormatScientific(delta_w);
-		out << YAML::Key << "Nlines" << YAML::Value << Nlines;
-		out << YAML::Key << "weight function" << YAML::Value << weight_str;
-	}
-	return opac;
+	return energy_grid;
 }
 
 OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
@@ -800,15 +704,12 @@ OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 	else if (type == "ipcress") {
 		if (!ipcress_data) MFEM_ABORT("ipcress data not provided");
 		const int mat_id = table["id"]; 
-		const auto weight_str = io::GetAndValidateOption<std::string>(
-			table, "weight", {"planck", "rosseland"}, "rosseland", root);
-		std::string key; 
-		if (weight_str == "planck") key = "pamg";
-		else if (weight_str	== "rosseland") key = "ramg";
+		const auto key = io::GetAndValidateOption<std::string>(
+			table, "key", {"ramg", "pamg", "ragray", "pgray"}, "ramg", root);
 		opac = new IpcressOpacityCoefficient(*ipcress_data, mat_id, key);
 
 		out << YAML::Key << "ipcress id" << YAML::Value << mat_id;
-		out << YAML::Key << "weight function" << YAML::Value << weight_str;
+		out << YAML::Key << "ipcress key" << YAML::Value << key;
 	}
 	return opac;
 }

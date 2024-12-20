@@ -205,19 +205,11 @@ int main(int argc, char *argv[]) {
 	// --- load energy grid --- 
 	// do this first since materials depend on energy 
 	// discretization 
+	// group structure from ipcress file used if available 
 	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap; 
-	MultiGroupEnergyGrid energy_grid;
-	if (ipcress_data) {
-		energy_grid = MultiGroupEnergyGrid(ipcress_data->GetGroupBounds());
-		out << YAML::Key << "groups" << YAML::Value << energy_grid.Size(); 
-		out << YAML::Key << "bounds" << YAML::Value;
-		io::PrintArray(out, energy_grid.Bounds()); 
-	}
-	else {
-		sol::table energy_table = lua["energy"];
-		if (!energy_table.valid()) MFEM_ABORT("must supply energy table");
-		energy_grid = io::CreateEnergyGrid(energy_table, out, root);		
-	}
+	sol::table energy_table = lua["energy"]; 
+	MultiGroupEnergyGrid energy_grid = io::CreateEnergyGrid(energy_table, out, ipcress_data.get(), root);
+	io::PrintEnergyGridInformation(out, energy_grid);
 	out << YAML::EndMap; // end energy block 
 	const auto G = energy_grid.Size();
 

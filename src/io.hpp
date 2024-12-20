@@ -107,10 +107,17 @@ void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, i
 AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out, int dim, bool root=true);
 void PrintAngularQuadrature(YAML::Emitter &out, const AngularQuadrature &quad); 
 
+// prints numbers of ranks and openmp threads to yaml 
 void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm); 
 
+// create energy grid based on lua table 
 MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, bool root=true);
-OpacityCoefficient *CreateOpacity(sol::table &table, MultiGroupEnergyGrid &grid, YAML::Emitter &out, bool root=true);
+MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, const IpcressData *ipcress, bool root=true);
+void PrintEnergyGridInformation(YAML::Emitter &out, const MultiGroupEnergyGrid &grid);
+
+// create an opacity from lua input 
+// "factory" class since ipcress opacities 
+// require access to an optional IpcressData object 
 class OpacityFactory
 {
 private:

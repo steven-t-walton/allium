@@ -1,6 +1,12 @@
 #include "ipcress.hpp"
 #include "mdspan/mdspan.hpp"
 
+// place helper functions in annoymous namespace 
+// to prevent possible linker issues if functions
+// with the same signature happen to be defined 
+// elsewhere 
+namespace {
+
 bool is_big_endian() {
 	union {
 		uint32_t i;
@@ -73,6 +79,8 @@ std::string read_string(std::ifstream &inp, std::size_t byte_loc)
 	return std::string(buffer.data(), 8);
 }
 
+}
+
 IpcressData::IpcressData(const std::string &file_name)
 	: file_name(file_name)
 {
@@ -141,6 +149,7 @@ IpcressData::IpcressData(const std::string &file_name)
 
 void IpcressData::Eval(int matid, const std::string &key, double rho, double T, mfem::Vector &v) const 
 {
+	const bool is_gray = key.size() >= 4 and key.substr(key.size()-4) == "gray"; 
 	auto density = GetField(matid, "rgrid"); 
 	auto temperature = GetField(matid, "tgrid");
 	auto value = GetField(matid, key);
@@ -157,10 +166,10 @@ void IpcressData::Eval(int matid, const std::string &key, double rho, double T, 
 	assert(eta >= 0.0 and eta <= 1.0);
 	std::array<double,4> basis = {(1.0-xi)*(1.0-eta), xi*(1.0-eta), (1.0-xi)*eta, xi*eta}; 
 
-	const auto G = bounds.Size() - 1;
+	const auto G = (is_gray) ? 1 : bounds.Size() - 1;
 	using Extents = Kokkos::dextents<std::size_t,3>; 
-	Extents ext(G, density.size(), temperature.size());
-	auto value_view = Kokkos::mdspan<const double,Extents,Kokkos::layout_left>(value.data(), ext);
+	auto value_view = Kokkos::mdspan<const double,Extents,Kokkos::layout_left>(
+		value.data(), G, density.size(), temperature.size());
 	v.SetSize(G); 
 	for (int g=0; g<G; g++) {
 		const double log_opac = 

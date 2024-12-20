@@ -254,7 +254,7 @@ int main(int argc, char *argv[]) {
 	out << YAML::EndMap; 
 
 	// --- check for ipcress opacity data --- 
-	// the opacity data defines the energy bounds => must load first 
+	// the opacity data comes with its own energy bounds => must load first 
 	sol::optional<std::string> ipcress_file_avail = lua["ipcress_file"]; 
 	std::unique_ptr<IpcressData> ipcress_data; 
 	if (ipcress_file_avail) {
@@ -266,19 +266,11 @@ int main(int argc, char *argv[]) {
 	// --- load energy grid --- 
 	// do this first since materials depend on energy 
 	// discretization 
+	// group structure from ipcress file used if available 
 	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap; 
-	MultiGroupEnergyGrid energy_grid;
-	if (ipcress_data) {
-		energy_grid = MultiGroupEnergyGrid(ipcress_data->GetGroupBounds());
-		out << YAML::Key << "groups" << YAML::Value << energy_grid.Size(); 
-		out << YAML::Key << "bounds" << YAML::Value;
-		io::PrintArray(out, energy_grid.Bounds()); 
-	}
-	else {
-		sol::table energy_table = lua["energy"];
-		if (!energy_table.valid()) MFEM_ABORT("must supply energy table");
-		energy_grid = io::CreateEnergyGrid(energy_table, out, root);		
-	}
+	sol::table energy_table = lua["energy"]; 
+	MultiGroupEnergyGrid energy_grid = io::CreateEnergyGrid(energy_table, out, ipcress_data.get(), root);
+	io::PrintEnergyGridInformation(out, energy_grid);
 	out << YAML::EndMap; // end energy block 
 	const auto G = energy_grid.Size();
 
