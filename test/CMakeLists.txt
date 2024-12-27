@@ -10,6 +10,7 @@ LIST(APPEND TESTS
 	test_opacity.cpp
 	test_trt.cpp
 	test_block_diag.cpp
+	test_utils.cpp
 )
 
 LIST(APPEND PAR_TESTS

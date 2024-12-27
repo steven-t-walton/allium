@@ -564,12 +564,20 @@ MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, boo
 	return grid;
 }
 
-MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, const IpcressData *ipcress, bool root)
+MultiGroupEnergyGrid CreateEnergyGrid(sol::optional<sol::table> &table_avail, 
+	YAML::Emitter &out, const IpcressData *ipcress, bool root)
 {
 	MultiGroupEnergyGrid energy_grid;
-	if (table.valid()) {
+	if (table_avail) {
+		sol::table table = table_avail.value();
+		sol::optional<sol::table> bounds_avail = table["bounds"];
 		if (ipcress) {
-			const int G = table["num_groups"]; 
+			int G;
+			if (bounds_avail) {
+				G = bounds_avail.value().size();
+			} else {
+				G = table["num_groups"];
+			}
 			if (G>1) MFEM_ABORT("ipcress opacity can only be used with ipcress group structure or gray");
 			const auto &bounds = ipcress->GetGroupBounds();
 			energy_grid = MultiGroupEnergyGrid::MakeGray(bounds[0], bounds.Last());			
@@ -939,17 +947,49 @@ void ValidateOption<const char*>(std::string key, const char *res, std::initiali
 	}
 }
 
-// DiffusionBoundaryConditionType GetDiffusionBCType(std::string type) 
-// {
-// 	DiffusionBoundaryConditionType bc; 
-// 	if (type == "half range") 
-// 		bc = DiffusionBoundaryConditionType::HALF_RANGE; 	
-// 	else if (type == "full range") 
-// 		bc = DiffusionBoundaryConditionType::FULL_RANGE; 
-// 	else if (type == "half range reflect") 
-// 		bc = DiffusionBoundaryConditionType::HALF_RANGE_REFLECT; 
-// 	return bc; 
-// }
+utils::InterpolatedTable1D *CreateInterpolatedTable(sol::table &table, YAML::Emitter &out, bool root) 
+{
+	utils::InterpolatedTable1D *ptr;
+	sol::optional<std::string> file_avail = table["file"];
+	sol::optional<sol::table> breaks_avail = table["breaks"];
+	if (root and !file_avail and !breaks_avail) { MFEM_ABORT("must supply file or table of break points"); }
+
+	if (file_avail) {
+		const std::string file = file_avail.value();
+		ptr = new utils::InterpolatedTable1D(file);
+		out << YAML::Key << "file" << YAML::Value << ResolveRelativePath(file);
+	} else {
+		sol::table breaks = breaks_avail.value();
+		mfem::Vector x(breaks.size()), y(breaks.size());
+		for (int i=0; i<breaks.size(); i++) {
+			sol::table row = breaks[i+1]; 
+			x(i) = row[1];
+			y(i) = row[2];
+		}
+		ptr = new utils::InterpolatedTable1D(x,y);
+		out << YAML::Key << "breaks" << YAML::Value << YAML::BeginSeq;
+		for (int i=1; i<=breaks.size(); i++) {
+			sol::table row = breaks[i];
+			const double x = row[1];
+			const double y = row[2];
+			out << YAML::Flow << YAML::BeginSeq << x << y << YAML::EndSeq;
+		}
+		out << YAML::EndSeq;
+	}
+
+	const bool log_x = table["log_x"].get_or(false);
+	const bool log_y = table["log_y"].get_or(false);
+	const bool piecewise = table["piecewise_constant"].get_or(false);
+	ptr->UseLogX(log_x);
+	ptr->UseLogY(log_y);
+	ptr->UsePiecewiseConstant(piecewise);
+
+	out << YAML::Key << "log x" << YAML::Value << log_x; 
+	out << YAML::Key << "log y" << YAML::Value << log_y;
+	out << YAML::Key << "piecewise constant" << YAML::Value << piecewise;
+
+	return ptr;
+}
 
 std::string ResolveRelativePath(std::string path) 
 {

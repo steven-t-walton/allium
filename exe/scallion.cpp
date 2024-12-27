@@ -268,7 +268,7 @@ int main(int argc, char *argv[]) {
 	// discretization 
 	// group structure from ipcress file used if available 
 	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap; 
-	sol::table energy_table = lua["energy"]; 
+	sol::optional<sol::table> energy_table = lua["energy"]; 
 	MultiGroupEnergyGrid energy_grid = io::CreateEnergyGrid(energy_table, out, ipcress_data.get(), root);
 	io::PrintEnergyGridInformation(out, energy_grid);
 	out << YAML::EndMap; // end energy block 
@@ -516,10 +516,16 @@ int main(int argc, char *argv[]) {
 	double time = 0.0;
 	int cycle = 0, output_cycle = 0;
 
-	// get initial time step
-	// optionally get function to change time step 
-	double time_step = driver["time_step"];
+	// get time step update objects 
+	// if function or table not provided, time step is constant at value specified by 
+	// "time step" unless overwritten by restart time step 
+	double time_step;
 	sol::optional<sol::function> time_step_func_avail = driver["time_step_function"]; 
+	sol::optional<sol::table> time_step_table_avail = driver["time_step_table"];
+	if (time_step_func_avail and time_step_table_avail) MFEM_ABORT("time step should be specified by function or table");
+
+	// create table reader for time step defined by table 
+	std::unique_ptr<utils::InterpolatedTable1D> time_step_table; 
 
 	int max_cycles = driver["max_cycles"].get_or(std::numeric_limits<int>::max()); 
 	if (max_cycles_override>0) max_cycles = max_cycles_override; 
@@ -531,15 +537,6 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "opacity fe order" << YAML::Value << sigma_fe_order; 
 		out << YAML::Key << "basis type" << YAML::Value << basis_type_str; 
 		out << YAML::Key << "psi size" << YAML::Value << psi_size_global;
-		out << YAML::Key << "time integration" << YAML::Value << YAML::BeginMap; 
-			out << YAML::Key << "final time" << YAML::Value << final_time; 
-			out << YAML::Key << "time step" << YAML::Key << YAML::BeginMap; 
-				out << YAML::Key << "type" << YAML::Value; 
-				if (time_step_func_avail) out << "function"; 
-				else out << "constant"; 
-				out << YAML::Key << "initial value" << YAML::Value << time_step; 
-			out << YAML::EndMap; 
-		out << YAML::EndMap; 
 
 	// time mass matrix for psi 
 	SNTimeMassMatrix Mpsi(fes, psi_ext, IsMassLumped(lump)); 
@@ -591,12 +588,15 @@ int main(int argc, char *argv[]) {
 	// 2) equilibrium between radiation and material temperature function 
 	// input from lua 
 	sol::optional<sol::table> restart_table_avail = driver["restart"];
+	bool force_restart_dt = false;
+	double restart_time_step;
 	if (restart_table_avail) {
 		sol::table restart_table = restart_table_avail.value();
 		const std::string restart_file = restart_table["path"];
 		const int id = restart_table["id"].get_or(0);
+		force_restart_dt = restart_table["use_restart_dt"].get_or(true);
 		// loads data, grabs cycle, time, time_step from restart file 
-		LoadFromRestart(MPI_COMM_WORLD, restart_file, id, x, output_cycle, cycle, time, time_step);
+		LoadFromRestart(MPI_COMM_WORLD, restart_file, id, x, output_cycle, cycle, time, restart_time_step);
 		x0 = x;
 		// account for cycle != 0 in max cycles 
 		if (max_cycles < std::numeric_limits<int>::max() - cycle)
@@ -605,6 +605,11 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "restart" << YAML::Value << YAML::BeginMap;
 			out << YAML::Key << "path" << YAML::Value << restart_file;
 			out << YAML::Key << "id" << YAML::Value << id;
+			out << YAML::Key << "use restart dt" << YAML::Value << force_restart_dt;
+			out << YAML::Key << "output cycle" << YAML::Value << output_cycle; 
+			out << YAML::Key << "cycle" << YAML::Value << cycle; 
+			out << YAML::Key << "time" << YAML::Value << time; 
+			out << YAML::Key << "time step size" << YAML::Value << restart_time_step;
 		out << YAML::EndMap;
 	} 
 
@@ -629,6 +634,30 @@ int main(int argc, char *argv[]) {
 		ProjectPsi(fes, *quad, energy_grid, planck_coef, psi0);
 		psi = psi0;
 	}
+
+	// output information about time step size in driver block
+	// set initial dt based on input, first entry in table, or the restart dt 
+	out << YAML::Key << "time integration" << YAML::Value << YAML::BeginMap; 
+		out << YAML::Key << "initial time" << YAML::Value << time;
+		out << YAML::Key << "final time" << YAML::Value << final_time; 
+		out << YAML::Key << "time step" << YAML::Key << YAML::BeginMap; 
+			out << YAML::Key << "type" << YAML::Value; 
+			if (time_step_func_avail) {
+				time_step = (force_restart_dt) ? restart_time_step : driver["time_step"];
+				out << "function"; 
+			}
+			else if (time_step_table_avail) {
+				out << "table";
+				time_step_table.reset(io::CreateInterpolatedTable(time_step_table_avail.value(), out, root));
+				time_step = (force_restart_dt) ? restart_time_step : time_step_table->Eval(time);
+			}
+			else {
+				time_step = (force_restart_dt) ? restart_time_step : driver["time_step"];
+				out << "constant"; 
+			}
+			out << YAML::Key << "initial value" << YAML::Value << time_step; 
+		out << YAML::EndMap; 
+	out << YAML::EndMap; 
 
 	// initial opacity 
 	total_coef.SetTemperature(Tcoef); 
@@ -692,7 +721,6 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "gradient" << YAML::Value << IsGradientLumped(lump); 
 		out << YAML::Key << "faces" << YAML::Value << IsFaceLumped(lump); 
 	out << YAML::EndMap; 
-	if (sweep_opts_avail) out << YAML::Key << "sweep options" << YAML::Value << sweep_opts_avail.value(); 
 	if (Linv.IsParallelBlockJacobi()) Linv.Exchange(psi);
 
 	std::unique_ptr<io::NegativeFluxFixup> nff;
@@ -700,7 +728,6 @@ int main(int argc, char *argv[]) {
 	if (fixup_avail) {
 		sol::table fixup = fixup_avail.value(); 
 		nff.reset(io::CreateNegativeFluxFixup(fixup, root));
-		// nff = std::make_unique<io::NegativeFluxFixup>(fixup, out, root);
 		Linv.SetFixupOperator(*nff); 
 		out << YAML::Key << "negative flux fixup" << YAML::Value << fixup; 
 	}
@@ -1296,18 +1323,17 @@ int main(int argc, char *argv[]) {
 		}
 
 		// check for new time step size 
-		bool time_step_changed = false; 
 		const double time_step_old = time_step;
 		// reduce time step to end at final_time, if needed 
 		if (time + time_step > final_time) {
-			time_step_changed = true;
 			time_step = final_time - time;
 		}
 		// query time step function for new value 
 		else if (time_step_func_avail) {
-			double new_time_step = time_step_func_avail.value()(time, time_step); 
-			time_step_changed = std::fabs(new_time_step - time_step) > 1e-14; 
-			time_step = new_time_step; 
+			time_step = time_step_func_avail.value()(time, time_step); 
+		}
+		else if (time_step_table) {
+			time_step = time_step_table->Eval(time);
 		}
 
 		// --- update opacity and opacity-dependent terms --- 
@@ -1386,6 +1412,7 @@ int main(int argc, char *argv[]) {
 			io::ProcessGlobalLogs(out, log_verbosity);
 			out << YAML::Key << "energy balance" << YAML::Value << io::FormatScientific(balance);
 			out << YAML::Key << "cycle time" << YAML::Value << io::FormatTimeString(cycle_time); 
+			out << YAML::Key << "elapsed time" << YAML::Value << io::FormatTimeString(wall_timer.RealTime());
 		out << YAML::EndMap << YAML::Newline; 
 
 		// warn if max cycles reached 

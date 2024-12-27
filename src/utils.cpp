@@ -77,4 +77,62 @@ int *GenerateMetisPartitioning(mfem::Mesh &mesh, int nparts, mfem::Coefficient &
 	return partitioning;
 }
 
+InterpolatedTable1D::InterpolatedTable1D(const std::string &file_name)
+{
+	std::ifstream inp(file_name);
+	if (!inp.good()) { MFEM_ABORT("file not opened"); }
+
+	std::string line; 
+	int count=0;
+	while (std::getline(inp, line)) {
+		count++;
+	}
+
+	x.SetSize(count); 
+	y.SetSize(count);
+
+	inp.clear();
+	inp.seekg(0, std::ios::beg);
+	for (int i=0; i<count; i++) {
+		inp >> x[i] >> y[i];
+	}
+	inp.close();
+}
+
+double InterpolatedTable1D::Eval(double val) const
+{
+	const auto N = x.Size();
+	if (val <= x[0]) {
+		return y[0];
+	} else if (val >= x[N-1]) {
+		return y[N-1];
+	} 
+
+	auto it = std::lower_bound(x.begin(), x.end(), val);
+	std::size_t loc = std::distance(x.begin(), it)-1;
+
+	assert(loc>=0 and loc < x.Size()-1);
+	assert(val >= x[0] and val <= x[N-1]);
+
+	if (piecewise_constant) return y[loc]; 
+
+	std::array<double,2> xvals = {x[loc], x[loc+1]};
+	std::array<double,2> yvals = {y[loc], y[loc+1]};
+	if (log_x) {
+		std::transform(xvals.begin(), xvals.end(), xvals.begin(), 
+			[](const double v) { return std::log(v); });
+		val = std::log(val);
+	}
+	if (log_y) {
+		std::transform(yvals.begin(), yvals.end(), yvals.begin(), 
+			[](const double v) { return std::log(v); });		
+	}
+	const double xi = (val - xvals[0]) / (xvals[1] - xvals[0]);
+	assert(xi >= 0.0 and xi <= 1.0);
+	std::array<double,2> shape = {1.0-xi, xi};
+	const double r = shape[0] * yvals[0] + shape[1] * yvals[1];
+	if (log_y) return std::exp(r);
+	else return r;
+}
+
 }
