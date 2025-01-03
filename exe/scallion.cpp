@@ -1140,7 +1140,7 @@ int main(int argc, char *argv[]) {
 			const std::string type = viz["type"];
 			dc.reset(io::CreateDataCollection(type, output_root, mesh, root));
 			output_freq = viz["frequency"].get_or(std::numeric_limits<int>::max()); 
-			const int precision = viz["precision"].get_or(6); 
+			const int precision = viz["precision"].get_or(16); 
 			const bool restart_mode = viz["restart_mode"].get_or(false) and restart_table_avail;
 			dc->SetPrecision(precision); 
 			dc->RegisterField("E", &E); 
@@ -1206,7 +1206,7 @@ int main(int argc, char *argv[]) {
 				}
 			}
 			const auto prefix = tracer["prefix"].get_or(std::string("tracer")); 
-			const int precision = tracer["precision"].get_or(10); 
+			const int precision = tracer["precision"].get_or(16); 
 			const bool restart_mode = tracer["restart_mode"].get_or(false) and restart_table_avail;
 			tracer_dc = std::make_unique<TracerDataCollection>(prefix, mesh, pts); 
 			tracer_dc->SetPrefixPath(output_root); 
