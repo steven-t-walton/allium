@@ -962,7 +962,8 @@ int main(int argc, char *argv[]) {
 			if (times_avail) {
 				sol::table times = times_avail.value();
 				for (int i=1; i<=times.size(); i++) {
-					write_times.push_back(times[i]);
+					if ((double)times[i] >= time)
+						write_times.push_back(times[i]);
 				}
 			}
 
@@ -1065,6 +1066,10 @@ int main(int argc, char *argv[]) {
 	// reduction 
 	LogMap<int,MAX> log;
 	LogMap<double,MAX> value_log;
+	// time step to reset to after time step has been reduced 
+	// to print the solution at an exact time before the final time 
+	// reset is triggered when recovery_dt > 0 
+	double recovery_dt = -1.0;
 	out << YAML::Key << "time integration" << YAML::BeginSeq; 
 	while (true) {
 		cycle_timer.Restart(); 
@@ -1278,9 +1283,13 @@ int main(int argc, char *argv[]) {
 		// write data collection to file 
 		timer.Restart();
 		bool done = time >= final_time - 1e-14 or cycle >= max_cycles; 
-		double write_time = write_times.front();
-		const bool write = std::fabs(write_time - time) < time_step / 2;
-		if (write) write_times.pop_front();
+		// find a write time within tolerance of current simulation time 
+		auto write_it = std::find_if(write_times.begin(), write_times.end(), 
+			[&time](const double x) { return std::fabs(time - x) < 1e-14; });
+		// if found, force write 
+		const bool write = (write_it != write_times.end()); 
+		// remove write time from list 
+		if (write) write_times.erase(write_it);
 		if (dc and (cycle % output_freq == 0 or write or done)) {
 			output_cycle++;
 			dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
@@ -1310,16 +1319,31 @@ int main(int argc, char *argv[]) {
 		}
 		TimingLog.Log("write", timer.RealTime());
 
-		// check for new time step size 
-		const double time_step_old = time_step;
+		// --- get new time step size ---  
+		const double time_step_old = time_step; // store old time step 
+		// check if there is a write time that is less than time_step/2 away 
+		auto write_it2 = std::find_if(write_times.begin(), write_times.end(), 
+			[&time, &time_step](const double x) { return x - time < time_step/2; });
+		// reset time step after being reduced to align with a write time 
+		// from the previous time step 
+		if (recovery_dt > 0.0) {
+			time_step = recovery_dt;
+			recovery_dt = -1.0;
+		}
 		// reduce time step to end at final_time, if needed 
 		if (time + time_step > final_time) {
 			time_step = final_time - time;
+		}
+		// reduce time step to align with output times specified in write_times 
+		else if (write_it2 != write_times.end() and time + time_step > *write_it2) {
+			time_step = *write_it2 - time;
+			recovery_dt = time_step_old;
 		}
 		// query time step function for new value 
 		else if (time_step_func_avail) {
 			time_step = time_step_func_avail.value()(time, time_step); 
 		}
+		// query time step table for new value 
 		else if (time_step_table) {
 			time_step = time_step_table->Eval(time);
 		}
