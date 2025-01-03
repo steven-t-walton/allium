@@ -1333,9 +1333,9 @@ int main(int argc, char *argv[]) {
 
 		// --- get new time step size ---  
 		const double time_step_old = time_step; // store old time step 
-		// check if there is a write time that is less than time_step/2 away 
+		// check if there is a write time that is less than time_step away 
 		auto write_it2 = std::find_if(write_times.begin(), write_times.end(), 
-			[&time, &time_step](const double x) { return x - time < time_step/2; });
+			[&time, &time_step](const double x) { return x - time < time_step; });
 		// reset time step after being reduced to align with a write time 
 		// from the previous time step 
 		if (recovery_dt > 0.0) {
