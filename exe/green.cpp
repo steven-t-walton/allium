@@ -1321,15 +1321,23 @@ int main(int argc, char *argv[]) {
 
 		// --- get new time step size ---  
 		const double time_step_old = time_step; // store old time step 
-		// check if there is a write time that is less than time_step away 
-		auto write_it2 = std::find_if(write_times.begin(), write_times.end(), 
-			[&time, &time_step](const double x) { return x - time < time_step; });
 		// reset time step after being reduced to align with a write time 
 		// from the previous time step 
 		if (recovery_dt > 0.0) {
 			time_step = recovery_dt;
 			recovery_dt = -1.0;
 		}
+		// query time step function for new value 
+		if (time_step_func_avail) {
+			time_step = time_step_func_avail.value()(time, time_step); 
+		}
+		// query time step table for new value 
+		else if (time_step_table) {
+			time_step = time_step_table->Eval(time);
+		}
+		// check if there is a write time that is less than the new time_step away 
+		auto write_it2 = std::find_if(write_times.begin(), write_times.end(), 
+			[&time, &time_step](const double x) { return x - time < time_step; });
 		// reduce time step to end at final_time, if needed 
 		if (time + time_step > final_time) {
 			time_step = final_time - time;
@@ -1337,16 +1345,9 @@ int main(int argc, char *argv[]) {
 		// reduce time step to align with output times specified in write_times 
 		else if (write_it2 != write_times.end() and time + time_step > *write_it2) {
 			time_step = *write_it2 - time;
-			recovery_dt = time_step_old;
+			recovery_dt = time_step;
 		}
-		// query time step function for new value 
-		else if (time_step_func_avail) {
-			time_step = time_step_func_avail.value()(time, time_step); 
-		}
-		// query time step table for new value 
-		else if (time_step_table) {
-			time_step = time_step_table->Eval(time);
-		}
+		if (time_step < 0.0) MFEM_ABORT("negative time step");
 
 		// adjust time step for sweep 
 		Linv.SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
