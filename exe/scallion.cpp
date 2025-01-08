@@ -1264,6 +1264,7 @@ int main(int argc, char *argv[]) {
 
 	mfem::StopWatch cycle_timer; 
 	LogMap<int,MAX> log;
+	LogMap<double,MAX> value_log;
 	// time step to reset to after time step has been reduced 
 	// to print the solution at an exact time before the final time 
 	// reset is triggered when recovery_dt > 0 
@@ -1287,6 +1288,7 @@ int main(int argc, char *argv[]) {
 
 		// --- compute energy balance --- 
 		const auto balance = ComputeBalance(Linv, D, emission_form, psi0, psi, T);
+		value_log.Log("max energy balance", balance);
 
 		E *= 1.0/constants::SpeedOfLight; 
 		if (E.CheckFinite() > 0) MFEM_ABORT("infinite energy density"); 
@@ -1356,8 +1358,8 @@ int main(int argc, char *argv[]) {
 		}
 		// reduce time step to align with output times specified in write_times 
 		else if (write_it2 != write_times.end() and time + time_step > *write_it2) {
-			time_step = *write_it2 - time;
 			recovery_dt = time_step;
+			time_step = *write_it2 - time;
 		}
 		if (time_step < 0.0) MFEM_ABORT("negative time step");
 
@@ -1451,6 +1453,11 @@ int main(int argc, char *argv[]) {
 
 	if (log.size()) {
 		out << YAML::Key << "log" << YAML::Value << log;
+	}
+
+	if (value_log.size()) {
+		out << YAML::Key << "value log" << YAML::Value;
+		io::PrintMapScientific(out, value_log);
 	}
 
 	// print logs persistent across all time steps 

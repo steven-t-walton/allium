@@ -1344,8 +1344,8 @@ int main(int argc, char *argv[]) {
 		}
 		// reduce time step to align with output times specified in write_times 
 		else if (write_it2 != write_times.end() and time + time_step > *write_it2) {
-			time_step = *write_it2 - time;
 			recovery_dt = time_step;
+			time_step = *write_it2 - time;
 		}
 		if (time_step < 0.0) MFEM_ABORT("negative time step");
 
