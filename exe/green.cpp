@@ -85,18 +85,20 @@ enum OpacityIntegrationType {
 	INNER = 2, 
 };
 
+// stores references to gray opacities and related mass matrices 
+// Update evaluates all relevant gray opacities and re-assembles mass matrix 
+// planck opacity is evaluated if update_planck = true 
 class GrayOpacityManager
 {
 private:
 	ProjectedCoefficient &abs, &total, &planck;
 	mfem::BilinearForm &Mabs;
-	OpacityIntegrationType type;
+	bool update_planck;
 public:
 	GrayOpacityManager(
-		OpacityIntegrationType type, 
 		ProjectedCoefficient &abs, ProjectedCoefficient &total, 
-		ProjectedCoefficient &planck, mfem::BilinearForm &Mabs)
-		: type(type), abs(abs), total(total), planck(planck), Mabs(Mabs)
+		ProjectedCoefficient &planck, mfem::BilinearForm &Mabs, bool update_planck)
+		: abs(abs), total(total), planck(planck), Mabs(Mabs), update_planck(update_planck)
 	{ }
 	void Update()
 	{
@@ -106,7 +108,7 @@ public:
 		// assemble into existing sparsity pattern 
 		Mabs.Assemble(); 
 		total.Project();
-		if (type == EXPLICIT or type == OUTER)
+		if (update_planck)
 			planck.Project();
 	}
 };
@@ -363,6 +365,8 @@ int main(int argc, char *argv[]) {
 	// print info about mesh 
 	io::PrintMeshCharacteristics(out, mesh, ser_ref, par_ref);
 	out << YAML::EndMap; 
+
+	io::PrintParallelInformation(out, MPI_COMM_WORLD);
 
 	// --- load algorithmic parameters --- 
 	sol::table driver = lua["driver"]; 
@@ -711,6 +715,7 @@ int main(int argc, char *argv[]) {
 	const bool reset_to_ho = solver["reset_to_ho"].get_or(false);
 	const std::string sigmaF_type = io::GetAndValidateOption<std::string>(solver, "sigmaF_weight", 
 		{"flux", "rosseland", "rosseland inv"}, "flux", root);
+	const bool use_sigmaP = solver["use_sigmaP"].get_or(opacity_int_type != INNER);
 	sol::table linear_solver_table = solver["solver"];
 	sol::table ho_solver_table = solver["ho_solver"];
 	sol::table lo_solver_table = solver["lo_solver"];
@@ -723,12 +728,13 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "sigmaF weight" << YAML::Value << sigmaF_type;
 		out << YAML::Key << "floor radE" << YAML::Value << floor_radE_LO;
 		out << YAML::Key << "reset to ho" << YAML::Value << reset_to_ho;
+		out << YAML::Key << "use sigma planck" << YAML::Value << use_sigmaP;
 
 	// energy balance nonlinear form 
 	// cv/dt + sigma B(T)
 	mfem::ProductCoefficient Cvdt(1.0/time_step, heat_capacity); 
 	DenseBlockDiagonalNonlinearForm meb_form(&fes);
-	if (opacity_int_type == INNER)
+	if (!use_sigmaP)
 		meb_form.AddDomainIntegrator(
 			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
 	else
@@ -742,7 +748,7 @@ int main(int argc, char *argv[]) {
 
 	// gray emission 
 	DenseBlockDiagonalNonlinearForm gr_emission_form(&fes);
-	if (opacity_int_type == INNER)
+	if (!use_sigmaP)
 		gr_emission_form.AddDomainIntegrator(
 			new QuadratureLumpedNFIntegrator(new GrayPlanckEmissionNFI(energy_grid.Bounds(), total)));
 	else
@@ -1056,7 +1062,7 @@ int main(int argc, char *argv[]) {
 	mfem::BlockVector smm_source(lo_disc->GetOffsets()), lo_source(lo_disc->GetOffsets());
 	DenseBlockDiagonalOperator dB_dBt_inv(fes);
 
-	GrayOpacityManager gray_opac_manager(opacity_int_type, totalE, *first_moment_opac, totalP, Mtot_gray);
+	GrayOpacityManager gray_opac_manager(totalE, *first_moment_opac, totalP, Mtot_gray, use_sigmaP);
 
 	mfem::StopWatch cycle_timer; // times cost per time step 
 	mfem::StopWatch timer;
