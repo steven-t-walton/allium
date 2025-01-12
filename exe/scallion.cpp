@@ -1123,7 +1123,7 @@ int main(int argc, char *argv[]) {
 	mfem::ParGridFunction density_gf(&fes0); density_gf.ProjectCoefficient(density); 
 	mfem::ParGridFunction partition(&fes0); partition = rank; 
 	sol::optional<sol::table> output_avail = lua["output"]; 
-	std::unique_ptr<mfem::DataCollection> dc; 
+	std::vector<std::unique_ptr<mfem::DataCollection>> dcs;
 	std::unique_ptr<TracerDataCollection> tracer_dc; 
 	std::unique_ptr<RestartWriter> restart_dc;
 	int output_freq, restart_freq;
@@ -1137,37 +1137,50 @@ int main(int argc, char *argv[]) {
 		sol::optional<sol::table> viz_avail = output["visualization"];
 		if (viz_avail) {
 			sol::table viz = viz_avail.value(); 
-			const std::string type = viz["type"];
-			dc.reset(io::CreateDataCollection(type, output_root, mesh, root));
+			sol::object type_obj = viz["type"];
+			std::vector<std::string> types; 
+			if (type_obj.get_type() == sol::type::string) {
+				types.emplace_back(type_obj.as<std::string>());
+			} else if (type_obj.get_type() == sol::type::table) {
+				sol::table types_table = type_obj.as<sol::table>();
+				types.resize(types_table.size());
+				for (int i=0; i<types.size(); i++) {
+					types[i] = types_table[i+1];
+				}
+			}
+
 			output_freq = viz["frequency"].get_or(std::numeric_limits<int>::max()); 
 			const int precision = viz["precision"].get_or(16); 
 			const bool restart_mode = viz["restart_mode"].get_or(false) and restart_table_avail;
-			dc->SetPrecision(precision); 
-			dc->RegisterField("E", &E); 
-			dc->RegisterField("Epw", &Epw);
-			dc->RegisterField("F", &F);
-			dc->RegisterField("T", &T); 
-			dc->RegisterField("Trad", &Trad); 
-			dc->RegisterField("Tpw", &Tpw); 
-			dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
-			dc->RegisterField("sigmaE", &totalE.GetGridFunction());
-			dc->RegisterField("cv", &cvgf); 
-			dc->RegisterField("density", &density_gf); 
-			dc->RegisterField("partition", &partition); 
-			// paraview has a "restart mode" 
-			// that allows continuing the same output after a restart 
-			if (restart_mode) {
-				auto *paraview = dynamic_cast<mfem::ParaViewDataCollection*>(dc.get());
-				if (paraview)
-					paraview->UseRestartMode(true);
-				else
-					if (root) MFEM_ABORT("restart mode supported for paraview only");
-			}
+			for (const auto &type : types) {
+				auto *dc = io::CreateDataCollection(type, output_root, mesh, root);
+				dc->SetPrecision(precision); 
+				dc->RegisterField("E", &E); 
+				dc->RegisterField("Epw", &Epw);
+				dc->RegisterField("F", &F);
+				dc->RegisterField("T", &T); 
+				dc->RegisterField("Trad", &Trad); 
+				dc->RegisterField("Tpw", &Tpw); 
+				dc->RegisterField("sigmaR", &totalR.GetGridFunction()); 
+				dc->RegisterField("sigmaE", &totalE.GetGridFunction());
+				dc->RegisterField("cv", &cvgf); 
+				dc->RegisterField("density", &density_gf); 
+				dc->RegisterField("partition", &partition); 
+				// paraview has a "restart mode" 
+				// that allows continuing the same output after a restart 
+				if (restart_mode) {
+					auto *paraview = dynamic_cast<mfem::ParaViewDataCollection*>(dc);
+					if (paraview)
+						paraview->UseRestartMode(true);
+				}
 
-			// only save initial condition if restart mode is off 
-			else {
-				dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
-				dc->Save(); 
+				// only save initial condition if restart mode is off 
+				else {
+					dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
+					dc->Save(); 
+				}
+
+				dcs.emplace_back(dc);
 			}
 
 			sol::optional<sol::table> times_avail = viz["times"];
@@ -1180,7 +1193,15 @@ int main(int argc, char *argv[]) {
 			}
 
 			out << YAML::Key << "visualization" << YAML::Value << YAML::BeginMap; 
-				out << YAML::Key << "type" << YAML::Value << type; 
+				out << YAML::Key << "type" << YAML::Value;
+				if (types.size()==1) out << types[0];
+				else {
+					out << YAML::Flow << YAML::BeginSeq;
+					for (const auto &type : types) {
+						out << type;
+					}
+					out << YAML::EndSeq;
+				}
 				out << YAML::Key << "frequency" << YAML::Value << output_freq; 
 				out << YAML::Key << "precision" << YAML::Value << precision; 
 				out << YAML::Key << "restart mode" << YAML::Value << restart_mode;
@@ -1313,10 +1334,12 @@ int main(int argc, char *argv[]) {
 		const bool write = (write_it != write_times.end()); 
 		// remove write time from list 
 		if (write) write_times.erase(write_it);
-		if (dc and (cycle % output_freq == 0 or write or done)) {
+		if (dcs.size() and (cycle % output_freq == 0 or write or done)) {
 			output_cycle++;
-			dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 
-			dc->Save(); 			
+			for (auto &dc : dcs) {
+				dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 				
+				dc->Save();
+			}
 		}
 
 		// write tracer to file 
