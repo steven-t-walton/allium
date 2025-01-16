@@ -28,7 +28,7 @@ materials = {
 			type = "analytic", 
 			coef = 1e9, 
 			nrho = -1, 
-			nT = -3		
+			nT = 0.0		
 		}, 
 		heat_capacity = cv, 
 		source = 0, 
@@ -39,7 +39,7 @@ materials = {
 			type = "analytic", 
 			coef = 1e12, 
 			nrho = -1, 
-			nT = -3		
+			nT = 0.0	
 		}, 
 		heat_capacity = cv, 
 		source = 0, 
