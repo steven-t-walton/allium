@@ -543,7 +543,7 @@ int main(int argc, char *argv[]) {
 	// cv/dt matrix for temperature 
 	mfem::BilinearForm Mcv(&fes); 
 	if (lump)
-		Mcv.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(heat_capacity))); 
+		Mcv.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(heat_capacity))); 
 	else
 		Mcv.AddDomainIntegrator(new mfem::MassIntegrator(heat_capacity)); 
 	Mcv.Assemble(); 
@@ -578,9 +578,9 @@ int main(int argc, char *argv[]) {
 	mfem::ParGridFunction F(&vfes, moments, fes.GetVSize());
 
 	// piecewise constant temperature 
-	mfem::ParGridFunction Tpw(&fes0), Epw(&fes0), Trad(&fes0); 
-	mfem::GridFunctionCoefficient Epw_coef(&Epw);
-	RadiationTemperatureCoefficient Trad_coef(Epw_coef);
+	mfem::ParGridFunction Tpw(&fes0), Epw(&fes0), Trad(&fes); 
+	mfem::GridFunctionCoefficient Epw_coef(&Epw), Ecoef(&E);
+	RadiationTemperatureCoefficient Trad_coef(Ecoef);
 
 	// --- load initial conditions ---
 	// two options are supported
@@ -697,9 +697,7 @@ int main(int argc, char *argv[]) {
 	OpacityGroupCollapseCoefficient sigmaR(total, rosseland_coef);
 	InverseOpacityGroupCollapseCoefficient sigmaRinv(total, rosseland_coef);
 	ProjectedCoefficient totalR(gray_sigma_fes, sigmaR);
-	ProjectedCoefficient totalRinv(gray_sigma_fes, sigmaRinv);
 	totalR.Project();
-	totalRinv.Project();
 
 	// collapse to gray with rosseland spectrum 
 	WeightedGroupCollapseOperator to_gray_ross_op(fes, phi_ext, rosseland_coef);
@@ -777,16 +775,6 @@ int main(int argc, char *argv[]) {
 	// computes sum_g sigma_g phi_g 
 	mfem::ProductOperator Mtot_collapse(&to_gray_op, &Mtot, false, false);
 
-	mfem::BilinearForm Mtot_gray(&fes);
-	if (IsMassLumped(lump)) {
-		Mtot_gray.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(totalE)));
-	} else {
-		Mtot_gray.AddDomainIntegrator(new mfem::MassIntegrator(totalE));
-	}
-	Mtot_gray.UsePrecomputedSparsity();
-	Mtot_gray.Assemble();
-	Mtot_gray.Finalize();
-
 	// solver for local dense matrices 
 	// assume diagonal if mass lumped
 	std::unique_ptr<mfem::Solver> local_mat_inv; 
@@ -818,6 +806,7 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<DiffusionAndEnergyBalanceMonitor> dual_monitor;
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
 	std::unique_ptr<mfem::Operator> oper, stepper;
+	std::unique_ptr<mfem::BilinearForm> Mtot_gray;
 	ComponentReductionOperator reducer(offsets, 1); // only compute residual on temperature 
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
 	out << YAML::Key << "type" << YAML::Value << solver_type; 
@@ -1039,6 +1028,16 @@ int main(int argc, char *argv[]) {
 	}
 
 	else if (solver_type == "ndsa") {
+		Mtot_gray = std::make_unique<mfem::BilinearForm>(&fes);
+		if (IsMassLumped(lump)) {
+			Mtot_gray->AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(totalE)));
+		} else {
+			Mtot_gray->AddDomainIntegrator(new mfem::MassIntegrator(totalE));
+		}
+		Mtot_gray->UsePrecomputedSparsity();
+		Mtot_gray->Assemble();
+		Mtot_gray->Finalize();
+
 		sol::table nonlin_solve_table = solver["outer_solver"];
 		if (!nonlin_solve_table.valid()) MFEM_ABORT("must supply outer_solver"); 
 		io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
@@ -1103,7 +1102,7 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "lo type" << YAML::Value << lo_type;
 
 		auto *ndsa = new NonlinearDSATRTOperator(offsets, Linv, D, to_gray_op,
-			emission_form, gr_emission_form, meb_form_totalP, Mtot_gray, 
+			emission_form, gr_emission_form, meb_form_totalP, *Mtot_gray, 
 			*Kform, *dsa_solver, *lo_solver, *meb_solver, Enu, E);
 		ndsa->SetGrayOpacities(Kform->GetTotal(), Kform->GetAbsorption(), totalP); // <-- update LO, gray opacities at each outer
 		oper.reset(ndsa);
@@ -1284,6 +1283,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	mfem::StopWatch cycle_timer; 
+	mfem::StopWatch timer;
 	LogMap<int,MAX> log;
 	LogMap<double,MAX> value_log;
 	// time step to reset to after time step has been reduced 
@@ -1335,11 +1335,13 @@ int main(int argc, char *argv[]) {
 		// remove write time from list 
 		if (write) write_times.erase(write_it);
 		if (dcs.size() and (cycle % output_freq == 0 or write or done)) {
+			timer.Restart();
 			output_cycle++;
 			for (auto &dc : dcs) {
 				dc->SetCycle(output_cycle); dc->SetTime(time); dc->SetTimeStep(time_step); 				
 				dc->Save();
 			}
+			TimingLog.Log("write", timer.RealTime());
 		}
 
 		// write tracer to file 
@@ -1351,9 +1353,11 @@ int main(int argc, char *argv[]) {
 
 		// write restart to file 
 		if (restart_dc and (cycle % restart_freq == 0 or done)) {
+			timer.Restart();
 			restart_dc->SetOutputCycle(output_cycle); restart_dc->SetSimulationCycle(cycle);
 			restart_dc->SetTime(time); restart_dc->SetTimeStep(time_step);
 			restart_dc->Write(x);
+			TimingLog.Log("restart", timer.RealTime());
 		}
 
 		// --- get new time step size ---  
@@ -1388,11 +1392,11 @@ int main(int argc, char *argv[]) {
 
 		// --- update opacity and opacity-dependent terms --- 
 		if (T.Min() < 0) MFEM_ABORT("negative temperature"); 
+
 		// recompute opacities 
+		timer.Restart(); 
 		total.Project(); 
-		totalR.Project();
-		totalRinv.Project();
-		totalE.Project();
+		TimingLog.Log("opacity", timer.RealTime());
 
 		// recompute sweep data 
 		Linv.AssembleLocalMatrices(); 
@@ -1403,15 +1407,23 @@ int main(int argc, char *argv[]) {
 
 		// total interaction mass matrix
 		// depends on sigma and dt 
+		timer.Restart();
 		Mtot.Assemble(); 
 		Mtot.Finalize();
+		TimingLog.Log("assemble Mtot", timer.RealTime());
 
-		Mtot_gray = 0.0;
-		Mtot_gray.Assemble();
+		if (Mtot_gray) {
+			timer.Restart();
+			totalE.Project();
+			*Mtot_gray = 0.0;
+			Mtot_gray->Assemble();			
+			TimingLog.Log("assemble Mtot_gray", timer.RealTime());
+		}
 
 		// DSA matrix depends on sigma and dt 
 		if (Kform) {
 			// set DSA time step 
+			totalR.Project();
 			Kform->SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 		}
 

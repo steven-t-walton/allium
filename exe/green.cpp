@@ -475,7 +475,7 @@ int main(int argc, char *argv[]) {
 	// cv/dt matrix for temperature 
 	mfem::BilinearForm Mcv(&fes); 
 	if (lump)
-		Mcv.AddDomainIntegrator(new mfem::LumpedIntegrator(new mfem::MassIntegrator(heat_capacity))); 
+		Mcv.AddDomainIntegrator(new QuadratureLumpedIntegrator(new mfem::MassIntegrator(heat_capacity))); 
 	else
 		Mcv.AddDomainIntegrator(new mfem::MassIntegrator(heat_capacity)); 
 	Mcv.Assemble(); 
@@ -545,9 +545,9 @@ int main(int argc, char *argv[]) {
 	mfem::VectorGridFunctionCoefficient Fho_coef(&Fho);
 
 	// piecewise constant temperature 
-	mfem::ParGridFunction Tpw(&fes0), Epw(&fes0), Trad(&fes0); 
+	mfem::ParGridFunction Tpw(&fes0), Epw(&fes0), Trad(&fes); 
 	mfem::GridFunctionCoefficient Epw_coef(&Epw);
-	RadiationTemperatureCoefficient Trad_coef(Epw_coef, constants::SpeedOfLight);
+	RadiationTemperatureCoefficient Trad_coef(Ecoef, constants::SpeedOfLight);
 
 	// --- load initial conditions ---
 	// two options are supported
@@ -1311,7 +1311,6 @@ int main(int argc, char *argv[]) {
 
 		// --- output to file --- 
 		// write data collection to file 
-		timer.Restart();
 		bool done = time >= final_time - 1e-14 or cycle >= max_cycles; 
 		// find a write time within tolerance of current simulation time 
 		auto write_it = std::find_if(write_times.begin(), write_times.end(), 
@@ -1321,6 +1320,7 @@ int main(int argc, char *argv[]) {
 		// remove write time from list 
 		if (write) write_times.erase(write_it);
 		if (dcs.size() and (cycle % output_freq == 0 or write or done)) {
+			timer.Restart();
 			output_cycle++;
 			E *= 1.0/constants::SpeedOfLight;
 			Enu *= 1.0/constants::SpeedOfLight;
@@ -1330,6 +1330,7 @@ int main(int argc, char *argv[]) {
 			}
 			E *= constants::SpeedOfLight;
 			Enu *= constants::SpeedOfLight;
+			TimingLog.Log("write", timer.RealTime());
 		}
 
 		// write tracer to file 
@@ -1345,11 +1346,12 @@ int main(int argc, char *argv[]) {
 
 		// write restart to file 
 		if (restart_dc and (cycle % restart_freq == 0 or done)) {
+			timer.Restart();
 			restart_dc->SetOutputCycle(output_cycle); restart_dc->SetSimulationCycle(cycle);
 			restart_dc->SetTime(time); restart_dc->SetTimeStep(time_step);
 			restart_dc->Write(x);
+			TimingLog.Log("restart", timer.RealTime());
 		}
-		TimingLog.Log("write", timer.RealTime());
 
 		// --- get new time step size ---  
 		const double time_step_old = time_step; // store old time step 
