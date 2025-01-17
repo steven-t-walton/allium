@@ -85,6 +85,7 @@ IpcressData::IpcressData(const std::string &file_name)
 	: file_name(file_name)
 {
 	std::ifstream inp(file_name, std::ios::binary | std::ios::in);
+	if (!inp.good()) MFEM_ABORT("ipcress file " << file_name << " does not exist");
 	const auto title = read_string(inp, 0); 
 	if (title != "nirvana ") MFEM_ABORT("title = " << title);
 
