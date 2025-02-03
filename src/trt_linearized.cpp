@@ -4,6 +4,7 @@
 #include "log.hpp"
 #include "moment_discretization.hpp"
 #include "planck.hpp"
+#include "utils.hpp"
 
 namespace experimental
 {
@@ -302,15 +303,9 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 		sigma.Mult(phi, abs_source); 
 		abs_source += temp_resid; 
 		meb_grad_inv.Mult(abs_source, dT); 
-		for (int i=0; i<T.Size(); i++) {
-			double Tnew = T(i) + dT(i); 
-			if (Tnew < 0.0) {
-				EventLog.Register("under relax"); 
-				T(i) = T(i) + 0.05*dT(i); 
-			} else {
-				T(i) = Tnew; 
-			}
-		}
+		T.Add(1.0, dT);
+		auto floors = utils::Floor(T, 1e-8);
+		EventLog.Log("floored temperature", floors);
 	}
 }
 
