@@ -97,6 +97,8 @@ IterativeSolverOptions GetIterativeSolverOptions(sol::table &table);
 // creates a mesh from lua input either from a mesh file 
 // or from specification of cartesian domain 
 mfem::Mesh CreateMesh(sol::table &table, YAML::Emitter &out, bool root=true); 
+int *GeneratePartitioning(sol::table &table, YAML::Emitter &out, 
+	mfem::Mesh &ser_mesh, int nparts, mfem::Coefficient &total, bool root=true);
 // set element attribute according to a provided material map function 
 void SetMeshAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f,
 	const std::unordered_map<std::string,int> &map, bool root=true);

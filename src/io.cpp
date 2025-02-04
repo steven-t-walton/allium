@@ -360,6 +360,41 @@ mfem::Mesh CreateMesh(sol::table &table, YAML::Emitter &out, bool root)
 	return mesh; 
 }
 
+int *GeneratePartitioning(sol::table &table, YAML::Emitter &out, 
+	mfem::Mesh &ser_mesh, int nparts, mfem::Coefficient &total, bool root)
+{
+	const auto dim = ser_mesh.Dimension();
+	int *partitioning = nullptr;
+	const std::string type = io::GetAndValidateOption(table, "type", {"metis", "cartesian"}, root);
+	out << YAML::Key << "partitioning" << YAML::Value << YAML::BeginMap;
+	out << YAML::Key << "type" << YAML::Value << type; 
+	if (type == "metis") {
+		const bool edge_weight = table["weight_edges"].get_or(false);
+		const bool node_weight = table["weight_nodes"].get_or(false);
+		const int scheme = (node_weight << 1) | edge_weight; 
+		partitioning = utils::GenerateMetisPartitioning(ser_mesh, nparts, total, scheme);
+		out << YAML::Key << "weight edges" << YAML::Value << edge_weight;
+		out << YAML::Key << "weight nodes" << YAML::Value << node_weight; 
+		out << YAML::Key << "scheme" << YAML::Value << scheme;
+	} else if (type == "cartesian") {
+		sol::table n = table["partitions"]; 
+		if (n.size() != dim) { MFEM_ABORT("partition size incorrect for mesh dimension"); }
+		int nxyz[3];
+		int nranks = 1;
+		out << YAML::Key << "partitions" << YAML::Value << YAML::Flow << YAML::BeginSeq;
+		for (int d=0; d<dim; d++) {
+			nxyz[d] = n[d+1];
+			nranks *= nxyz[d];
+			out << nxyz[d];
+		}
+		out << YAML::EndSeq;
+		if (nranks != nparts) MFEM_ABORT("supplied partitions do not match ranks available");
+		partitioning = ser_mesh.CartesianPartitioning(nxyz);
+	}
+	out << YAML::EndMap;
+	return partitioning;
+}
+
 void SetMeshAttributes(mfem::Mesh &mesh, std::function<std::string(double,double,double)> f,
 	const std::unordered_map<std::string,int> &map, bool root)
 {

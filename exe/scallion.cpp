@@ -182,6 +182,7 @@ int main(int argc, char *argv[]) {
 	mfem::Hypre::Init(); 
 
 	const auto rank = mfem::Mpi::WorldRank(); 
+	const auto nranks = mfem::Mpi::WorldSize();
 	const bool root = rank == 0; 
 
 	// stream for output to terminal
@@ -407,24 +408,27 @@ int main(int argc, char *argv[]) {
 		ser_mesh.UniformRefinement(); 
 	}
 	// need at minimum WorldSize() elements in serial mesh 
-	if (ser_mesh.GetNE() < mfem::Mpi::WorldSize() and root) {
+	if (ser_mesh.GetNE() < nranks and root) {
 		MFEM_ABORT("serial mesh with " << ser_mesh.GetNE() << " elements too small to decompose on " 
-			<< mfem::Mpi::WorldSize() << " processors"); 
+			<< nranks << " processors"); 
 	}
 	const auto dim = ser_mesh.Dimension(); 
 
-	// --- create parallel mesh --- 
-	const int part_type = mesh_node["partitioning"].get_or(0);
-	out << YAML::Key << "partitioning scheme" << YAML::Value << part_type;
+	// --- create parallel mesh ---
+	// compute partitioning on serial mesh 
 	int *partitioning = nullptr;
-	if (part_type > 0) {
+	sol::optional<sol::table> part_type_avail = mesh_node["partitioning"];
+	if (part_type_avail) {
 		mfem::Array<int> attrs(nattr); 
 		for (int i=0; i<nattr; i++) { attrs[i] = i+1; }
 		PWOpacityCoefficient total_coef(attrs, total_list); 
 		VectorComponentSumCoefficient total(total_coef);
-		partitioning = utils::GenerateMetisPartitioning(ser_mesh, mfem::Mpi::WorldSize(), total, part_type);
+		partitioning = io::GeneratePartitioning(part_type_avail.value(), out, ser_mesh, nranks, total, root);
 	}
 	mfem::ParMesh mesh(MPI_COMM_WORLD, ser_mesh, partitioning); 
+	delete[] partitioning;
+
+	// refine in parallel 
 	par_ref += mesh_node["parallel_refinements"].get_or(0); 
 	for (int pr=0; pr<par_ref; pr++) {
 		mesh.UniformRefinement(); 
@@ -1509,7 +1513,6 @@ int main(int argc, char *argv[]) {
 	for (int i=0; i<nattr; i++) { delete source_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_list[i]; }
 	for (int i=0; i<nbattr; i++) { delete inflow_base_list[i]; }
-	delete[] partitioning;
 
 	wall_timer.Stop(); 
 	double wall_time = wall_timer.RealTime(); 
