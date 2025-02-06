@@ -150,12 +150,14 @@ int main(int argc, char *argv[]) {
 	// parse cmdline arguments 
 	std::string input_file, lua_cmds; 
 	int par_ref = 0, ser_ref = 0, max_cycles_override = 0; 
+	std::string device_config = "omp";
 	mfem::OptionsParser args(argc, argv); 
 	args.AddOption(&input_file, "-i", "--input", "input file name", true); 
 	args.AddOption(&lua_cmds, "-l", "--lua", "lua commands to run", false); 
 	args.AddOption(&ser_ref, "-sr", "--serial_refinements", "additional uniform refinements in serial"); 
 	args.AddOption(&par_ref, "-pr", "--parallel_refinements", "additional uniform refinements in parallel"); 
 	args.AddOption(&max_cycles_override, "-mc", "--max_cycles", "limit cycles"); 
+	args.AddOption(&device_config, "-d", "--device", "configuration string to pass to mfem::Device");
 	args.Parse(); 
 	if (!args.Good()) {
 		args.PrintUsage(par_out); 
@@ -165,6 +167,10 @@ int main(int argc, char *argv[]) {
 		args.PrintOptions(mfem::out); 
 		mfem::out << std::endl; 
 	}
+
+	// setup backend 
+	mfem::Device device(device_config);
+	if (root) device.Print(mfem::out);
 
 	// YAML output 
 	YAML::Emitter out(par_out);

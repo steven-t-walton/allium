@@ -525,9 +525,11 @@ void PrintAngularQuadrature(YAML::Emitter &out, const AngularQuadrature &quad)
 		const auto &Omega = quad.GetOmega(a); 
 		const auto w = quad.GetWeight(a); 
 		out << YAML::Flow << YAML::BeginSeq; 
+		out << YAML::Flow << YAML::BeginSeq; 
 		for (int d=0; d<Omega.Size(); d++) {
 			out << Omega(d); 
 		}
+		out << YAML::EndSeq;
 		out << w; 
 		out << YAML::EndSeq; 
 	}
@@ -536,12 +538,9 @@ void PrintAngularQuadrature(YAML::Emitter &out, const AngularQuadrature &quad)
 
 void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm)
 {
-	int ranks, threads; 
+	int ranks; 
 	MPI_Comm_size(comm, &ranks); 
-	#pragma omp parallel 
-	{
-		threads = omp_get_num_threads();
-	}
+	const auto threads = omp_get_max_threads();
 	const auto total = ranks * threads; 
 	out << YAML::Key << "parallel" << YAML::Value << YAML::BeginMap; 
 		out << YAML::Key << "MPI ranks" << YAML::Value << ranks; 
@@ -640,6 +639,12 @@ OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 		sol::table values = table["values"];
 		mfem::Vector vec(values.size()); 
 		for (int i=0; i<vec.Size(); i++) { vec(i) = values[i+1]; }
+		out << YAML::Key << "values" << YAML::Value << YAML::Flow << YAML::BeginSeq; 
+		for (int i=0; i<vec.Size(); i++) {
+			vec(i) = values[i+1];
+			out << vec(i);
+		}
+		out << YAML::EndSeq;
 		opac = new ConstantOpacityCoefficient(vec);  
 	}
 
