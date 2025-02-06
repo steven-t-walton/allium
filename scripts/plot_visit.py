@@ -96,7 +96,9 @@ for i,base in enumerate(args.bases):
 
 	for idx in order:
 		xlocal = x_global[idx]
-		val_local = val_global[idx]
+		loc_order = np.argsort(xlocal)
+		xlocal = np.array(xlocal)[loc_order]
+		val_local = np.array(val_global[idx])[loc_order]
 		for x,y in zip(xlocal, val_local):
 			X.append(x)
 			Y.append(y)
