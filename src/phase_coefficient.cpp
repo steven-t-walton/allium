@@ -40,6 +40,13 @@ void PWPhaseSpaceCoefficient::SetEnergy(double low, double high, double mid) {
 	}
 }
 
+void PWPhaseSpaceCoefficient::SetTime(double t) {
+	for (auto &it : map) {
+		if (it.second)
+			it.second->SetTime(t);
+	}
+}
+
 double PWPhaseSpaceCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) {
 	const auto attr = trans.Attribute; 
 	auto *ptr = map.at(attr); 

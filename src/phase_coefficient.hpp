@@ -26,6 +26,7 @@ public:
 	PWPhaseSpaceCoefficient(const mfem::Array<int> &attrs, const mfem::Array<PhaseSpaceCoefficient*> &coefs); 
 	void SetAngle(const mfem::Vector &Omega_in) override;
 	void SetEnergy(double low, double high, double mid) override;
+	void SetTime(double t) override;
 	double Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip); 
 };
 
