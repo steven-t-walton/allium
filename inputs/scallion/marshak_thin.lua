@@ -3,15 +3,19 @@ mesh = {
 	extents = {1}, 
 }
 
+energy = {
+	num_groups = 1
+}
+
 function initial_condition(x,y,z)
-	return 0.025
+	return 1
 end 
 
 materials = {
 	mat = {
 		total = {
 			type = "analytic gray", 
-			coef = 1e6, 
+			coef = 1e9, 
 			nrho = -1, 
 			nT = -3		
 		}, 
@@ -68,7 +72,7 @@ linearized = {
 	type = "linearized", 
 	-- comment for one newton algorithm 
 	nonlinear_solver = {
-		type = "newton", 
+		type = "fp", 
 		reltol = 1e-4, 
 		max_iter = 30,
 		iterative_mode = true, 

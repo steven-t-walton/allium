@@ -572,8 +572,8 @@ MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, boo
 		}
 		grid = MultiGroupEnergyGrid(bounds);
 	} else {
-		const double Emin = table["min"];
-		const double Emax = table["max"]; 
+		const double Emin = table["min"].get_or(0.0);
+		const double Emax = table["max"].get_or(1e9); 
 		const int G = table["num_groups"];
 
 		out << YAML::Key << "Emin" << YAML::Value << FormatScientific(Emin); 

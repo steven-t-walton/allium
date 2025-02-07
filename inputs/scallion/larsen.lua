@@ -13,8 +13,6 @@ energy = {
 	max = 1e6, 
 	spacing = "log", 
 	num_groups = 20,
-	extend_to_zero = true, -- add uniform spaced group from [0,min]
-	print_bounds = true -- print group structure to YAML 
 }
 
 function initial_condition(x,y,z)
@@ -136,7 +134,7 @@ driver = {
 	final_time = 1e-8, 
 	-- load initial conditions from a restart file 
 	-- restart = {
-	-- 	path = "larsen/restart",
+	-- 	path = "solution/restart",
 	-- 	id = 0
 	-- }
 }

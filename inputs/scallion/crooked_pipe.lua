@@ -1,3 +1,9 @@
+energy = {
+	min = 0.0, 
+	max = 1e6, 
+	num_groups = 1
+}
+
 sig_max = 2000
 sig_min = 0.2
 pipe = {
@@ -15,8 +21,8 @@ wall = {
 		type = "constant", 
 		values = {sig_max},
 	}, 
+	heat_capacity = 1e12,
 	source = 0,
-	heat_capacity = 1e12, 
 	density = 10
 }
 
@@ -69,10 +75,14 @@ mesh = {
 	extents = {7,2},
 	serial_refinements = 0,
 	parallel_refinements = 0,
+	-- partitioning = {
+	-- 	type = "cartesian", 
+	-- 	partitions = {8,1}
+	-- }
 }
 
 sn = {
-	type = "level symmetric", 
+	type = "product", 
 	order = 6
 }
 
@@ -97,19 +107,19 @@ picard = {
 
 linearized = {
 	type = "linearized", 
-	nonlinear_solver = {
-		type = "newton", 
-		reltol = 1e-4, 
-		abstol = 1e-4, 
-		max_iter = 30, 
-		iterative_mode = true, 
-		print_level = -1
-	}, 
+	-- nonlinear_solver = {
+	-- 	type = "fp", 
+	-- 	reltol = 1e-4, 
+	-- 	abstol = 1e-4, 
+	-- 	max_iter = 30, 
+	-- 	iterative_mode = true, 
+	-- 	print_level = -1
+	-- }, 
 	transport_solver = {
 		type = "gmres", 
 		reltol = 1e-8, 
-		max_iter = 100, 
-		iterative_mode = false, 
+		max_iter = 200, 
+		iterative_mode = true, 
 		kdim = 50,
 		print_level = 0,
 		preconditioner = {
@@ -123,6 +133,76 @@ linearized = {
 			}
 		},
 	},
+	rebalance_solver = {
+		type = "local newton", 
+		reltol = 1e-8, 
+		max_iter = 40, 
+		iterative_mode = true, 
+		print_level = -1
+	},
+}
+
+smm = {
+	type = "ldg", 
+	consistent = true, 
+	reset_to_ho = false, 
+	floor_E = false, 
+	opacity_integration = "explicit", 
+	sigmaF_weight = "rosseland",
+	solver = {
+		type = "cg", 
+		abstol = 1e-10, 
+		reltol = 1e-10, 
+		max_iter = 100, 
+		iterative_mode = true, 
+		print_level = 0, 
+	},
+	ho_solver = {
+		reltol = 1e-3, 
+		max_iter = 100,
+	},
+	lo_solver = {
+		reltol = 1e-3,
+		max_iter = 20,
+	},
+	energy_balance_solver = {
+		type = "local newton", 
+		reltol = 1e-10, 
+		-- abstol = 1e-2,
+		max_iter = 40, 
+		iterative_mode = true,
+		print_level = -1
+	}
+}
+
+teton = {
+	type = "inexact newton", 
+	nonlinear_solver = {
+		type = "fp", 
+		reltol = 1e-6, 
+		max_iter = 100, 
+		iterative_mode = true, 
+		print_level = -1
+	}, 
+	preconditioner = {
+		type = "mip", 
+		kappa = 4, 
+		solver = {
+			type = "cg", 
+			reltol = 1e-12, 
+			max_iter = 50, 
+			iterative_mode = false, 
+			print_level = 0
+		}
+	},
+	energy_balance_solver = {
+		type = "local newton", 
+		reltol = 1e-10, 
+		-- abstol = 1e-2,
+		max_iter = 40, 
+		iterative_mode = true,
+		print_level = -1
+	}
 }
 
 driver = {
@@ -139,17 +219,33 @@ driver = {
 }
 
 output = {
-	root = "solution", 
+	root = "solution",
 	visualization = {
 		type = "paraview", 
-		frequency = 100
+		times = {
+			1e-10, 
+			1e-9, 
+			1e-8, 
+			1e-7, 
+			2e-7, 
+			3e-7, 
+			4e-7
+		}
 	},
 	tracer = {
 		locations = {
-			{3.475, 1.475}, -- midpoint, last cell in thin 
-			{3.475, 1.525}, -- midpoint, first cell in thick 
-			{3.475, 1.275}, -- midpoint, center of pipe 
-			{6.975, 0.025}, -- last cell in pipe 
-		}
+			{1 + 1/60, 0.0}, -- 1 cm into pipe
+			{3.5 + 1/60, 1.5 - 1/60}, -- midway, last cell in pipe 
+			{3.5 + 1/60, 1.5 + 1/60}, -- midway, first cell in wall 
+			{6 + 1/60, 0.0}, -- 1 cm left of pipe 
+			{3.0 - 1/60, 0.0}, -- last cell before blocker 
+			{3.0 + 1/60, 0.0}, -- first cell in blocker 
+			{4.0 - 1/60, 0.0}, -- last cell in blocker 
+			{4.5 + 1/60, 0.0}, -- first cell in pipe post blocker 
+		}, 
+	}, 
+	restart = {
+		prefix = "restart", 
+		frequency = 100, 
 	}
 }

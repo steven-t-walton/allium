@@ -8,6 +8,10 @@ sn = {
 	order = 6
 }
 
+energy = {
+	num_groups = 1
+}
+
 picard = {
 	type = "picard", 
 	nonlinear_solver = {
