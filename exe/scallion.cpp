@@ -210,7 +210,7 @@ int main(int argc, char *argv[]) {
 	// parse cmdline arguments 
 	std::string input_file, lua_cmds; 
 	int par_ref = 0, ser_ref = 0, max_cycles_override = 0; 
-	std::string device_config = "omp";
+	std::string device_config = "cpu";
 	mfem::OptionsParser args(argc, argv); 
 	args.AddOption(&input_file, "-i", "--input", "input file name", true); 
 	args.AddOption(&lua_cmds, "-l", "--lua", "lua commands to run", false); 
