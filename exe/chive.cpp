@@ -150,6 +150,7 @@ int main(int argc, char *argv[]) {
 	setup_timer.Start(); 
 
 	const auto rank = mfem::Mpi::WorldRank(); 
+	const auto nranks = mfem::Mpi::WorldSize();
 	const bool root = rank == 0; 
 
 	// stream for output to terminal
@@ -360,12 +361,23 @@ int main(int argc, char *argv[]) {
 	// need at minimum WorldSize() elements in serial mesh 
 	if (ser_mesh.GetNE() < mfem::Mpi::WorldSize() and root) {
 		MFEM_ABORT("serial mesh with " << ser_mesh.GetNE() << " elements too small to decompose on " 
-			<< mfem::Mpi::WorldSize() << " processors"); 
+			<< nranks << " processors"); 
 	}
 	const auto dim = ser_mesh.Dimension(); 
 
 	// --- create parallel mesh --- 
-	mfem::ParMesh mesh(MPI_COMM_WORLD, ser_mesh); 
+	// compute partitioning on serial mesh 
+	int *partitioning = nullptr;
+	sol::optional<sol::table> part_type_avail = mesh_node["partitioning"];
+	if (part_type_avail) {
+		mfem::Array<int> attrs(nattr); 
+		mfem::PWConstCoefficient total(total_list); 
+		partitioning = io::GeneratePartitioning(part_type_avail.value(), out, ser_mesh, nranks, total, root);
+	}
+	mfem::ParMesh mesh(MPI_COMM_WORLD, ser_mesh, partitioning); 
+	delete[] partitioning;
+
+	// refine in parallel 
 	par_ref += mesh_node["parallel_refinements"].get_or(0); 
 	for (int pr=0; pr<par_ref; pr++) {
 		mesh.UniformRefinement(); 
@@ -373,25 +385,15 @@ int main(int argc, char *argv[]) {
 	mesh.ExchangeFaceNbrData(); // create parallel communication data needed for sweep 
 	mesh.SetAttributes(); 
 	// print mesh characteristics 
+	io::PrintMeshCharacteristics(out, mesh, ser_ref, par_ref);
+	out << YAML::EndMap; 
+
+	// lineout uses information about mesh size
 	double hmin, hmax, kmin, kmax; 
-	mesh.GetCharacteristics(hmin, hmax, kmin, kmax); 
-	const auto global_ne = mesh.ReduceInt(mesh.GetNE()); 
-	out << YAML::Key << "dim" << YAML::Value << dim; 
-	out << YAML::Key << "elements" << YAML::Value << global_ne; 
-	out << YAML::Key << "mesh size" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "min" << YAML::Value << hmin; 
-		out << YAML::Key << "max" << YAML::Value << hmax; 
-	out << YAML::EndMap; 
-	out << YAML::Key << "mesh conditioning" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "min" << YAML::Value << kmin; 
-		out << YAML::Key << "max" << YAML::Value << kmax; 
-	out << YAML::EndMap; 
-	out << YAML::Key << "MPI ranks" << YAML::Value << mfem::Mpi::WorldSize(); 
-	out << YAML::Key << "refinements" << YAML::Value << YAML::BeginMap; 
-		out << YAML::Key << "serial" << YAML::Value << ser_ref; 
-		out << YAML::Key << "parallel" << YAML::Value << par_ref; 
-	out << YAML::EndMap; 
-	out << YAML::EndMap; 
+	mesh.GetCharacteristics(hmin, hmax, kmin, kmax);
+
+	// print parallel resources 
+	io::PrintParallelInformation(out, MPI_COMM_WORLD);
 
 	// --- load algorithmic parameters --- 
 	sol::table driver = lua["driver"]; 
@@ -1097,7 +1099,6 @@ int main(int argc, char *argv[]) {
 			dc.RegisterField("scattering", &scattering_gf); 
 			dc.Save(); 			
 		}
-
 
 		sol::optional<sol::table> tracer_avail = output["tracer"]; 
 		if (tracer_avail) {
