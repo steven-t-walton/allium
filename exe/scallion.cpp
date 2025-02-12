@@ -1471,7 +1471,12 @@ int main(int argc, char *argv[]) {
 				log.Log("max transport iterations", linear_solver->GetNumIterations());
 				out << YAML::Key << "linear solver" << YAML::Value << YAML::BeginMap; 
 					out << YAML::Key << "it" << YAML::Value << linear_solver->GetNumIterations(); 
-					out << YAML::Key << "norm" << YAML::Value << io::FormatScientific(linear_solver->GetFinalRelNorm()); 
+					const auto abs_norm = linear_solver->GetFinalNorm();
+					const auto rel_norm = linear_solver->GetFinalRelNorm();
+					out << YAML::Key << "norm" << YAML::Value << YAML::Flow << YAML::BeginMap
+						<< YAML::Key << "absolute" << YAML::Value << io::FormatScientific(abs_norm)
+						<< YAML::Key << "relative" << YAML::Value << io::FormatScientific(rel_norm)
+						<< YAML::EndMap;
 				out << YAML::EndMap; 
 			}
 			if (dsa_monitor) {
