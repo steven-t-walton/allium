@@ -869,9 +869,9 @@ void InverseAdvectionOperator::Mult_BlockJacobi(const mfem::Vector &source, mfem
 	igraph_vector_int_destroy(&nbrs);
 
 	timer.Stop();
-	TimingLog.Log("sweep", timer.RealTime());
+	TimingLog.Log("pbj sweep", timer.RealTime());
 
-	if (rank==0) EventLog.Register("sweeps");
+	if (rank==0) EventLog.Register("pbj sweeps");
 }
 
 void InverseAdvectionOperator::Exchange(const mfem::Vector &psi)
