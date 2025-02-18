@@ -200,26 +200,24 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "planck" << YAML::Value << constants::Planck; 
 	out << YAML::EndMap; 
 
-	// --- check for ipcress opacity data --- 
-	// the opacity data defines the energy bounds => must load first 
-	sol::optional<std::string> ipcress_file_avail = lua["ipcress_file"]; 
-	std::unique_ptr<IpcressData> ipcress_data; 
-	if (ipcress_file_avail) {
-		const std::string file_name = ipcress_file_avail.value();
-		ipcress_data = std::make_unique<IpcressData>(file_name);
-		io::PrintIpcressInformation(out, *ipcress_data);
-	}
+	// store ipcress file data 
+	// constructed in energy block 
+	std::unique_ptr<IpcressData> ipcress_data;
 
 	// --- load energy grid --- 
 	// do this first since materials depend on energy 
 	// discretization 
-	// group structure from ipcress file used if available 
-	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap; 
-	sol::optional<sol::table> energy_table = lua["energy"]; 
-	MultiGroupEnergyGrid energy_grid = io::CreateEnergyGrid(energy_table, out, ipcress_data.get(), root);
-	io::PrintEnergyGridInformation(out, energy_grid);
+	sol::table energy_table = lua["energy"];
+	if (!energy_table.valid()) MFEM_ABORT("must provide energy table");
+ 	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap;
+	MultiGroupEnergyGrid energy_grid = io::CreateEnergyGrid(energy_table, out, ipcress_data, root);
 	out << YAML::EndMap; // end energy block 
-	const auto G = energy_grid.Size();
+	const auto G = energy_grid.Size(); // number of groups 
+
+	// print ipcress metadata to YAML 
+	if (ipcress_data) {
+		io::PrintIpcressInformation(out, *ipcress_data);
+	}
 
 	// --- extract list of materials --- 
 	std::vector<std::string> attr_list; 

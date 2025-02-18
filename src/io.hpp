@@ -117,6 +117,8 @@ void PrintParallelInformation(YAML::Emitter &out, MPI_Comm comm);
 MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, bool root=true);
 MultiGroupEnergyGrid CreateEnergyGrid(sol::optional<sol::table> &table, YAML::Emitter &out, 
 	const IpcressData *ipcress, bool root=true);
+MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, 
+	std::unique_ptr<IpcressData> &ipcress, bool root=true);
 void PrintEnergyGridInformation(YAML::Emitter &out, const MultiGroupEnergyGrid &grid);
 
 // create an opacity from lua input 
@@ -227,6 +229,8 @@ T GetAndValidateOption(sol::table &table, std::string key, std::initializer_list
 		return *options.begin();
 	}
 }
+
+void EnsureValidKeys(sol::table &table, const std::string name, std::vector<std::string> keys, bool root);
 
 // given a relative path, convert it to absolute 
 std::string ResolveRelativePath(std::string path); 

@@ -6,6 +6,14 @@
 #include <filesystem>
 #include <omp.h>
 
+template<typename C, typename T>
+void emplace_back(C &container, std::initializer_list<T> list)
+{
+	for (const auto &it : list) {
+		container.emplace_back(it);
+	}
+}
+
 namespace io 
 {
 
@@ -152,6 +160,7 @@ mfem::Solver *CreateSolver(sol::table &table, std::optional<MPI_Comm> comm)
 
 	if (type == "direct" or type == "superlu") {
 	#ifdef MFEM_USE_SUPERLU
+		EnsureValidKeys(table, "solver", {"type"}, root);
 		if (!comm) MFEM_ABORT("MPI communicator required for SuperLU constructor");
 		auto *slu = new SuperLUSolver(*comm);
 		SetSuperLUOptions(table, slu->GetSolver(), root);
@@ -173,6 +182,12 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MP
 	if (comm) MPI_Comm_rank(*comm, &rank);
 	else rank = 0;
 	const bool root = rank == 0;
+
+	EnsureValidKeys(table, "iterative solver", 
+		{"type", "kdim", "strategy", 
+		"print_level", "abstol", "reltol",
+		"max_iter", "iterative_mode", "preconditioner"},
+		root);
 
 	mfem::IterativeSolver *s;
 	std::string type = table["type"];
@@ -298,6 +313,16 @@ IterativeSolverOptions GetIterativeSolverOptions(sol::table &table)
 
 mfem::Mesh CreateMesh(sol::table &table, YAML::Emitter &out, bool root) 
 {
+	EnsureValidKeys(table, "mesh", {
+		"file", 
+		"num_elements", 
+		"extents",
+		"sfc_ordering",
+		"element_type", 
+		"partitioning",
+		"serial_refinements",
+		"parallel_refinements"}, 
+		root);
 	mfem::Mesh mesh; 
 	sol::optional<std::string> fname = table["file"]; 
 	out << YAML::Key << "mesh" << YAML::Value << YAML::BeginMap; 
@@ -365,10 +390,11 @@ int *GeneratePartitioning(sol::table &table, YAML::Emitter &out,
 {
 	const auto dim = ser_mesh.Dimension();
 	int *partitioning = nullptr;
-	const std::string type = io::GetAndValidateOption(table, "type", {"metis", "cartesian"}, root);
+	const std::string type = io::GetAndValidateOption(table, "type", {"metis", "cartesian", "list"}, root);
 	out << YAML::Key << "partitioning" << YAML::Value << YAML::BeginMap;
 	out << YAML::Key << "type" << YAML::Value << type; 
 	if (type == "metis") {
+		EnsureValidKeys(table, "mesh::partitioning", {"type", "weight_edges", "weight_nodes"}, root);
 		const bool edge_weight = table["weight_edges"].get_or(false);
 		const bool node_weight = table["weight_nodes"].get_or(false);
 		const int scheme = (node_weight << 1) | edge_weight; 
@@ -377,8 +403,9 @@ int *GeneratePartitioning(sol::table &table, YAML::Emitter &out,
 		out << YAML::Key << "weight nodes" << YAML::Value << node_weight; 
 		out << YAML::Key << "scheme" << YAML::Value << scheme;
 	} else if (type == "cartesian") {
+		EnsureValidKeys(table, "mesh::partitioning", {"type", "partitions"}, root);
 		sol::table n = table["partitions"]; 
-		if (n.size() != dim) { MFEM_ABORT("partition size incorrect for mesh dimension"); }
+		if (root and n.size() != dim) { MFEM_ABORT("partition size incorrect for mesh dimension"); }
 		int nxyz[3];
 		int nranks = 1;
 		out << YAML::Key << "partitions" << YAML::Value << YAML::Flow << YAML::BeginSeq;
@@ -388,8 +415,20 @@ int *GeneratePartitioning(sol::table &table, YAML::Emitter &out,
 			out << nxyz[d];
 		}
 		out << YAML::EndSeq;
-		if (nranks != nparts) MFEM_ABORT("supplied partitions do not match ranks available");
+		if (root and nranks != nparts) MFEM_ABORT("supplied partitions do not match ranks available");
 		partitioning = ser_mesh.CartesianPartitioning(nxyz);
+	} else if (type == "list") {
+		EnsureValidKeys(table, "mesh::partitioning", {"type", "partitions"}, root);
+		sol::table parts = table["partitions"];
+		if (root and parts.size() != ser_mesh.GetNE()) MFEM_ABORT("partition list incorrect size");
+		partitioning = new int[ser_mesh.GetNE()];
+		for (int e=0; e<ser_mesh.GetNE(); e++) {
+			partitioning[e] = parts[e+1];
+		}
+		const auto min = *std::min_element(partitioning, partitioning + ser_mesh.GetNE());
+		const auto max = *std::max_element(partitioning, partitioning + ser_mesh.GetNE());
+		if (root and min != 0) MFEM_ABORT("first partition should be zero");
+		if (root and max != nparts-1) MFEM_ABORT("last partition should be nparts - 1");
 	}
 	out << YAML::EndMap;
 	return partitioning;
@@ -457,6 +496,7 @@ void PrintMeshCharacteristics(YAML::Emitter &out, mfem::ParMesh &mesh, int sr, i
 AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out, int dim, bool root)
 {
 	std::string type = table["type"]; 
+	std::vector<std::string> keys({"type", "order", "rotation", "print"}); 
 	ValidateOption<std::string>("sn quadrature type", type, 
 		{"legendre", "level symmetric", "abu shumays", "product"}, root);
 	AngularQuadrature *quad;
@@ -480,6 +520,7 @@ AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out
 	}
 
 	else if (type == "product") {
+		emplace_back(keys, {"polar_type", "triangular", "azimuthal_order"});
 		const std::string polar_type_str = io::GetAndValidateOption<std::string>(
 			table, "polar_type", {"legendre", "lobatto"}, "legendre", root);
 		out << YAML::Key << "polar type" << YAML::Value << polar_type_str;
@@ -500,6 +541,7 @@ AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out
 	sol::optional<sol::table> rotate_avail = table["rotation"]; 
 	if (rotate_avail) {
 		sol::table rotate = rotate_avail.value();
+		EnsureValidKeys(rotate, "rotation", {"x", "y", "z"}, root);
 		const double theta_x = rotate["x"].get_or(0.0);
 		const double theta_y = rotate["y"].get_or(0.0);
 		const double theta_z = rotate["z"].get_or(0.0);
@@ -515,6 +557,7 @@ AngularQuadrature *CreateAngularQuadrature(sol::table &table, YAML::Emitter &out
 	if (print)
 		PrintAngularQuadrature(out, *quad);
 	out << YAML::EndMap;
+	EnsureValidKeys(table, "sn", keys, root);
 	return quad;
 }
 
@@ -562,6 +605,11 @@ void PrintEnergyGridInformation(YAML::Emitter &out, const MultiGroupEnergyGrid &
 
 MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, bool root)
 {
+	EnsureValidKeys(table, "energy", 
+		{"bounds", "num_groups", "min", 
+		"max", "spacing", "print"}, 
+		root);
+
 	MultiGroupEnergyGrid grid;
 	sol::optional<sol::table> bounds_table_avail = table["bounds"];
 	if (bounds_table_avail) {
@@ -582,19 +630,19 @@ MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, boo
 		if (G == 1) {
 			grid = MultiGroupEnergyGrid::MakeGray(Emin, Emax);
 		} else {
-			const bool extend_to_zero = table["extend_to_zero"].get_or(false);
 			const auto spacing = io::GetAndValidateOption<std::string>(table, "spacing", 
 				{"log", "equal"}, "log", root);
 			out << YAML::Key << "group spacing" << YAML::Value << spacing;
-			out << YAML::Key << "extend to zero" << YAML::Value << extend_to_zero;
 
 			if (spacing == "log") {
-				grid = MultiGroupEnergyGrid::MakeLogSpaced(Emin, Emax, G, extend_to_zero);
+				grid = MultiGroupEnergyGrid::MakeLogSpaced(Emin, Emax, G);
 			} else if (spacing == "equal") {
-				grid = MultiGroupEnergyGrid::MakeEqualSpaced(Emin, Emax, G, extend_to_zero);
+				grid = MultiGroupEnergyGrid::MakeEqualSpaced(Emin, Emax, G);
 			}			
 		}
 	}
+	const bool print = table.get_or("print", true);
+	if (print) PrintEnergyGridInformation(out, grid);
 	return grid;
 }
 
@@ -628,14 +676,37 @@ MultiGroupEnergyGrid CreateEnergyGrid(sol::optional<sol::table> &table_avail,
 	return energy_grid;
 }
 
+MultiGroupEnergyGrid CreateEnergyGrid(sol::table &table, YAML::Emitter &out, 
+	std::unique_ptr<IpcressData> &ipcress, bool root)
+{
+	MultiGroupEnergyGrid energy_grid;
+
+	sol::optional<std::string> ipcress_avail = table["ipcress_file"];
+	if (ipcress_avail) {
+		EnsureValidKeys(table, "energy", {"ipcress_file", "print"}, root);
+		const std::string file = ipcress_avail.value();
+		ipcress = std::make_unique<IpcressData>(file);
+		energy_grid = MultiGroupEnergyGrid(ipcress->GetGroupBounds());
+		const bool print = table.get_or("print", true);
+		if (print) PrintEnergyGridInformation(out, energy_grid);
+	}
+
+	else {
+		energy_grid = CreateEnergyGrid(table, out, root);
+	}
+	return energy_grid;
+}
+
 OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 {
+	std::vector<std::string> keys({"type"});
 	OpacityCoefficient *opac;
 	std::string type = table["type"]; 
 	io::ValidateOption<std::string>("opacity type", type, 
 		{"constant", "analytic gray", "analytic", "analytic edge", "brunner", "ipcress"}, root); 
 	out << YAML::Key << "type" << YAML::Value << type; 
 	if (type == "constant") {
+		keys.emplace_back("values");
 		sol::table values = table["values"];
 		mfem::Vector vec(values.size()); 
 		for (int i=0; i<vec.Size(); i++) { vec(i) = values[i+1]; }
@@ -649,6 +720,7 @@ OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 	}
 
 	else if (type == "analytic gray") {
+		emplace_back(keys, {"coef", "nrho", "nT"});
 		double coef = table["coef"]; 
 		double nrho = table["nrho"]; 
 		double nT = table["nT"]; 
@@ -660,6 +732,7 @@ OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 	}
 
 	else if (type == "analytic") {
+		emplace_back(keys, {"coef", "nrho", "nT", "Emin", "int_order", "edge"});
 		double coef = table["coef"]; 
 		double nrho = table["nrho"]; 
 		double nT = table["nT"]; 
@@ -675,6 +748,7 @@ OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 		out << YAML::Key << "integration order" << YAML::Value << int_order;
 		if (edge_avail) {
 			sol::table edge_table = edge_avail.value();
+			EnsureValidKeys(edge_table, "opacity::analytic::edge", {"energy", "coef"}, root);
 			double edge = edge_table["energy"];
 			double coef = edge_table["coef"];
 			func.SetEdge(edge, coef);
@@ -689,6 +763,9 @@ OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 	} 
 
 	else if (type == "analytic edge") {
+		emplace_back(keys, {"c0", "c1", "c2", 
+			"Emin", "Eedge", "delta_s", 
+			"delta_w", "nT", "Nlines", "int_order", "weight"});
 		const double c0 = table["c0"];
 		const double c1 = table["c1"];
 		const double c2 = table["c2"];
@@ -725,6 +802,7 @@ OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 	}
 
 	else if (type == "brunner") {
+		emplace_back(keys, {"c0", "c1", "c2", "Emin", "Eedge", "delta_s", "delta_w", "Nlines", "weight"});
 		const double c0 = table["c0"];
 		const double c1 = table["c1"];
 		const double c2 = table["c2"];
@@ -750,6 +828,7 @@ OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 	}
 
 	else if (type == "ipcress") {
+		emplace_back(keys, {"id", "weight"});
 		if (!ipcress_data) MFEM_ABORT("ipcress data not provided");
 		const int mat_id = table["id"]; 
 		const auto key = io::GetAndValidateOption<std::string>(
@@ -759,6 +838,7 @@ OpacityCoefficient *OpacityFactory::CreateOpacity(sol::table &table) const
 		out << YAML::Key << "ipcress id" << YAML::Value << mat_id;
 		out << YAML::Key << "ipcress key" << YAML::Value << key;
 	}
+	EnsureValidKeys(table, "opacity", keys, root);
 	return opac;
 }
 
@@ -784,6 +864,7 @@ void PrintIpcressInformation(YAML::Emitter &out, const IpcressData &data)
 
 NegativeFluxFixup *CreateNegativeFluxFixup(sol::table &table, bool root)
 {
+	std::vector<std::string> keys({"type", "psi_min"});
 	NegativeFluxFixupOperator *op; 
 	mfem::SLBQPOptimizer *optimizer = nullptr;
 	std::string type = table["type"]; 
@@ -806,23 +887,23 @@ NegativeFluxFixup *CreateNegativeFluxFixup(sol::table &table, bool root)
 		optimizer->SetPrintLevel(print_level); 
 		optimizer->iterative_mode = table["iterative_mode"].get_or(true);
 		op = new LocalOptimizationFixupOperator(*optimizer, min);
+		emplace_back(keys, {"abstol", "reltol", "max_iter", "print_level", "iterative_mode"});
 	} else if (type == "ryosuke") {
-		double min = table["psi_min"].get_or(0.0);
 		op = new RyosukeFixupOperator(min);
 	}
+	EnsureValidKeys(table, "fixup", keys, root);
 	return new NegativeFluxFixup(op, optimizer);
 }
 
 void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root) 
 {
-	for (const auto &it : table) {
-		std::string key = it.first.as<std::string>();
-		ValidateOption<std::string>("BoomerAMG", key, 
-			{"max_iter", "relax_sweeps", "max_levels", "relax_type", "cycle_type", 
-			 "aggressive_coarsening", "interpolation", "coarsening", "strength_threshold"},
-			root
-		); 
-	}
+	EnsureValidKeys(table, "amg options", 
+		{"max_iter", "relax_sweeps", "max_levels", 
+		"relax_type", "cycle_type", "aggressive_coarsening", 
+		"interpolation", "coarsening", "strength_threshold",
+		"print_level"}, 
+		root);
+
 	sol::optional<int> max_iter = table["max_iter"]; 
 	sol::optional<int> sweeps = table["relax_sweeps"]; 
 	sol::optional<int> max_levels = table["max_levels"]; 
@@ -866,13 +947,11 @@ void SetAMGOptions(sol::table &table, mfem::HypreBoomerAMG &amg, bool root)
 #ifdef MFEM_USE_SUPERLU
 void SetSuperLUOptions(sol::table &table, mfem::SuperLUSolver &slu, bool root)
 {
-	for (const auto &it : table) {
-		auto key = it.first.as<std::string>(); 
-		ValidateOption<std::string>("superlu", key, 
-			{"type", "symmetric_pattern", "iterative_refine", "equilibriate", 
-			 "column_permutation", "ParSymbFact", "print_statistics"}, 
-			root); 
-	}
+	EnsureValidKeys(table, "superlu options", 
+		{"type", "symmetric_pattern", "iterative_refine", 
+		"equilibriate", "column_permutation", "ParSymbFact", 
+		"print_statistics"}, 
+		root);
 	sol::optional<bool> sym = table["symmetric_pattern"]; 
 	sol::optional<std::string> itref = table["iterative_refine"]; 
 	sol::optional<bool> equil = table["equilibriate"]; 
@@ -930,12 +1009,10 @@ void SetSuperLUOptions(sol::table &table, mfem::SuperLUSolver &slu, bool root)
 
 void SetSweepOptions(sol::table &table, InverseAdvectionOperator &Linv, bool root)
 {
-	for (const auto &it : table) {
-		auto key = it.first.as<std::string>(); 
-		ValidateOption<std::string>("sweep", key, 
-			{"write_graph", "send_buffer_size", "max_sends_per_recv", "parallel_block_jacobi", "num_pbj_sweeps"}, 
-			root); 
-	}
+	EnsureValidKeys(table, "sweep_opts", 
+		{"write_graph", "send_buffer_size", "max_sends_per_recv", 
+		"parallel_block_jacobi", "num_pbj_sweeps"}, 
+		root); 
 	bool pbj = table["parallel_block_jacobi"].get_or(false);
 	int num_pbj_sweeps = table["num_pbj_sweeps"].get_or(1);
 	Linv.UseParallelBlockJacobi(pbj);
@@ -984,6 +1061,24 @@ void ValidateOption<const char*>(std::string key, const char *res, std::initiali
 	}
 	if (!valid and root) {
 		PrintOptionsAbort(key, res, options); 
+	}
+}
+
+void EnsureValidKeys(sol::table &table, const std::string name, 
+	std::vector<std::string> keys, bool root)
+{
+	for (auto it : table) {
+		const std::string key = it.first.as<std::string>();
+		auto find_it = std::find(keys.begin(), keys.end(), key);
+		if (find_it == keys.end() and root) {
+			std::stringstream ss; 
+			ss << "\"" << key << "\" not a valid key for table \"" << name << "\".\n\nValid keys are:";
+			for (const auto &opt : keys) {
+				ss << "\n   " << opt; 
+			}
+			ss << "\n";
+			MFEM_ABORT(ss.str());
+		}
 	}
 }
 

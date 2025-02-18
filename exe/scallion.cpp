@@ -260,26 +260,24 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "planck" << YAML::Value << constants::Planck; 
 	out << YAML::EndMap; 
 
-	// --- check for ipcress opacity data --- 
-	// the opacity data comes with its own energy bounds => must load first 
-	sol::optional<std::string> ipcress_file_avail = lua["ipcress_file"]; 
-	std::unique_ptr<IpcressData> ipcress_data; 
-	if (ipcress_file_avail) {
-		const std::string file_name = ipcress_file_avail.value();
-		ipcress_data = std::make_unique<IpcressData>(file_name);
-		io::PrintIpcressInformation(out, *ipcress_data);
-	}
+	// store ipcress file data 
+	// constructed in energy block 
+	std::unique_ptr<IpcressData> ipcress_data;
 
 	// --- load energy grid --- 
 	// do this first since materials depend on energy 
 	// discretization 
-	// group structure from ipcress file used if available 
-	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap; 
-	sol::optional<sol::table> energy_table = lua["energy"]; 
-	MultiGroupEnergyGrid energy_grid = io::CreateEnergyGrid(energy_table, out, ipcress_data.get(), root);
-	io::PrintEnergyGridInformation(out, energy_grid);
+	sol::table energy_table = lua["energy"];
+	if (!energy_table.valid()) MFEM_ABORT("must provide energy table");
+ 	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap;
+	MultiGroupEnergyGrid energy_grid = io::CreateEnergyGrid(energy_table, out, ipcress_data, root);
 	out << YAML::EndMap; // end energy block 
-	const auto G = energy_grid.Size();
+	const auto G = energy_grid.Size(); // number of groups 
+
+	// print ipcress metadata to YAML 
+	if (ipcress_data) {
+		io::PrintIpcressInformation(out, *ipcress_data);
+	}
 
 	// --- extract list of materials --- 
 	std::vector<std::string> attr_list; 
@@ -305,6 +303,7 @@ int main(int argc, char *argv[]) {
 	for (auto i=0; i<attr_list.size(); i++) {
 		sol::table data = materials[attr_list[i].c_str()]; 
 		if (!data.valid()) MFEM_ABORT("material named " << attr_list[i] << " not found"); 
+		io::EnsureValidKeys(data, "material", {"total", "heat_capacity", "density", "source"}, root);
 		out << YAML::Key << attr_list[i] << YAML::Value << YAML::BeginMap;
 		out << YAML::Key << "attribute" << YAML::Value << i+1; 
 		out << YAML::Key << "opacity" << YAML::Key << YAML::BeginMap; 
@@ -362,6 +361,7 @@ int main(int argc, char *argv[]) {
 	out << YAML::Key << "boundary conditions" << YAML::Value << YAML::BeginMap; 
 	for (auto i=0; i<bdr_attr_list.size(); i++) {
 		sol::table data = bcs[bdr_attr_list[i].c_str()]; 
+		io::EnsureValidKeys(data, "boundary condition", {"type", "value"}, root);
 		std::string type = data["type"]; 
 		io::ValidateOption<std::string>("boundary_conditions::type", type, {"inflow", "reflective", "vacuum"}, root); 
 		double value;
@@ -449,6 +449,13 @@ int main(int argc, char *argv[]) {
 
 	// --- load algorithmic parameters --- 
 	sol::table driver = lua["driver"]; 
+	io::EnsureValidKeys(driver, "driver", 
+		{"log_verbosity", "fe_order", "sigma_fe_order",
+		"gray_sigma_fe_order", "basis_type", "final_time", 
+		"time_step", "time_step_function", "time_step_table", 
+		"max_cycles", "lump", "sweep_opts", "fixup",
+		"solver", "restart"},
+		root);
 	const int log_verbosity = driver["log_verbosity"].get_or(1);
 	const int fe_order = driver["fe_order"]; 
 	const int sigma_fe_order = driver["sigma_fe_order"].get_or(fe_order); 
@@ -602,6 +609,8 @@ int main(int argc, char *argv[]) {
 	double restart_time_step;
 	if (restart_table_avail) {
 		sol::table restart_table = restart_table_avail.value();
+		io::EnsureValidKeys(restart_table, "restart", 
+			{"path", "id", "use_restart_dt"}, root);
 		const std::string restart_file = restart_table["path"];
 		const int id = restart_table["id"].get_or(0);
 		force_restart_dt = restart_table["use_restart_dt"].get_or(true);
@@ -821,6 +830,7 @@ int main(int argc, char *argv[]) {
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
 	out << YAML::Key << "type" << YAML::Value << solver_type; 
 	if (solver_type == "picard") {
+		io::EnsureValidKeys(solver, "solver", {"type", "nonlinear_solver", "energy_balance_solver"}, root);
 		sol::table nonlin_solve_table = solver["nonlinear_solver"];
 		if (!nonlin_solve_table.valid()) MFEM_ABORT("must supply nonlinear solver"); 
 		io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
@@ -859,6 +869,10 @@ int main(int argc, char *argv[]) {
 	} 
 
 	else if (solver_type == "linearized") {
+		io::EnsureValidKeys(solver, "solver", 
+			{"type", "nonlinear_solver", "transport_solver", 
+			"preconditioner", "rebalance_solver"}, 
+			root);
 		// create nonlinear solver 
 		sol::optional<sol::table> nonlin_solve_table_avail = solver["nonlinear_solver"]; 
 		if (nonlin_solve_table_avail) {
