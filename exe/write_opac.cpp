@@ -56,7 +56,7 @@ int main(int argc, char *argv[]) {
 
 	double min_energy = energy_grid.MinEnergy();
 	if (min_energy == 0.0) min_energy = energy_grid.Bounds()[1];
-	auto print_grid = MultiGroupEnergyGrid::MakeLogSpaced(min_energy, energy_grid.MaxEnergy(), N, false);
+	auto print_grid = MultiGroupEnergyGrid::MakeLogSpaced(min_energy, energy_grid.MaxEnergy(), N);
 	const auto &energies = print_grid.Bounds();
 	out << YAML::Key << "energies" << YAML::Value << YAML::BeginSeq; 
 	for (const auto &E : energies) {

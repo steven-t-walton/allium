@@ -37,7 +37,7 @@ TEST(Opacity, GroupCollapse) {
 }
 
 double WeightedCollapseError(int G) {
-	MultiGroupEnergyGrid grid = MultiGroupEnergyGrid::MakeLogSpaced(1e-5, 1e6, G, false);
+	MultiGroupEnergyGrid grid = MultiGroupEnergyGrid::MakeLogSpaced(1e-5, 1e6, G);
 	const auto &bounds = grid.Bounds();
 
 	auto mesh = mfem::Mesh::MakeCartesian1D(1, 1.0); 
@@ -83,7 +83,7 @@ TEST(Opacity, WeightedCollapse) {
 
 TEST(Opacity, WeightedCollapseMassMatrix) {
 	const int G = 200;
-	MultiGroupEnergyGrid grid = MultiGroupEnergyGrid::MakeLogSpaced(1e-2, 1e6, G, false);
+	MultiGroupEnergyGrid grid = MultiGroupEnergyGrid::MakeLogSpaced(1e-2, 1e6, G);
 	auto mesh = mfem::Mesh::MakeCartesian1D(160, 1.0);
 	mfem::L2_FECollection fec(1, mesh.Dimension(), mfem::BasisType::GaussLobatto);
 	mfem::L2_FECollection sigma_fec(1, mesh.Dimension(), mfem::BasisType::GaussLobatto);

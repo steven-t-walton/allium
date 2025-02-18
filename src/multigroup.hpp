@@ -43,10 +43,10 @@ public:
 	static MultiGroupEnergyGrid MakeGray(double Emin, double Emax);
 	// G log spaced groups [Emin, Emax] (includes both end points)
 	// if extend_to_zero = true: 1 group from 0.0 to Emin, G-1 log spaced to [Emin, Emax]
-	static MultiGroupEnergyGrid MakeLogSpaced(double Emin, double Emax, int G, bool extend_to_zero=true);
+	static MultiGroupEnergyGrid MakeLogSpaced(double Emin, double Emax, int G);
 	// G equally spaced groups [Emin, Emax]
 	// if extend_to_zero = true: 1 group from 0.0 to Emin, G-1 equal spaced to [Emin, Emax]
-	static MultiGroupEnergyGrid MakeEqualSpaced(double Emin, double Emax, int G, bool extend_to_zero=true);
+	static MultiGroupEnergyGrid MakeEqualSpaced(double Emin, double Emax, int G);
 };
 
 // coefficient that evaluates a gray opacity value 

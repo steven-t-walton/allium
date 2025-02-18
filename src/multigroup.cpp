@@ -37,62 +37,36 @@ MultiGroupEnergyGrid MultiGroupEnergyGrid::MakeGray(double Emin, double Emax)
 	return MultiGroupEnergyGrid(bounds);
 }
 
-MultiGroupEnergyGrid MultiGroupEnergyGrid::MakeLogSpaced(double Emin, double Emax, int G, bool extend_to_zero)
+MultiGroupEnergyGrid MultiGroupEnergyGrid::MakeLogSpaced(double Emin, double Emax, int G)
 {
 	mfem::Array<double> bounds(G+1);
 	mfem::Array<double> midpoints(G);
 	const double Emin_log = std::log(Emin);
 	const double Emax_log = std::log(Emax);
 
-	if (extend_to_zero) {
-		const double dE_log = (Emax_log - Emin_log)/(G-1);
-		bounds[0] = 0.0; 
-		bounds[1] = Emin; 
-		for (int g=1; g<bounds.Size()-1; g++) {
-			const double exponent = Emin_log + g*dE_log; 
-			bounds[g+1] = std::exp(exponent);
-		}
-	}
-
-	else {
-		const double dE_log = (Emax_log - Emin_log)/G;
-		bounds[0] = Emin;
-		for (int g=1; g<bounds.Size(); g++) {
-			const double exponent = Emin_log + g*dE_log;
-			bounds[g] = std::exp(exponent);
-		}		
-	}
+	const double dE_log = (Emax_log - Emin_log)/G;
+	bounds[0] = Emin;
+	for (int g=1; g<bounds.Size(); g++) {
+		const double exponent = Emin_log + g*dE_log;
+		bounds[g] = std::exp(exponent);
+	}		
 
 	for (int g=0; g<bounds.Size()-1; g++) {
-		if (g==0 and extend_to_zero)
-			midpoints[g] = (bounds[g] + bounds[g+1])/2;
-		else
-			midpoints[g] = std::sqrt(bounds[g] * bounds[g+1]);
+		midpoints[g] = std::sqrt(bounds[g] * bounds[g+1]);
 	}
 
 	return MultiGroupEnergyGrid(bounds, midpoints);
 }
 
-MultiGroupEnergyGrid MultiGroupEnergyGrid::MakeEqualSpaced(double Emin, double Emax, int G, bool extend_to_zero)
+MultiGroupEnergyGrid MultiGroupEnergyGrid::MakeEqualSpaced(double Emin, double Emax, int G)
 {
 	mfem::Array<double> bounds(G+1);
 	mfem::Array<double> midpoints(G);
 
-	if (extend_to_zero) {
-		const double dE = (Emax - Emin)/(G-1);
-		bounds[0] = 0.0; 
-		bounds[1] = Emin; 
-		for (int g=1; g<bounds.Size(); g++) {
-			bounds[g+1] = Emin + g * dE;
-		}
-	}
-
-	else {
-		const double dE = (Emax - Emin)/G;
-		bounds[0] = 0.0; 
-		for (int g=1; g<bounds.Size(); g++) {
-			bounds[g] = Emin + g*dE;
-		}
+	const double dE = (Emax - Emin)/G;
+	bounds[0] = Emin; 
+	for (int g=1; g<bounds.Size(); g++) {
+		bounds[g] = Emin + g*dE;
 	}
 
 	for (int g=0; g<bounds.Size()-1; g++) {
