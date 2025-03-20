@@ -6,7 +6,7 @@
 class IpcressData 
 {
 private:
-	const std::string &file_name;
+	const std::string file_name;
 	std::vector<double> data; 
 	std::vector<std::unordered_map<std::string,std::span<double>>> data_view;
 	mfem::Array<double> bounds;
