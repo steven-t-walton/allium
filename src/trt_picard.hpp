@@ -3,6 +3,7 @@
 #include "mfem.hpp"
 #include "tvector.hpp"
 #include "opacity.hpp"
+#include "opacity_update.hpp"
 #include "sweep.hpp"
 
 class MultiGroupBilinearForm;
@@ -19,8 +20,7 @@ private:
 	mfem::ProductOperator B, C; 
 	mutable mfem::Vector tmp; 
 
-	ProjectedVectorCoefficient *opacity = nullptr;
-	MultiGroupBilinearForm *Mtot = nullptr;
+	OpacityUpdate *opacity_update = nullptr;
 public:
 	PicardTRTOperator(
 		const mfem::Array<int> &offsets, // size of [psi, T]
@@ -33,9 +33,8 @@ public:
 		);
 	void Mult(const mfem::Vector &b, mfem::Vector &x) const override; 
 
-	void UseImplicitOpacity(ProjectedVectorCoefficient &opac, MultiGroupBilinearForm &M)
+	void UseImplicitOpacity(OpacityUpdate &update)
 	{
-		opacity = &opac;
-		Mtot = &M;
+		opacity_update = &update;
 	}	
 };

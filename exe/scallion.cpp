@@ -715,7 +715,7 @@ int main(int argc, char *argv[]) {
 	RosselandSpectrumMGCoefficient rosseland_coef(energy_grid.Bounds(), Tcoef);
 	OpacityGroupCollapseCoefficient sigmaR(total, rosseland_coef);
 	InverseOpacityGroupCollapseCoefficient sigmaRinv(total, rosseland_coef);
-	ProjectedCoefficient totalR(gray_sigma_fes, sigmaR);
+	ProjectedCoefficient totalR(gray_sigma_fes, sigmaRinv);
 	totalR.Project();
 
 	// collapse to gray with rosseland spectrum 
@@ -826,11 +826,13 @@ int main(int argc, char *argv[]) {
 	std::unique_ptr<KinsolCallbackData> kinsol_data;
 	std::unique_ptr<mfem::Operator> oper, stepper;
 	std::unique_ptr<mfem::BilinearForm> Mtot_gray;
+	OpacityUpdate opacity_update(total, Mtot, Linv);
 	ComponentReductionOperator reducer(offsets, 1); // only compute residual on temperature 
 	out << YAML::Key << "solver" << YAML::Value << YAML::BeginMap; 
 	out << YAML::Key << "type" << YAML::Value << solver_type; 
 	if (solver_type == "picard") {
-		io::EnsureValidKeys(solver, "solver", {"type", "nonlinear_solver", "energy_balance_solver"}, root);
+		io::EnsureValidKeys(solver, "solver", 
+			{"type", "nonlinear_solver", "energy_balance_solver", "opacity_integration"}, root);
 		sol::table nonlin_solve_table = solver["nonlinear_solver"];
 		if (!nonlin_solve_table.valid()) MFEM_ABORT("must supply nonlinear solver"); 
 		io::ValidateOption<std::string>("nonlinear solver", nonlin_solve_table["type"], 
@@ -847,8 +849,14 @@ int main(int argc, char *argv[]) {
 		meb_solver->SetOperator(meb_form);
 		inner_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver);
 
-		oper = std::make_unique<PicardTRTOperator>(offsets, Linv, D, emission_form, Mtot_collapse, 
+		const std::string opacity_int = io::GetAndValidateOption<std::string>(
+			solver, "opacity_integration", {"explicit", "implicit"}, "explicit", root);
+
+		auto *picard = new PicardTRTOperator(offsets, Linv, D, emission_form, Mtot_collapse, 
 			*meb_solver, *nonlinear_solver);
+		if (opacity_int == "implicit") picard->UseImplicitOpacity(opacity_update);
+		oper.reset(picard);
+
 		fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
 		auto *rsolver = new ReducedSolver(*fp_wrap, reducer);
 		rsolver->SetOperator(*oper);
@@ -866,12 +874,13 @@ int main(int argc, char *argv[]) {
 
 		out << YAML::Key << "nonlinear solver" << YAML::Value << nonlin_solve_table; 
 		out << YAML::Key << "energy balance solver" << YAML::Value << meb_solver_table; 
+		out << YAML::Key << "opacity integration" << YAML::Value << opacity_int;
 	} 
 
 	else if (solver_type == "linearized") {
 		io::EnsureValidKeys(solver, "solver", 
 			{"type", "nonlinear_solver", "transport_solver", 
-			"preconditioner", "rebalance_solver"}, 
+			"preconditioner", "rebalance_solver", "opacity_integration"}, 
 			root);
 		// create nonlinear solver 
 		sol::optional<sol::table> nonlin_solve_table_avail = solver["nonlinear_solver"]; 
@@ -930,6 +939,10 @@ int main(int argc, char *argv[]) {
 		}
 		out << YAML::Key << "transport solver" << YAML::Value << transport_solve_table; 
 
+		const std::string opacity_int = io::GetAndValidateOption<std::string>(
+			solver, "opacity_integration", {"explicit", "implicit"}, "explicit", root);
+		out << YAML::Key << "opacity integration" << YAML::Value << opacity_int;
+
 		linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
 		if (nonlinear_solver) {
 			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
@@ -954,17 +967,23 @@ int main(int argc, char *argv[]) {
 		if (nonlinear_solver) {
 			if (Kform)
 				op->SetGrayOpacities(Kform->GetTotal(), Kform->GetAbsorption());
+			if (opacity_int == "implicit") op->UseImplicitOpacity(opacity_update);
 			oper.reset(op);
 			fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
 			auto *rsolver = new ReducedSolver(*fp_wrap, reducer);
 			rsolver->SetOperator(*oper);
 			stepper.reset(rsolver);
 		} else {
+			if (opacity_int == "implicit" and root) 
+				MFEM_ABORT("implicit opacity not possible without nonlinear solver");
 			stepper.reset(op);
 		}
 	}
 
 	else if (solver_type == "inexact newton") {
+		io::EnsureValidKeys(solver, "solver", 
+			{"nonlinear_solver", "preconditioner", "energy_balance_solver",
+			"opacity_integration", "num_source_iterations"}, root);
 		// create nonlinear solver 
 		sol::optional<sol::table> nonlin_solve_table_avail = solver["nonlinear_solver"]; 
 		if (nonlin_solve_table_avail) {
@@ -1033,17 +1052,29 @@ int main(int argc, char *argv[]) {
 		io::SetIterativeSolverOptions(meb_solver_table, *local_meb_solver);
 		local_meb_solver->SetPreconditioner(*local_mat_inv);
 		meb_solver = std::make_unique<DenseBlockDiagonalNonlinearSolver>(*local_meb_solver);
-		meb_solver->SetOperator(meb_form_totalP);
+		meb_solver->SetOperator(meb_form);
 		meb_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver);
 		out << YAML::Key << "energy balance solver" << YAML::Value << meb_solver_table;
 
-		dual_monitor = std::make_unique<DiffusionAndEnergyBalanceMonitor>(*dsa_monitor, *meb_monitor);
-		nonlinear_solver->SetMonitor(*dual_monitor);
+		const std::string opacity_int = io::GetAndValidateOption<std::string>(
+			solver, "opacity_integration", {"explicit", "implicit"}, "explicit", root);
+		out << YAML::Key << "opacity integration" << YAML::Value << opacity_int;
 
-		auto *op = new InexactNewtonTRTOperator(offsets, Linv, D, emission_form, meb_form_totalP, 
+		const int nsi = solver["num_source_iterations"].get_or(1);
+		out << YAML::Key << "num source iterations" << YAML::Value << nsi;
+
+		auto *op = new InexactNewtonTRTOperator(offsets, Linv, D, emission_form, meb_form, 
 			Mtot_collapse, *meb_solver, *linearized_meb_solver);
-		if (dsa_inv) op->SetDSAPreconditioner(*dsa_inv);
-		op->SetGrayOpacities(totalR, totalP);
+		if (dsa_inv) {
+			dual_monitor = std::make_unique<DiffusionAndEnergyBalanceMonitor>(*dsa_monitor, *meb_monitor);
+			nonlinear_solver->SetMonitor(*dual_monitor);
+			op->SetDSAPreconditioner(*dsa_inv);
+			op->SetGrayOpacities(totalR);
+		} else {
+			nonlinear_solver->SetMonitor(*meb_monitor);
+		}
+		if (opacity_int == "implicit") op->UseImplicitOpacity(opacity_update);
+		op->SetNumSourceIterations(nsi);
 		oper.reset(op);
 		fp_wrap = std::make_unique<FixedPointSolverWrapper>(*nonlinear_solver);
 		auto *rsolver = new ReducedSolver(*fp_wrap, reducer);

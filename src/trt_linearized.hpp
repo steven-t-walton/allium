@@ -4,6 +4,7 @@
 #include "sweep.hpp"
 #include "moment_discretization.hpp"
 #include "opacity.hpp"
+#include "opacity_update.hpp"
 #include "mg_form.hpp"
 
 namespace experimental
@@ -180,10 +181,12 @@ private:
 	mfem::IterativeSolver &schur_solver; 
 	mfem::Solver &meb_grad_inv; 
 	InverseMomentDiscretization *dsa_solver = nullptr; 
-	mfem::Array<ProjectedCoefficient*> opacities;
+	mfem::Array<ProjectedCoefficient*> gray_opacities;
 
 	mutable mfem::Vector temp_resid, dT, em_source, phi_source, abs_source, phi, t1; 
 	mfem::Solver *rebalance_solver = nullptr; 
+
+	OpacityUpdate *opacity_update = nullptr;
 public:
 	LinearizedTRTOperator(
 		const mfem::Array<int> &offsets, // [psi, T]
@@ -212,8 +215,12 @@ public:
 		std::array<mfem::Coefficient*,sizeof...(args)> coefs{&args...};
 		for (auto *coef : coefs) {
 			auto *ptr = dynamic_cast<ProjectedCoefficient*>(coef);
-			if (ptr) opacities.Append(ptr);
+			if (ptr) gray_opacities.Append(ptr);
 		}
+	}
+	void UseImplicitOpacity(OpacityUpdate &update)
+	{
+		opacity_update = &update;
 	}
 };
 
@@ -237,7 +244,9 @@ private:
 	const mfem::Solver &meb_solver;
 	mfem::Solver &lin_meb_solver;
 	InverseMomentDiscretization *dsa_solver = nullptr; 
-	mfem::Array<ProjectedCoefficient*> opacities;
+	mfem::Array<ProjectedCoefficient*> gray_opacities;
+	OpacityUpdate *opacity_update = nullptr;
+	int niter = 1;
 
 	mutable mfem::Vector phi, phi2, abs_source, temp_resid, t1, t2, em_source;
 public:
@@ -263,7 +272,12 @@ public:
 		std::array<mfem::Coefficient*,sizeof...(args)> coefs{&args...};
 		for (auto *coef : coefs) {
 			auto *ptr = dynamic_cast<ProjectedCoefficient*>(coef);
-			if (ptr) opacities.Append(ptr);
+			if (ptr) gray_opacities.Append(ptr);
 		}
 	}
+	void UseImplicitOpacity(OpacityUpdate &opac)
+	{
+		opacity_update = &opac;
+	}
+	void SetNumSourceIterations(int n) { niter = n; }
 };

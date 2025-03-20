@@ -30,10 +30,5 @@ void PicardTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	tmp += source_T;
 	meb_solver.Mult(tmp, T);
 
-	if (opacity) {
-		opacity->Project();
-		Mtot->Assemble();
-		Mtot->Finalize();
-		Linv.AssembleLocalMatrices();
-	}
+	if (opacity_update) opacity_update->Update();
 }

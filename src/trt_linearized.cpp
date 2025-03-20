@@ -239,7 +239,7 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 	const_cast<InverseAdvectionOperator*>(&Linv)->UseFixup(false); 
 	const bool pbj = Linv.IsParallelBlockJacobi();
 
-	for (auto *ptr : opacities) {
+	for (auto *ptr : gray_opacities) {
 		ptr->Project();
 	}
 
@@ -307,6 +307,8 @@ void LinearizedTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) const
 		auto floors = utils::Floor(T, 1e-8);
 		EventLog.Log("floored temperature", floors);
 	}
+
+	if (opacity_update) opacity_update->Update();
 }
 
 double LinearizedPseudoAbsorptionCoefficient::Eval(mfem::ElementTransformation &trans, const mfem::IntegrationPoint &ip) 
@@ -350,43 +352,47 @@ void InexactNewtonTRTOperator::Mult(const mfem::Vector &x, mfem::Vector &y) cons
 	mfem::Vector psi(y, offsets[0], offsets[1] - offsets[0]);
 	mfem::Vector T(y, offsets[1], offsets[2] - offsets[1]);
 
-	for (auto *ptr : opacities) {
+	for (auto *ptr : gray_opacities) {
 		ptr->Project();
 	}
-
-	D.Mult(psi, phi);
-	sigma.Mult(phi, abs_source);
-	abs_source += source_T;
 
 	const auto &dBt = Bt.GetGradient(T);
 	lin_meb_solver.SetOperator(dBt);
 	const auto &dB = B.GetGradient(T);
 
-	Bt.Mult(T, temp_resid);
-	add(abs_source, -1.0, temp_resid, temp_resid);
-	lin_meb_solver.Mult(temp_resid, t1);
-	dB.Mult(t1, t2);
-	B.Mult(T, em_source);
-	em_source += t2;
-	D.MultTranspose(em_source, psi);
-	psi += source_psi;
-	Linv.Mult(psi, psi);
+	for (int i=0; i<niter; i++) {
+		D.Mult(psi, phi);
+		sigma.Mult(phi, abs_source);
+		abs_source += source_T;
 
-	if (dsa_solver) {
-		D.Mult(psi, phi2); 
-		phi2 -= phi;
-
-		sigma.Mult(phi2, abs_source);
-		lin_meb_solver.Mult(abs_source, t1);
+		Bt.Mult(T, temp_resid);
+		add(abs_source, -1.0, temp_resid, temp_resid);
+		lin_meb_solver.Mult(temp_resid, t1);
 		dB.Mult(t1, t2);
+		B.Mult(T, em_source);
+		em_source += t2;
+		D.MultTranspose(em_source, psi);
+		psi += source_psi;
+		Linv.Mult(psi, psi);
 
-		const auto &solver = dsa_solver->GetSolver();
-		solver.Mult(t2, phi);
-		D.AddMultTranspose(phi, psi);		
+		if (dsa_solver) {
+			D.Mult(psi, phi2); 
+			phi2 -= phi;
+
+			sigma.Mult(phi2, abs_source);
+			lin_meb_solver.Mult(abs_source, t1);
+			dB.Mult(t1, t2);
+
+			const auto &solver = dsa_solver->GetSolver();
+			solver.Mult(t2, phi);
+			D.AddMultTranspose(phi, psi);		
+		}		
 	}
 
 	D.Mult(psi, phi);
 	sigma.Mult(phi, abs_source);
 	abs_source += source_T;
 	meb_solver.Mult(abs_source, T);
+
+	if (opacity_update) opacity_update->Update();
 }
