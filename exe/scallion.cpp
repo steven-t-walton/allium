@@ -268,7 +268,7 @@ int main(int argc, char *argv[]) {
 	// do this first since materials depend on energy 
 	// discretization 
 	sol::table energy_table = lua["energy"];
-	if (!energy_table.valid()) MFEM_ABORT("must provide energy table");
+	if (!energy_table.valid() and root) MFEM_ABORT("must provide energy table");
  	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap;
 	MultiGroupEnergyGrid energy_grid = io::CreateEnergyGrid(energy_table, out, ipcress_data, root);
 	out << YAML::EndMap; // end energy block 
@@ -944,10 +944,6 @@ int main(int argc, char *argv[]) {
 		out << YAML::Key << "opacity integration" << YAML::Value << opacity_int;
 
 		linearized_meb_solver = std::make_unique<DenseBlockDiagonalSolver>(*local_mat_inv);
-		if (nonlinear_solver) {
-			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
-			nonlinear_solver->SetMonitor(*inner_monitor); 
-		}
 		auto *op = new LinearizedTRTOperator(
 			offsets, Linv, D, emission_form, meb_form, 
 			Mtot_collapse, *linear_solver, *linearized_meb_solver);		
@@ -965,6 +961,15 @@ int main(int argc, char *argv[]) {
 			out << YAML::Key << "rebalance solver" << YAML::Value << meb_solver_table;
 		}
 		if (nonlinear_solver) {
+			inner_monitor = std::make_unique<InnerIterativeSolverMonitor>(*linear_solver); 
+			if (meb_solver) {
+				meb_monitor = std::make_unique<BlockNonlinearSolverMonitor>(*meb_solver);
+				dual_monitor = std::make_unique<DiffusionAndEnergyBalanceMonitor>(
+					*inner_monitor, *meb_monitor);
+				nonlinear_solver->SetMonitor(*dual_monitor);
+			} else 
+				nonlinear_solver->SetMonitor(*inner_monitor); 
+
 			if (Kform)
 				op->SetGrayOpacities(Kform->GetTotal(), Kform->GetAbsorption());
 			if (opacity_int == "implicit") op->UseImplicitOpacity(opacity_update);
