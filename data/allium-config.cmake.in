@@ -1,7 +1,7 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-find_dependency(mfem PATHS @mfem_DIR@)
+find_dependency(mfem PATHS @mfem_DIR@ NAMES MFEM)
 find_dependency(igraph PATHS @igraph_DIR@)
 find_dependency(yaml-cpp PATHS @yaml-cpp_DIR@)
 find_dependency(mdspan PATHS @mdspan_DIR@)
