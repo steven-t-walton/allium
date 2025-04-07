@@ -1504,6 +1504,8 @@ int main(int argc, char *argv[]) {
 				log.Log("max nonlinear iterations", nonlinear_solver->GetNumIterations());
 				if (inner_monitor)
 					log.Log("max inner iterations", inner_monitor->iters.Max());
+				if (!nonlinear_solver->GetConverged() and root)
+					EventLog.Register("nonlinear solver not converged");
 				out << YAML::Key << "it" << YAML::Value << nonlinear_solver->GetNumIterations(); 
 				out << YAML::Key << "norm" << YAML::Value; 
 				if (kinsol_data) 
