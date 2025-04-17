@@ -1472,9 +1472,12 @@ int main(int argc, char *argv[]) {
 		Mtot.Finalize();
 		TimingLog.Log("assemble Mtot", timer.RealTime());
 
+		// compute gray opacities for plotting
+		totalE.Project(); 
+		totalR.Project();
+
 		if (Mtot_gray) {
 			timer.Restart();
-			totalE.Project();
 			*Mtot_gray = 0.0;
 			Mtot_gray->Assemble();			
 			TimingLog.Log("assemble Mtot_gray", timer.RealTime());
@@ -1483,7 +1486,6 @@ int main(int argc, char *argv[]) {
 		// DSA matrix depends on sigma and dt 
 		if (Kform) {
 			// set DSA time step 
-			totalR.Project();
 			Kform->SetTimeAbsorption(1.0/time_step/constants::SpeedOfLight);
 		}
 
