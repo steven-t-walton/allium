@@ -19,6 +19,8 @@ int main(int argc, char *argv[]) {
 		return 1; 
 	}
 
+	const bool root = true;
+
 	YAML::Emitter out(std::cout);
 	out.SetDoublePrecision(16); 
 	out << YAML::BeginMap; 
@@ -31,28 +33,24 @@ int main(int argc, char *argv[]) {
 	lua.open_libraries(); // allows using standard libraries (e.g. math) in input
 	lua.script_file(input_file); // load from first cmd line argument 
 
-	sol::optional<std::string> ipcress_path_avail = lua["ipcress_file"];
+	// store ipcress file data 
+	// constructed in energy block 
 	std::unique_ptr<IpcressData> ipcress_data;
-	if (ipcress_path_avail) {
-		const std::string file_name = ipcress_path_avail.value();
-		ipcress_data = std::make_unique<IpcressData>(file_name);
+
+	// --- load energy grid --- 
+	// do this first since materials depend on energy 
+	// discretization 
+	sol::table energy_table = lua["energy"];
+	if (!energy_table.valid() and root) MFEM_ABORT("must provide energy table");
+ 	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap;
+	MultiGroupEnergyGrid energy_grid = io::CreateEnergyGrid(energy_table, out, ipcress_data, root);
+	out << YAML::EndMap; // end energy block 
+	const auto G = energy_grid.Size(); // number of groups 
+
+	// print ipcress metadata to YAML 
+	if (ipcress_data) {
 		io::PrintIpcressInformation(out, *ipcress_data);
 	}
-
-	out << YAML::Key << "energy" << YAML::Value << YAML::BeginMap; 
-	MultiGroupEnergyGrid energy_grid;
-	if (ipcress_data) {
-		energy_grid = MultiGroupEnergyGrid(ipcress_data->GetGroupBounds());
-		out << YAML::Key << "groups" << YAML::Value << energy_grid.Size(); 
-		out << YAML::Key << "bounds" << YAML::Value;
-		io::PrintArray(out, energy_grid.Bounds()); 
-	}
-	else {
-		sol::table energy_table = lua["energy"];
-		if (!energy_table.valid()) MFEM_ABORT("must supply energy table");
-		energy_grid = io::CreateEnergyGrid(energy_table, out);		
-	}
-	out << YAML::EndMap; // end energy block 
 
 	double min_energy = energy_grid.MinEnergy();
 	if (min_energy == 0.0) min_energy = energy_grid.Bounds()[1];
