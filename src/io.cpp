@@ -259,7 +259,8 @@ mfem::IterativeSolver *CreateIterativeSolver(sol::table &table, std::optional<MP
 		if (comm) kn = new mfem::KINSolver(*comm, strategy, true); 
 		else kn = new mfem::KINSolver(strategy, true); 
 		int kdim = table["kdim"].get_or(0); 
-		kn->SetMAA(kdim); 
+		// kn->SetMAA(kdim); 
+		kn->EnableAndersonAcc(kdim);
 		table["kdim"] = kdim; 
 		s = kn; 
 	#else 

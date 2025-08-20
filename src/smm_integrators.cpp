@@ -268,7 +268,7 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 	const auto &tr_fes = *beta.FESpace();
 	tr_fes.GetElementDofs(trans.Elem1No, beta_dofs1);  
 	beta.GetSubVector(beta_dofs1, beta_all1); 
-	const auto &tr_el = *tr_fes.GetTraceElement(face_el_no, trans.GetGeometryType()); 
+	const auto &tr_el = *tr_fes.GetTraceElement(trans.Elem1No, trans.GetGeometryType()); 
 	const auto tr_dof = tr_el.GetDof(); 
 	auto info = trans.mesh->GetFaceInformation(face_el_no); 
 	assert(info.IsBoundary()); 
@@ -351,7 +351,7 @@ void CSMMZerothMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::Finite
 	// extract beta data for this face 
 	const auto dim = trans.GetSpaceDim();
 	const auto &tr_fes = *beta.ParFESpace();
-	const auto &tr_el = *tr_fes.GetTraceElement(trans.ElementNo, trans.GetGeometryType()); 
+	const auto &tr_el = *tr_fes.GetTraceElement(trans.Elem1No, trans.GetGeometryType()); 
 	const auto tr_dof = tr_el.GetDof(); 
 	auto info = trans.mesh->GetFaceInformation(trans.ElementNo); 
 	assert(trans.Elem1No < trans.mesh->GetNE()); 
@@ -434,7 +434,7 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 	tr_vfes.GetElementVDofs(trans.Elem1No, tr_vdofs1); 
 	tensor.GetSubVector(tr_vdofs1, tensor_all1); 
 
-	const auto &tr_el = *tr_vfes.GetTraceElement(face_el_no, trans.GetGeometryType()); 
+	const auto &tr_el = *tr_vfes.GetTraceElement(trans.Elem1No, trans.GetGeometryType()); 
 	const auto tr_dof = tr_el.GetDof(); 
 	const auto info = trans.mesh->GetFaceInformation(face_el_no); 
 	const auto local_face_id1 = info.element[0].local_face_id; 
@@ -483,7 +483,7 @@ void CSMMFirstMomentFaceLFIntegrator::AssembleRHSElementVect(const mfem::FiniteE
 
 	const auto dim = trans.GetSpaceDim(); 
 	const auto &tr_vfes = *tensor.ParFESpace(); 
-	const auto &tr_el = *tr_vfes.GetTraceElement(trans.ElementNo, trans.GetGeometryType()); 
+	const auto &tr_el = *tr_vfes.GetTraceElement(trans.Elem1No, trans.GetGeometryType()); 
 	const auto tr_dof = tr_el.GetDof(); 
 	const auto info = trans.mesh->GetFaceInformation(trans.ElementNo); 
 	const auto local_face_id1 = info.element[0].local_face_id; 

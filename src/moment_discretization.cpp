@@ -158,7 +158,7 @@ mfem::HypreParMatrix *LDGDiscretization::GetOperator() const
 	bfi = new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one));
 	if (lump_grad) bfi = new QuadratureLumpedIntegrator(bfi);
 	Dform.AddDomainIntegrator(bfi); 
-	bfi = new mfem::LDGTraceIntegrator(&beta); 
+	bfi = new LDGTraceIntegrator(&beta); 
 	if (lump_face) bfi = new QuadratureLumpedIntegrator(bfi);
 	Dform.AddInteriorFaceIntegrator(bfi); 		
 	Dform.Assemble(); 
@@ -312,7 +312,7 @@ mfem::BlockOperator *BlockLDGDiscretization::GetOperator() const
 	bfi = new mfem::TransposeIntegrator(new mfem::GradientIntegrator(neg_one));
 	if (lump_grad) bfi = new QuadratureLumpedIntegrator(bfi);
 	Dform.AddDomainIntegrator(bfi); 
-	bfi = new mfem::LDGTraceIntegrator(&beta); 
+	bfi = new LDGTraceIntegrator(&beta); 
 	if (lump_face) bfi = new QuadratureLumpedIntegrator(bfi);
 	Dform.AddInteriorFaceIntegrator(bfi); 		
 	Dform.Assemble(); 
