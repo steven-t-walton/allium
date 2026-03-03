@@ -182,7 +182,7 @@ TEST(Integrators, SMMFaceTermInt) {
 	const auto &fe2 = *vfes.GetFE(trans->Elem2No); 
 	mfem::Vector elvec; 
 	lfint.AssembleRHSElementVect(fe1, fe2, *trans, elvec); 
-	mfem::Vector ex({0,-.5,0,-.5,0,-1./8,0,-1./8, .5,0,.5,0,1./8,0,1./8,0}); 
+	mfem::Vector ex({0.0,-.5,0.0,-.5,0.0,-1./8,0.0,-1./8, .5,0.0,.5,0.0,1./8,0.0,1./8,0.0}); 
 	ex -= elvec; 
 	EXPECT_DOUBLE_EQ(ex.Norml2(), 0.0); 
 }
@@ -204,7 +204,7 @@ TEST(Integrators, SMMFaceTermBdr) {
 	const auto &fe1 = *vfes.GetFE(trans.Elem1No); 
 	mfem::Vector elvec; 
 	lfint.AssembleRHSElementVect(fe1, trans, elvec); 
-	mfem::Vector ex({1./16, 1./16, 0, 0, 0.5, 0.5, 0, 0}); 
+	mfem::Vector ex({1./16, 1./16, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0}); 
 	ex -= elvec; 
 	EXPECT_DOUBLE_EQ(ex.Norml2(), 0.0); 
 }
@@ -219,7 +219,7 @@ TEST(Integrators, BoundaryNormalFaceLFIntegrator) {
 	auto &trans = *mesh.GetBdrFaceTransformations(0); 
 	mfem::Vector elvec; 
 	lfi.AssembleRHSElementVect(*vfes.GetFE(trans.Elem1No), trans, elvec); 
-	mfem::Vector ex({0,0,0,0,-0.5,-0.5,0,0}); 
+	mfem::Vector ex({0.0,0.0,0.0,0.0,-0.5,-0.5,0.0,0.0}); 
 	ex -= elvec; 
 	EXPECT_DOUBLE_EQ(ex.Norml2(), 0.0); 
 }
@@ -281,13 +281,13 @@ TEST(Integrators, SweepFaceIntegrator) {
 	FaceMassMatricesIntegrator bfi; 
 	mfem::DenseMatrix M; 
 	bfi.AssembleFaceMatrix(*fes.GetFE(trans->Elem1No), *fes.GetFE(trans->Elem2No), *trans, M); 
-	mfem::DenseMatrix ex11({{0,0,0,0}, {0,1./3,0,1./6}, {0,0,0,0}, {0,1./6,0,1./3}}); 
+	mfem::DenseMatrix ex11({{0.0,0.0,0.0,0.0}, {0.0,1./3,0.0,1./6}, {0.0,0.0,0.0,0.0}, {0.0,1./6,0.0,1./3}}); 
 	mfem::DenseMatrix M11; 
 	M.GetSubMatrix(0,4,M11); 
 	ex11 -= M11; 
 	EXPECT_NEAR(ex11.FNorm(), 0.0, 1e-14); 
 
-	mfem::DenseMatrix ex12({{0,0,0,0}, {1./3,0,1./6,0}, {0,0,0,0}, {1./6,0,1./3,0}}); 
+	mfem::DenseMatrix ex12({{0.0,0.0,0.0,0.0}, {1./3,0.0,1./6,0.0}, {0.0,0.0,0.0,0.0}, {1./6,0.0,1./3,0.0}}); 
 	mfem::DenseMatrix M12; 
 	M.GetSubMatrix(0,4,4,8,M12); 
 	ex12 -= M12; 
@@ -299,7 +299,7 @@ TEST(Integrators, SweepFaceIntegrator) {
 	M21 -= M12; 
 	EXPECT_NEAR(M21.FNorm(), 0.0, 1e-14); 
 
-	mfem::DenseMatrix ex22({{1./3,0,1./6,0}, {0,0,0,0}, {1./6,0,1./3,0}, {0,0,0,0}}); 
+	mfem::DenseMatrix ex22({{1./3,0.0,1./6,0.0}, {0.0,0.0,0.0,0.0}, {1./6,0.0,1./3,0.0}, {0.0,0.0,0.0,0.0}}); 
 	mfem::DenseMatrix M22; 
 	M.GetSubMatrix(4,8, M22); 
 	ex22 -= M22; 
@@ -321,13 +321,13 @@ TEST(Integrators, SweepFaceIntegratorLumped) {
 	QuadratureLumpedIntegrator bfi(new FaceMassMatricesIntegrator);
 	mfem::DenseMatrix M; 
 	bfi.AssembleFaceMatrix(*fes.GetFE(trans->Elem1No), *fes.GetFE(trans->Elem2No), *trans, M); 
-	mfem::DenseMatrix ex11({{0,0,0,0}, {0,1./2,0,0.0}, {0,0,0,0}, {0,0.0,0,1./2}}); 
+	mfem::DenseMatrix ex11({{0.0,0.0,0.0,0.0}, {0.0,1./2,0.0,0.0}, {0.0,0.0,0.0,0.0}, {0.0,0.0,0.0,1./2}}); 
 	mfem::DenseMatrix M11; 
 	M.GetSubMatrix(0,4,M11); 
 	ex11 -= M11; 
 	EXPECT_NEAR(ex11.FNorm(), 0.0, 1e-14); 
 
-	mfem::DenseMatrix ex12({{0,0,0,0}, {1./2,0,0,0}, {0,0,0,0}, {0,0,1./2,0}}); 
+	mfem::DenseMatrix ex12({{0.0,0.0,0.0,0.0}, {1./2,0.0,0.0,0.0}, {0.0,0.0,0.0,0.0}, {0.0,0.0,1./2,0.0}}); 
 	mfem::DenseMatrix M12; 
 	M.GetSubMatrix(0,4,4,8,M12); 
 	ex12 -= M12; 
@@ -339,7 +339,7 @@ TEST(Integrators, SweepFaceIntegratorLumped) {
 	M21 -= M12; 
 	EXPECT_NEAR(M21.FNorm(), 0.0, 1e-14); 
 
-	mfem::DenseMatrix ex22({{1./2,0,0,0}, {0,0,0,0}, {0,0,1./2,0}, {0,0,0,0}}); 
+	mfem::DenseMatrix ex22({{1./2,0.0,0.0,0.0}, {0.0,0.0,0.0,0.0}, {0.0,0.0,1./2,0.0}, {0.0,0.0,0.0,0.0}}); 
 	mfem::DenseMatrix M22; 
 	M.GetSubMatrix(4,8, M22); 
 	ex22 -= M22; 

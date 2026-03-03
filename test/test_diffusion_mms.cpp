@@ -137,8 +137,8 @@ double LDGError(mfem::Mesh &smesh, int fe_order,
 	for (auto d=0; d<dim; d++) {
 		beta(d) = d+1; 
 	}
-	Dform.AddInteriorFaceIntegrator(new mfem::LDGTraceIntegrator(&beta)); 
-	Dform.AddBdrFaceIntegrator(new mfem::LDGTraceIntegrator); 
+	Dform.AddInteriorFaceIntegrator(new LDGTraceIntegrator(&beta)); 
+	Dform.AddBdrFaceIntegrator(new LDGTraceIntegrator); 
 	Dform.Assemble(); 
 	Dform.Finalize(); 
 	auto D = HypreParMatrixPtr(Dform.ParallelAssemble()); 

@@ -58,7 +58,7 @@ void MomentFaceClosuresOperator::Mult(const mfem::Vector &psi, mfem::Vector &clo
 			}			
 			bool keep_order = e == trans->Elem1No; 
 			const auto local_face_id = info.element[keep_order ? 0 : 1].local_face_id; 
-			const auto &tr_el = *trace_fes.GetTraceElement(face, mesh.GetFaceGeometry(face)); 
+			const auto &tr_el = *trace_fes.GetTraceElement(e, mesh.GetFaceGeometry(face)); 
 			const auto &ir = tr_el.GetNodes(); 
 
 			const auto ip = mfem::Geometries.GetCenter(trans->GetGeometryType()); 
@@ -298,7 +298,7 @@ ConsistentLDGSMMOperator::ConsistentLDGSMMOperator(const BlockLDGDiscretization 
 	Ma = HypreParMatrixPtr(Maform.ParallelAssemble());
 
 	mfem::ParMixedBilinearForm Dform(&vfes, &fes); 
-	bfi = new mfem::LDGTraceIntegrator(&beta);
+	bfi = new LDGTraceIntegrator(&beta);
 	if (lump_face) bfi = new QuadratureLumpedIntegrator(bfi);
 	Dform.AddInteriorFaceIntegrator(bfi); 		
 	Dform.Assemble(); 
@@ -310,7 +310,7 @@ ConsistentLDGSMMOperator::ConsistentLDGSMMOperator(const BlockLDGDiscretization 
 	bfi = new mfem::GradientIntegrator(neg_one);
 	if (lump_grad) bfi = new QuadratureLumpedIntegrator(bfi);
 	Gform.AddDomainIntegrator(bfi); 
-	bfi = new mfem::TransposeIntegrator(new mfem::LDGTraceIntegrator(&beta)); 
+	bfi = new mfem::TransposeIntegrator(new LDGTraceIntegrator(&beta)); 
 	if (lump_face) bfi = new QuadratureLumpedIntegrator(bfi);
 	Gform.AddInteriorFaceIntegrator(bfi); 		
 	Gform.Assemble(); 
