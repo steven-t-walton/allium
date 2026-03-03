@@ -85,7 +85,7 @@ mfem::HypreParMatrix *InteriorPenaltyDiscretization::GetOperator() const
 			const_cast<mfem::ParGridFunction*>(pgf)->ExchangeFaceNbrData();
 	}
 
-	mfem::ConstantCoefficient alpha_coef(alpha/2);
+	mfem::ConstantCoefficient alpha_coef(alpha);
 	mfem::RatioCoefficient diffco(1.0/3, total);
 	mfem::ParBilinearForm Kform(&fes); 
 	mfem::BilinearFormIntegrator *bfi;
