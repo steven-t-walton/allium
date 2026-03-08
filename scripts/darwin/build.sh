@@ -85,8 +85,8 @@ cd ${TPL}/gslib
 make CC=mpicc 
 
 # --- build mfem --- 
-cd ${TPL}/mfem
-git checkout smsolivier/ldg 
+cd ${TPL}/mfem 
+git checkout swj/selective-ldg-integration
 mkdir build install 
 cd build
 cmake .. \
@@ -113,6 +113,8 @@ make examples -j${nproc}
 
 # --- build igraph --- 
 cd ${TPL}/igraph 
+git fetch --tags
+git checkout 0.10.16
 mkdir build install 
 cd build 
 cmake .. \
