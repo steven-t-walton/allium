@@ -11,10 +11,12 @@
 * support for fixed-point, Krylov solvers, and advanced nonlinear solvers 
 * support for arbitrary meshes in 1, 2, and 3 dimensions 
 * visualization via VisIt, Paraview, and GLVis 
+
 This package has been designed to under the following design considerations: 
 * separation of concerns: the library is designed so that its components, such as input/output, data structures, and computations, are weakly coupled. Functionality is achieved through *composition*. 
 * single responsibility principle: code units (classes, free functions, etc) do only one of input/output, storage of data, or computations, further separating concerns and reducing edge cases.  
 * dependency injection/inversion: objects accept fully configured dependencies enabling access to low-level configuration without exposing low-level details. 
+
 These design principles have resulted in a focused core library where the user is expected to compose core capabilities together to achieve functionality. 
 This approach has allowed significant control of and access to low-level details important for academic research while keeping the scope creep of a globally accessible design at bay. 
 
