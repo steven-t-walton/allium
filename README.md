@@ -6,19 +6,23 @@
 * CMake build system 
 * Lua-based input system 
 * YAML-compatible terminal output system 
-* upwind Discontinuous Galerkin transport discretization with **MPI-parallel fully upwind sweep** with OpenMP threading 
+* upwind Discontinuous Galerkin transport discretization with **MPI-parallel fully upwind sweep** and OpenMP threading 
 * a variety of diffusion-based acceleration and preconditioning techniques 
 * support for fixed-point, Krylov solvers, and advanced nonlinear solvers 
 * support for arbitrary meshes in 1, 2, and 3 dimensions 
 * visualization via VisIt, Paraview, and GLVis 
 
-This package has been designed to under the following design considerations: 
-* separation of concerns: the library is designed so that its components, such as input/output, data structures, and computations, are weakly coupled. Functionality is achieved through *composition*. 
+This package has been designed under the following design considerations: 
+* separation of concerns: the library is designed so that its components, such as input/output, data structures, and computations, are weakly coupled. 
 * single responsibility principle: code units (classes, free functions, etc) do only one of input/output, storage of data, or computations, further separating concerns and reducing edge cases.  
 * dependency injection/inversion: objects accept fully configured dependencies enabling access to low-level configuration without exposing low-level details. 
+* composition over inheritance: functionality is assembled from small, focused components. Modularity is achieved through shallow inheritance hierarchies from simple and generic base classes. 
 
-These design principles have resulted in a focused core library where the user is expected to compose core capabilities together to achieve functionality. 
+These design principles have resulted in a focused core library where the user has the control to compose core capabilities together to achieve a wide spectrum of functionality. 
 This approach has allowed significant control of and access to low-level details important for academic research while keeping the scope creep of a globally accessible design at bay. 
+In addition, weakly coupling components has allowed testing components independently and enables the ability to quickly create new physics drivers. 
+In general, *allium* has been designed to have all input/output, configuration, management of data lifetime, and execution flow within the `main` of the driver allowing the core library to be simple and extensible. 
+This design allows unexpected and out-of-scope concepts to be implemented with changes primarily restricted to the `main` function, reducing implementation burden. 
 
 ### Drivers 
 Physics capabilities are organized into a suite of drivers in the `exe` directory. Example inputs and tests for each driver are provided in the correspondingly named directory in `inputs/` and `tests/`, respectively. 
