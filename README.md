@@ -12,7 +12,7 @@
 * support for arbitrary meshes in 1, 2, and 3 dimensions 
 * visualization via VisIt, Paraview, and GLVis 
 
-This package has been designed under the following design considerations: 
+This package has been designed under the following design philosophies: 
 * separation of concerns: the library is designed so that its components, such as input/output, data structures, and computations, are weakly coupled. 
 * single responsibility principle: code units (classes, free functions, etc) do only one of input/output, storage of data, or computations, further separating concerns and reducing edge cases.  
 * dependency injection/inversion: objects accept fully configured dependencies enabling access to low-level configuration without exposing low-level details. 
@@ -25,9 +25,9 @@ In general, *allium* has been designed to have all input/output, configuration, 
 This design allows unexpected and out-of-scope concepts to be implemented with changes primarily restricted to the `main` function, reducing implementation burden. 
 
 ### Drivers 
-Physics capabilities are organized into a suite of drivers in the `exe` directory. Example inputs and tests for each driver are provided in the correspondingly named directory in `inputs/` and `tests/`, respectively. 
+Physics capabilities are organized into a suite of drivers in the `exe/` directory. Example inputs and tests for each driver are provided in the correspondingly named directory in `inputs/` and `tests/`, respectively. Drivers are named after members of the allium genus. 
 
-### exe/chive
+### chive
 `chive` is a driver for steady-state, one-group, fixed-source transport problems often used as a proxy application for thermal radiative transfer. `chive` supports a variety of acceleration and preconditioning techniques including 
 * "fully consistent" P1 diffusion synthetic acceleration (DSA)
 * Local Discontinuous Galerkin (LDG) DSA 
@@ -35,7 +35,7 @@ Physics capabilities are organized into a suite of drivers in the `exe` director
 * Interior Penalty and LDG-based Second Moment Methods (SMMs)
 Both fixed-point iteration and Krylov-based solvers are available. 
 
-### exe/scallion 
+### scallion 
 `scallion` is a driver for multigroup, time-dependent thermal radiative transfer. Backward Euler time integration is used. `scallion` implements Picard, linearized, and full Newton solution algorithms. The linearized and Newton algorithms can be solved with Krylov or fixed-point iteration preconditioned with a subset of the algorithms implemented in `chive`. `scallion` supports
 * trace plots (output solution at a point in space plotted over time)
 * restarting from a previous simulation 
@@ -43,10 +43,10 @@ Both fixed-point iteration and Krylov-based solvers are available.
 * implicit and explicit treatment of opacities 
 * variable time steps defined by a function or table
 
-### exe/green 
+### green 
 `green` is a variant of `scallion` that uses the Second Moment Method (SMM) to solve the equations of thermal radiative transfer. Where `scallion` evolves the intensity and material temperature, `green` evolves the intensity, low-order moments, and material temperature. This subtle difference motivated separating the two sets of methods into separate drivers. `green` is intended to parallel `scallion` and is thus compatible with all inputs to `scallion`. 
 
-### exe/ramp 
+### ramp 
 `ramp` is simplification of `green` which only solves the low-order system (e.g. radiation diffusion). 
 
 ## Scripts
