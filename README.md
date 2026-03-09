@@ -33,6 +33,7 @@ Physics capabilities are organized into a suite of drivers in the `exe/` directo
 * Local Discontinuous Galerkin (LDG) DSA 
 * Modified Interior Penalty (MIP) DSA 
 * Interior Penalty and LDG-based Second Moment Methods (SMMs)
+
 Both fixed-point iteration and Krylov-based solvers are available. 
 
 ### scallion 
@@ -58,6 +59,8 @@ Post-processing scripts are provided in `scripts/`
 * `darwin/build.sh`: example build script (including all third party libraries) for linux-based systems 
 
 ## Building 
+An example build script is provided in [scripts/darwin/build.sh](scripts/darwin/build.sh) for linux-based system. MFEM handles the majority of the often troublesome scientific software dependencies. Thus, please use MFEM's documentation as a starting point. 
+
 ### Required Dependencies 
 * [MFEM](https://github.com/mfem/mfem) built with 
 	* MPI
@@ -77,6 +80,15 @@ Post-processing scripts are provided in `scripts/`
 	* [SuperLU_DIST](https://github.com/xiaoyeli/superlu_dist)
 	* [GSLIB](https://github.com/Nek5000/gslib)
 * [GoogleTest](https://github.com/google/googletest.git) 
+
+## Authors
+*allium* was written by Samuel Olivier while a Nicholas C. Metropolis postdoctoral fellow at the Los Alamos National Laboratory. 
+
+## Peer-Reviewed Journal Articles that Use allium
+1. [Consistent Second Moment Methods with Scalable Linear Solvers for Radiation Transport](https://arxiv.org/abs/2404.17473)
+2. [A Comparison of the Consistent and Independent Second Moment Methods Applied to Thermal Radiative Transfer](https://arxiv.org/abs/2504.21784)
+3. [Implicit Opacities in Thermal Radiative Transfer](https://samolivier.net/wp-content/uploads/pres/mc25_paper.pdf)
+4. [Preconditioning transformations of adjoint systems for evolution equations](https://arxiv.org/abs/2505.21705)
 
 ## Release 
 * [GPL 2.0 license](LICENSE.md)
