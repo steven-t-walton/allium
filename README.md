@@ -1,7 +1,9 @@
 # allium: a high-performance library for deterministic thermal radiative transfer
 *allium* is a software framework designed to facilitate the development and analysis of numerical algorithms relevant to radiation transport. Built on top of the MFEM finite element library, the package integrates a range of third-party dependencies, such as hypre, SUNDIALS, igraph, Lua, YAML, and GoogleTest, to provide an agile environment capable of rapid prototyping. The package is designed to scale well on massively parallel, CPU-based computer architectures through the utilization of MPI, OpenMP, and the high-performance implementations provided by the dependent packages. This allows testing novel algorithms at a computational scale not typically investigated in traditional academic literature. *allium* is comprised of a robust build system, core source code implementing both established and novel numerical methods, a suite of drivers that accept Lua-based input files and exercise the solution algorithms, and python scripts that facilitate the processing of the output from the drivers for publication in journal articles. In addition, a comprehensive set of tests ensures reliability and supports ongoing research and application development. Through its modular design and use of high-quality third party libraries, this package is uniquely suited to support academic research into the mathematical algorithms that underpin the simulation of radiation transport. 
 <p align="center">
-  <img src="doc/star.png" width="600"/>
+  <img src="doc/star.png" width="200"/>
+  <br/>
+  <em>Material temperature of Marshak problem on a star-shaped domain</em>
 </p>
 
 # Project Overview
