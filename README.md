@@ -3,12 +3,14 @@
 
 ## Project Overview
 *allium* is a software framework providing
-* CMake build system 
+* CMake build system
+* suite of unit and integral tests driven by CTest and GoogleTest 
 * Lua-based input system 
 * YAML-compatible terminal output system 
 * upwind Discontinuous Galerkin transport discretization with **MPI-parallel fully upwind sweep** and OpenMP threading 
 * a variety of diffusion-based acceleration and preconditioning techniques 
 * support for fixed-point, Krylov solvers, and advanced nonlinear solvers 
+* thermal radiative transfer physics components such as opacities, Planck emission, etc  
 * support for arbitrary meshes in 1, 2, and 3 dimensions 
 * visualization via VisIt, Paraview, and GLVis 
 
