@@ -1,7 +1,7 @@
 # allium: a high-performance library for deterministic thermal radiative transfer
 *allium* is a software framework designed to facilitate the development and analysis of numerical algorithms relevant to radiation transport. Built on top of the MFEM finite element library, the package integrates a range of third-party dependencies, such as hypre, SUNDIALS, igraph, Lua, YAML, and GoogleTest, to provide an agile environment capable of rapid prototyping. The package is designed to scale well on massively parallel, CPU-based computer architectures through the utilization of MPI, OpenMP, and the high-performance implementations provided by the dependent packages. This allows testing novel algorithms at a computational scale not typically investigated in traditional academic literature. *allium* is comprised of a robust build system, core source code implementing both established and novel numerical methods, a suite of drivers that accept Lua-based input files and exercise the solution algorithms, and python scripts that facilitate the processing of the output from the drivers for publication in journal articles. In addition, a comprehensive set of tests ensures reliability and supports ongoing research and application development. Through its modular design and use of high-quality third party libraries, this package is uniquely suited to support academic research into the mathematical algorithms that underpin the simulation of radiation transport. 
 
-## Project Overview
+# Project Overview
 *allium* is a software framework providing
 * CMake build system
 * suite of unit and integral tests driven by CTest and GoogleTest 
@@ -26,7 +26,7 @@ In addition, weakly coupling components has allowed testing components independe
 In general, *allium* has been designed to have all input/output, configuration, management of data lifetime, and execution flow within the `main` of the driver allowing the core library to be simple and extensible. 
 This design allows unexpected and out-of-scope concepts to be implemented with changes primarily restricted to the `main` function, reducing implementation burden. 
 
-### Drivers 
+## Drivers 
 Physics capabilities are organized into a suite of drivers in the `exe/` directory. Example inputs and tests for each driver are provided in the correspondingly named directory in `inputs/` and `tests/`, respectively. Drivers are named after members of the allium genus. 
 
 ### chive
@@ -60,10 +60,10 @@ Post-processing scripts are provided in `scripts/`
 * `plot_visit.py`: uses `gridfunction.py` to plot MFEM's VisIt output format over time 
 * `darwin/build.sh`: example build script (including all third party libraries) for linux-based systems 
 
-## Building 
+# Building 
 An example build script is provided in [scripts/darwin/build.sh](scripts/darwin/build.sh) for linux-based system. MFEM handles the majority of the often troublesome scientific software dependencies. Thus, please use MFEM's documentation as a starting point. 
 
-### Required Dependencies 
+## Required Dependencies 
 * [MFEM](https://github.com/mfem/mfem) built with 
 	* MPI
 	* [Hypre](https://github.com/hypre-space/hypre)
@@ -75,7 +75,7 @@ An example build script is provided in [scripts/darwin/build.sh](scripts/darwin/
 * [sol2](https://github.com/ThePhD/sol2.git) and some version of Lua5.x 
 	* use `-DSOL2_BUILD_LUA=FALSE` if using system lua 
 	* use `-DSOL2_LUA_VERSION=5.X` if using another version besides 5.4 
-### Optional Dependencies 
+## Optional Dependencies 
 * MFEM built with 
 	* [Suitesparse](https://github.com/DrTimothyAldenDavis/SuiteSparse)
 	* [Libunwind](https://github.com/libunwind/libunwind)
@@ -83,16 +83,16 @@ An example build script is provided in [scripts/darwin/build.sh](scripts/darwin/
 	* [GSLIB](https://github.com/Nek5000/gslib)
 * [GoogleTest](https://github.com/google/googletest.git) 
 
-## Authors
+# Authors
 *allium* was written by Samuel Olivier while a Nicholas C. Metropolis postdoctoral fellow at the Los Alamos National Laboratory. 
 
-## Peer-Reviewed Journal Articles that Use allium
+# Peer-Reviewed Journal Articles that Use allium
 1. [Consistent Second Moment Methods with Scalable Linear Solvers for Radiation Transport](https://arxiv.org/abs/2404.17473)
 2. [A Comparison of the Consistent and Independent Second Moment Methods Applied to Thermal Radiative Transfer](https://arxiv.org/abs/2504.21784)
 3. [Implicit Opacities in Thermal Radiative Transfer](https://samolivier.net/wp-content/uploads/pres/mc25_paper.pdf)
 4. [Preconditioning transformations of adjoint systems for evolution equations](https://arxiv.org/abs/2505.21705)
 
-## Release 
+# Release 
 * [GPL 2.0 license](LICENSE.md)
 * LANL code designation: O5022
 
