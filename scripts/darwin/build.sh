@@ -7,7 +7,7 @@
 # a node with `salloc` first 
 
 # number of processors to use with make 
-nproc=1 
+nproc=36 
 ROOT=$(pwd)
 # where to download and build all third party libraries 
 # this location can be external to allium 
