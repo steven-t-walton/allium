@@ -6,6 +6,10 @@
 # NOTE: compilation is done in parallel so allocate 
 # a node with `salloc` first 
 
+## ON OTHER HPC PLATFORMS, COMMENT OUT THE MODULE LOAD COMMAND BELOW AND LOAD 
+## THE EQUIVALENT MODULES ON YOUR SYSTEM.  THIS SCRIPT HAS BEEN TESTED ON
+## OTHER NNSA CPU BASED SYSTEMS
+
 # number of processors to use with make 
 nproc=36 
 ROOT=$(pwd)
