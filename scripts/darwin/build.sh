@@ -7,7 +7,7 @@
 # a node with `salloc` first 
 
 # number of processors to use with make 
-nproc=1 
+nproc=36 
 ROOT=$(pwd)
 # where to download and build all third party libraries 
 # this location can be external to allium 
@@ -18,7 +18,7 @@ mkdir -p ${TPL}
 
 # this compiler verified to work on darwin 
 # NOTE: the openmpi module must be loaded to run the code as well!
-#module load openmpi/4.1.5-gcc_12.2.0 cmake/3.26.3
+module load openmpi/4.1.5-gcc_12.2.0 cmake/3.26.3
 
 # --- clone dependencies into project source --- 
 cd ${TPL}
