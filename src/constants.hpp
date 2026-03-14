@@ -1,7 +1,6 @@
 #pragma once 
 
 #include <numbers>
-#include <cmath>
 
 namespace constants {
 
@@ -20,7 +19,7 @@ constexpr double Planck = 6.62607015e-27; // erg s
 constexpr double Boltzmann = 1.380649e-16; // erg/K 
 // black body thermal emission is StefanBoltzmann * T^4 (includes factor of speed of light)
 // erg/cm^2/s/eV^4 
-constexpr double StefanBoltzmann = 8.0*pow(pi, 5)/(15.0*pow(SpeedOfLight, 2)*pow(Planck, 3))/pow(internal::erg_to_eV,4); 
+constexpr double StefanBoltzmann = 8.0*(pi*pi*pi*pi*pi)/(15.0*(SpeedOfLight*SpeedOfLight)*(Planck*Planck*Planck))/(internal::erg_to_eV*internal::erg_to_eV*internal::erg_to_eV*internal::erg_to_eV); 
 // the "a" in black body emission ac T^4 
 constexpr double RadiationConstant = StefanBoltzmann / SpeedOfLight; 
 

@@ -24,7 +24,7 @@ struct IndexMap
 		Extents ext;
 	public:
 		mapping(const Extents &ext) : ext(ext) {
-			static_assert(ext.rank()==3);
+			static_assert(Extents::rank() == 3, "IndexMap requires rank-3 extents");
 		}
 		template<class... Indices>
 		constexpr index_type operator()(Indices... idxs) const noexcept {

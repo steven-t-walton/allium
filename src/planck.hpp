@@ -22,9 +22,9 @@ constexpr double coef_15 = -6.91 / 196151155200;
 constexpr double coef_17 = 1.0/1270312243200;
 constexpr double coef_19 = -3.617/202741834014720;
 constexpr double coef_21 = 43.867/107290978560589824;
-constexpr double coef = 15.0/pow(constants::pi,4);
-constexpr double rosseland_max = pow(std::numeric_limits<double>::max(), 0.25);
-constexpr double second_deriv_max = std::log(std::numeric_limits<double>::max())-1.0;
+constexpr double coef = 15.0/(constants::pi * constants::pi * constants::pi * constants::pi);
+const double rosseland_max = pow(std::numeric_limits<double>::max(), 0.25);
+const double second_deriv_max = std::log(std::numeric_limits<double>::max())-1.0;
 
 inline double PlanckTaylorSeries9(double x) {
 	const double x2 = x*x;

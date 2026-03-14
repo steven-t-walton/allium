@@ -8,6 +8,7 @@ protected:
 	double minimum_solution = 0.0; 
 public:
 	NegativeFluxFixupOperator() = default; 
+	virtual ~NegativeFluxFixupOperator() = default;
 	NegativeFluxFixupOperator(double min) : minimum_solution(min) { }
 	virtual int Apply(const mfem::DenseMatrix &A, const mfem::Vector &rhs, mfem::Vector &solution) const =0;
 };
