@@ -138,6 +138,7 @@ LIST(APPEND EXE
 	exe/chive.cpp
 	exe/scallion.cpp
 	exe/green.cpp
+	exe/ramp.cpp
 	exe/garlic.cpp
 	exe/leek.cpp
 	exe/write_opac.cpp

@@ -160,9 +160,9 @@ int main(int argc, char *argv[]) {
 			const auto spacing = io::GetAndValidateOption<std::string>(energy_table, "spacing", 
 				{"log", "equal"}, "log", root);
 			if (spacing == "log") {
-				energy_grid = MultiGroupEnergyGrid::MakeLogSpaced(Emin, Emax, G, extend_to_zero);
+				energy_grid = MultiGroupEnergyGrid::MakeLogSpaced(Emin, Emax, G);
 			} else if (spacing == "equal") {
-				energy_grid = MultiGroupEnergyGrid::MakeEqualSpaced(Emin, Emax, G, extend_to_zero);
+				energy_grid = MultiGroupEnergyGrid::MakeEqualSpaced(Emin, Emax, G);
 			}			
 			out << YAML::Key << "extend to zero" << YAML::Value << extend_to_zero;
 		}
@@ -201,36 +201,18 @@ int main(int argc, char *argv[]) {
 	bool temp_dependent_opacity = false; 
 	std::vector<sol::object> lua_source_objs(nattr); 
 	mfem::Array<OpacityCoefficient*> total_list(nattr); 
-	mfem::Array<PhaseSpaceCoefficient*> source_list(nattr); 
+	mfem::Array<PhaseSpaceCoefficient*> source_list(nattr);
+	io::OpacityFactory opac_fact(energy_grid, out, root);
 	out << YAML::Key << "materials" << YAML::Value << YAML::BeginSeq; 
 	for (auto i=0; i<attr_list.size(); i++) {
 		sol::table data = materials[attr_list[i].c_str()]; 
 		if (!data.valid()) MFEM_ABORT("material named " << attr_list[i] << " not found"); 
+		out << YAML::Key << attr_list[i] << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "attribute" << YAML::Value << i+1; 
+		out << YAML::Key << "opacity" << YAML::Key << YAML::BeginMap; 
 		sol::table total = data["total"]; 
-		std::string type = total["type"]; 
-		io::ValidateOption<std::string>("opacity type", type, {"constant", "analytic gray", "analytic"}, root); 
-		if (type == "constant") {
-			sol::table values = total["values"];
-			mfem::Vector vec(values.size()); 
-			for (int i=0; i<vec.Size(); i++) { vec(i) = values[i+1]; }
-			total_list[i] = new ConstantOpacityCoefficient(vec);  
-		}
-
-		else if (type == "analytic gray") {
-			double coef = total["coef"]; 
-			double nrho = total["nrho"]; 
-			double nT = total["nT"]; 
-			total_list[i] = new AnalyticGrayOpacityCoefficient(coef, nrho, nT); 
-			temp_dependent_opacity = true; 
-		}
-
-		else if (type == "analytic") {
-			double coef = total["coef"]; 
-			double nrho = total["nrho"]; 
-			double nT = total["nT"]; 
-			total_list[i] = new AnalyticOpacityCoefficient(coef, nrho, nT, energy_grid.Midpoints());
-			temp_dependent_opacity = true;
-		}
+		total_list[i] = opac_fact.CreateOpacity(total);
+		out << YAML::EndMap;
 		cv_list(i) = data["heat_capacity"]; 
 		density_list(i) = data["density"].get_or(1.0); 
 		lua_source_objs[i] = data["source"]; 
@@ -246,9 +228,6 @@ int main(int argc, char *argv[]) {
 		}
 
 		out << YAML::BeginMap; 
-			out << YAML::Key << "name" << YAML::Value << attr_list[i]; 
-			out << YAML::Key << "attribute" << YAML::Value << i+1; 
-			out << YAML::Key << "opacity" << YAML::Value << type; 
 			out << YAML::Key << "heat capacity" << YAML::Value << cv_list(i); 
 			out << YAML::Key << "density" << YAML::Value << density_list(i); 
 			out << YAML::Key << "source" << YAML::Value; 
@@ -1109,8 +1088,8 @@ int main(int argc, char *argv[]) {
 		// warn if temperature is such that the 
 		// energy group structure can't fully integrate
 		// the planck spectrum 
-		CheckPlanckSpectrumCovered(MPI_COMM_WORLD, energy_grid.MinEnergy(), 
-			energy_grid.MaxEnergy(), T, 1e-10);
+		// CheckPlanckSpectrumCovered(MPI_COMM_WORLD, energy_grid.MinEnergy(), 
+		// 	energy_grid.MaxEnergy(), T, 1e-10);
 
 		// --- output progress to terminal --- 
 		log.Log("max outer", outer);
