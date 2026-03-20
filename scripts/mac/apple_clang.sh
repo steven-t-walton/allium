@@ -15,7 +15,7 @@ ARCH=$(uname -m)
 OS=$(uname -s)
 
 # --- 1. System Prerequisites ---
-brew install cmake git libomp autoconf automake libtool lua@5.3 open-mpi gcc
+brew install cmake git libomp autoconf automake libtool lua@5.4 open-mpi gcc
 
 # Prefixes
 export OMP_PREFIX=$(brew --prefix libomp)
