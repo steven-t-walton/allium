@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# build all tpls + allium on M1/M2 mac. The script was tested on a system with strict permissions in place, 
-# and so not all make & make install commands have -j$(nproc) to speed things up. If your system allows it, 
-# you can place -j$(nproc) when "make" or "make install needs to be called."
+set -e
+
+# build all tpls + allium on M1/M2 mac using Homebrew GCC
 
 # --- Configuration ---
 nproc=$(sysctl -n hw.logicalcpu)
@@ -11,22 +11,41 @@ TPL=${ROOT}/tpl
 ARCH=$(uname -m)
 OS=$(uname -s)
 
-# --- 1. System Prerequisites (macOS/Homebrew) ---
-brew install cmake git libomp autoconf automake libtool lua@5.3
-export OMP_PREFIX=$(brew --prefix libomp)
-export LUA_PREFIX=$(brew --prefix lua@5.3)
-export OMPI_CC=gcc-13
-export OMPI_CXX=g++-13
-export OMPI_FC=gfortran-13
+mkdir -p "${TPL}"
 
+# --- Install roots ---
+export SUPERLU_INSTALL="${TPL}/superlu_dist/install_dir"
+export SUNDIALS_INSTALL="${TPL}/sundials/install_dir"
+
+# --- 1. System Prerequisites ---
+brew install cmake git libomp autoconf automake libtool lua@5.3 open-mpi gcc
+
+export LUA_PREFIX=$(brew --prefix lua@5.3)
+
+# --- Detect GCC version dynamically ---
+GCC_PREFIX=$(brew --prefix gcc)
+
+GCC_BIN=$(ls ${GCC_PREFIX}/bin/gcc-* | sort -V | tail -n1)
+GXX_BIN=$(echo ${GCC_BIN} | sed 's/gcc/g++/')
+GFORTRAN_BIN=$(echo ${GCC_BIN} | sed 's/gcc/gfortran/')
+
+export OMPI_CC=$(basename ${GCC_BIN})
+export OMPI_CXX=$(basename ${GXX_BIN})
+export OMPI_FC=$(basename ${GFORTRAN_BIN})
+
+echo "Using GCC toolchain:"
+echo "  OMPI_CC  = ${OMPI_CC}"
+echo "  OMPI_CXX = ${OMPI_CXX}"
+echo "  OMPI_FC  = ${OMPI_FC}"
+
+# MPI wrappers
 export CC=mpicc
 export CXX=mpicxx
 export FC=mpifort
 
-mkdir -p "${TPL}"
-
 # --- 2. Clone & Checkout ---
 cd "${TPL}"
+
 repos=( "mfem/mfem"
         "hypre-space/hypre"
         "mfem/tpls"
@@ -68,34 +87,42 @@ cd "${TPL}/hypre/src"
 rm -rf cmbuild
 mkdir cmbuild && cd cmbuild
 cmake ..
-make && make install
+make -j${nproc} && make install
 
 ## ParMETIS
 cd "${TPL}"
 tar -xf tpls/parmetis-4.0.3.tar.gz
 PMROOT="${TPL}/parmetis-4.0.3"
+
 cd "${PMROOT}"
 sed -i '' 's/cmake_minimum_required(VERSION 2.8)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
 sed -i '' 's/cmake_minimum_required(VERSION 2.4)/cmake_minimum_required(VERSION 3.5)/g' metis/CMakeLists.txt
+
 make config prefix=install
 make install -j${nproc}
-PM_INSTALL=${PMROOT}/build/${OS}-${ARCH}
 
+PM_INSTALL=${PMROOT}/build/${OS}-${ARCH}
 
 ## SuperLU_DIST
 cd "${TPL}/superlu_dist"
-rm -rf build && mkdir build && cd build
+rm -rf build install_dir && mkdir build install_dir && cd build
+
 cmake .. \
-    -DTPL_PARMETIS_INCLUDE_DIRS="${PMROOT}/include;${PMROOT}/metis/include" \
-    -DTPL_PARMETIS_LIBRARIES="${PM_INSTALL}/libparmetis/libparmetis.a;${PM_INSTALL}/libmetis/libmetis.a"
+  -DCMAKE_INSTALL_PREFIX="${SUPERLU_INSTALL}" \
+  -DTPL_PARMETIS_INCLUDE_DIRS="${PMROOT}/include;${PMROOT}/metis/include" \
+  -DTPL_PARMETIS_LIBRARIES="${PM_INSTALL}/libparmetis/libparmetis.a;${PM_INSTALL}/libmetis/libmetis.a"
+
 make install -j${nproc}
 
 ## SUNDIALS
 cd "${TPL}/sundials"
-rm -rf build && mkdir build && cd build
+rm -rf build install_dir && mkdir build install_dir && cd build
+
 cmake .. \
+    -DCMAKE_INSTALL_PREFIX="${SUNDIALS_INSTALL}" \
     -DENABLE_MPI=ON \
     -DEXAMPLES_INSTALL=OFF
+
 make install -j${nproc}
 
 ## GSLIB
@@ -105,6 +132,7 @@ make -j${nproc}
 ## MFEM
 cd "${TPL}/mfem"
 rm -rf build install_dir && mkdir build install_dir && cd build
+
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=../install_dir \
@@ -116,38 +144,45 @@ cmake .. \
     -DParMETIS_LIBRARY="${PM_INSTALL}/libparmetis/libparmetis.a" \
     -DMETIS_LIBRARY="${PM_INSTALL}/libmetis/libmetis.a" \
     -DMFEM_USE_SUPERLU=ON \
-    -DSuperLUDist_DIR="${TPL}/superlu_dist/install" \
+    -DSuperLUDist_DIR="${SUPERLU_INSTALL}" \
     -DMFEM_USE_SUNDIALS=ON \
-    -DSUNDIALS_DIR="${TPL}/sundials/" \
+    -DSUNDIALS_DIR="${SUNDIALS_INSTALL}" \
     -DMFEM_USE_GSLIB=ON \
     -DGSLIB_DIR="${TPL}/gslib/build/" \
     -DMFEM_USE_LIBUNWIND=ON
-make && make install
 
+make -j${nproc} && make install
+
+## igraph
 cd "${TPL}/igraph"
 rm -rf build install && mkdir build install && cd build
+
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=../install \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++
+    -DCMAKE_C_COMPILER=mpicc \
+    -DCMAKE_CXX_COMPILER=mpicxx
+
 make install -j${nproc}
 
 ## Remaining C++ dependencies
 for dep in mdspan yaml-cpp googletest; do
     cd "${TPL}/${dep}"
     rm -rf build install && mkdir build install && cd build
+
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=../install \
         -DCMAKE_C_COMPILER=mpicc \
         -DCMAKE_CXX_COMPILER=mpicxx
+
     make install -j${nproc}
 done
 
 ## Sol2
 cd "${TPL}/sol2"
 rm -rf build install && mkdir build install && cd build
+
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=../install \
@@ -155,13 +190,17 @@ cmake .. \
     -DSOL2_LUA_VERSION=5.3 \
     -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua5.3" \
     -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua5.3.dylib"
+
 make install
 
 # --- 4. Build Allium ---
 cd "${ROOT}"
 rm -rf build && mkdir build && cd build
+
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=mpicc \
+    -DCMAKE_CXX_COMPILER=mpicxx \
     -Dmfem_DIR="${TPL}/mfem/install_dir/lib/cmake/mfem" \
     -Digraph_DIR="${TPL}/igraph/install/lib/cmake/igraph" \
     -Dmdspan_DIR="${TPL}/mdspan/install/lib/cmake/mdspan" \
@@ -170,14 +209,11 @@ cmake .. \
     -DGTest_ROOT="${TPL}/googletest/install/lib/cmake/GTest" \
     -DENABLE_UNIT_TESTS=TRUE \
     -DENABLE_CHIVE_TESTS=TRUE
-make
 
-# -- run tests --
-# explicitly set threads so SuperLU doesn't slow to a crawl
-# darwin default must be to use 
-# hyper threading 
+make -j${nproc}
+
+# --- Run tests ---
 export OMP_NUM_THREADS=1
-# run tests in parallel 
-# separating serial vs parallel to not 
-# over prescribe threads 
-ctest -j ${nproc} -L serial && ctest -j 4 -L parallel
+
+ctest -j ${nproc} -L serial
+ctest -j 4 -L parallel
