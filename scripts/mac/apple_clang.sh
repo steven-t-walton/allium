@@ -13,6 +13,10 @@ TPL=${ROOT}/tpl
 ARCH=$(uname -m)
 OS=$(uname -s)
 
+# install roots
+export SUPERLU_INSTALL="${TPL}/superlu_dist/install_dir"
+export SUNDIALS_INSTALL="${TPL}/sundials/install_dir"
+
 # --- 1. System Prerequisites ---
 brew install cmake git libomp autoconf automake libtool lua@5.4 open-mpi gcc
 
@@ -112,8 +116,9 @@ PM_INSTALL=${PMROOT}/build/${OS}-${ARCH}
 
 ## SuperLU_DIST
 cd "${TPL}/superlu_dist"
-rm -rf build && mkdir build && cd build
+rm -rf build install_dir && mkdir build install_dir && cd build
 cmake .. \
+  -DCMAKE_INSTALL_PREFIX="${SUPERLU_INSTALL}" \
   -DCMAKE_EXE_LINKER_FLAGS="-L${GCC_LIBDIR} -Wl,-rpath,${GCC_LIBDIR}" \
   -DCMAKE_SHARED_LINKER_FLAGS="-L${GCC_LIBDIR} -Wl,-rpath,${GCC_LIBDIR}" \
   -DTPL_PARMETIS_INCLUDE_DIRS="${PMROOT}/include;${PMROOT}/metis/include" \
@@ -122,8 +127,9 @@ make install
 
 ## SUNDIALS
 cd "${TPL}/sundials"
-rm -rf build && mkdir build && cd build
+rm -rf build install_dir && mkdir build install_dir && cd build
 cmake .. \
+    -DCMAKE_INSTALL_PREFIX="${SUNDIALS_INSTALL}" \
     -DENABLE_MPI=ON \
     -DEXAMPLES_INSTALL=OFF
 make install -j${nproc}
@@ -151,9 +157,9 @@ cmake .. \
     -DParMETIS_LIBRARY="${PM_INSTALL}/libparmetis/libparmetis.a" \
     -DMETIS_LIBRARY="${PM_INSTALL}/libmetis/libmetis.a" \
     -DMFEM_USE_SUPERLU=ON \
-    -DSuperLUDist_DIR="${TPL}/superlu_dist/install" \
+    -DSuperLUDist_DIR="${SUPERLU_INSTALL}" \
     -DMFEM_USE_SUNDIALS=ON \
-    -DSUNDIALS_DIR="${TPL}/sundials/" \
+    -DSUNDIALS_DIR="${SUNDIALS_INSTALL}" \
     -DMFEM_USE_GSLIB=ON \
     -DGSLIB_DIR="${TPL}/gslib/build/" \
     -DMFEM_USE_LIBUNWIND=ON
