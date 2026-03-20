@@ -19,7 +19,7 @@ brew install cmake git libomp autoconf automake libtool lua@5.4 open-mpi gcc
 
 # Prefixes
 export OMP_PREFIX=$(brew --prefix libomp)
-export LUA_PREFIX=$(brew --prefix lua@5.3)
+export LUA_PREFIX=$(brew --prefix lua@5.4)
 GCC_PREFIX=$(brew --prefix gcc)
 GCC_LIBDIR="${GCC_PREFIX}/lib/gcc/current"
 export LDFLAGS="-L${GCC_LIBDIR}"
@@ -184,9 +184,9 @@ cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=../install \
     -DSOL2_BUILD_LUA=FALSE \
-    -DSOL2_LUA_VERSION=5.3 \
-    -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua5.3" \
-    -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua5.3.dylib"
+    -DSOL2_LUA_VERSION=5.4 \
+    -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua5.4" \
+    -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua5.4.dylib"
 make install
 
 # --- 4. Build Allium ---
