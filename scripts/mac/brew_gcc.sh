@@ -2,6 +2,8 @@
 
 # build all tpls + allium on M1/M2 mac using Homebrew GCC
 
+# The script should be run from the alllium parent directory, e.g. 'source ./scripts/mac/brew_gcc.sh'
+
 # --- Configuration ---
 nproc=$(sysctl -n hw.logicalcpu)
 ROOT=$(pwd)
