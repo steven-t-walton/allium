@@ -1,11 +1,10 @@
 #!/bin/bash
 
 # build all tpls + allium on M1/M2 mac. The script was tested on a system with strict permissions in place, 
-# and so not all make & make install commands have -j$(nproc) to speed things up. If your system allows it, 
-# you can place -j$(nproc) when "make" or "make install needs to be called."
+# and so not all make & make install commands have -j$(nproc). If your system allows it, 
+# you can place -j$(nproc) when "make" or "make install" needs to be called.
 
-# --- Configuration ---
-#!/bin/bash
+# The script should be run from the alllium parent directory, e.g. 'source ./scripts/mac/apple_clang.sh'
 
 # --- Configuration ---
 nproc=$(sysctl -n hw.logicalcpu)
@@ -21,6 +20,7 @@ brew install cmake git libomp autoconf automake libtool lua@5.4 open-mpi gcc
 export OMP_PREFIX=$(brew --prefix libomp)
 export LUA_PREFIX=$(brew --prefix lua@5.4)
 GCC_PREFIX=$(brew --prefix gcc)
+export PATH="${GCC_PREFIX}/bin:$PATH"
 GCC_LIBDIR="${GCC_PREFIX}/lib/gcc/current"
 export LDFLAGS="-L${GCC_LIBDIR}"
 export DYLD_LIBRARY_PATH="${GCC_LIBDIR}:${DYLD_LIBRARY_PATH}"
