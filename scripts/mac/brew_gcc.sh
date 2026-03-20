@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -e
-
 # build all tpls + allium on M1/M2 mac using Homebrew GCC
 
 # --- Configuration ---
