@@ -20,7 +20,6 @@ brew install cmake git libomp autoconf automake libtool lua@5.4 open-mpi gcc
 export OMP_PREFIX=$(brew --prefix libomp)
 export LUA_PREFIX=$(brew --prefix lua@5.4)
 GCC_PREFIX=$(brew --prefix gcc)
-export PATH="${GCC_PREFIX}/bin:$PATH"
 GCC_LIBDIR="${GCC_PREFIX}/lib/gcc/current"
 export LDFLAGS="-L${GCC_LIBDIR}"
 export DYLD_LIBRARY_PATH="${GCC_LIBDIR}:${DYLD_LIBRARY_PATH}"
@@ -28,7 +27,11 @@ export DYLD_LIBRARY_PATH="${GCC_LIBDIR}:${DYLD_LIBRARY_PATH}"
 # --- 2. Use Apple Clang as the base compiler ---
 export OMPI_CC=/usr/bin/clang
 export OMPI_CXX=/usr/bin/clang++
-export OMPI_FC=gfortran-13
+if command -v gfortran >/dev/null 2>&1; then
+    export OMPI_FC=gfortran
+else
+    export OMPI_FC=$(basename $(ls ${GCC_PREFIX}/bin/gfortran-* | head -n1))
+fi
 
 # MPI wrappers used by builds
 export CC=mpicc
