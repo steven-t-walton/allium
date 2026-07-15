@@ -18,11 +18,11 @@ export SUPERLU_INSTALL="${TPL}/superlu_dist/install_dir"
 export SUNDIALS_INSTALL="${TPL}/sundials/install_dir"
 
 # --- 1. System Prerequisites ---
-brew install cmake git libomp autoconf automake libtool lua@5.4 open-mpi gcc
+brew install cmake git libomp autoconf automake libtool lua@5.3 open-mpi gcc
 
 # Prefixes
 export OMP_PREFIX=$(brew --prefix libomp)
-export LUA_PREFIX=$(brew --prefix lua@5.4)
+export LUA_PREFIX=$(brew --prefix lua@5.3)
 GCC_PREFIX=$(brew --prefix gcc)
 GCC_LIBDIR="${GCC_PREFIX}/lib/gcc/current"
 export LDFLAGS="-L${GCC_LIBDIR}"
@@ -192,9 +192,9 @@ cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=../install \
     -DSOL2_BUILD_LUA=FALSE \
-    -DSOL2_LUA_VERSION=5.4 \
-    -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua5.4" \
-    -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua5.4.dylib"
+    -DSOL2_LUA_VERSION=5.3 \
+    -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua5.3" \
+    -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua5.3.dylib"
 make install
 
 # --- 4. Build Allium ---
@@ -208,6 +208,9 @@ cmake .. \
     -Digraph_DIR="${TPL}/igraph/install/lib/cmake/igraph" \
     -Dmdspan_DIR="${TPL}/mdspan/install/lib/cmake/mdspan" \
     -Dyaml-cpp_DIR="${TPL}/yaml-cpp/install/lib/cmake/yaml-cpp" \
+    -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua5.3" \
+    -DLUA_LIBRARY="${LUA_PREFIX}/lib/liblua5.3.dylib" \
+    -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua5.3.dylib" \
     -Dsol2_DIR="${TPL}/sol2/install/share/cmake/sol2" \
     -DGTest_ROOT="${TPL}/googletest/install/lib/cmake/GTest" \
     -DOpenMP_C_FLAGS="-Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include" \
