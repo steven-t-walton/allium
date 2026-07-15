@@ -29,12 +29,12 @@ export LDFLAGS="-L${GCC_LIBDIR}"
 export DYLD_LIBRARY_PATH="${GCC_LIBDIR}:${DYLD_LIBRARY_PATH}"
 
 # --- 2. Use Apple Clang as the base compiler ---
-export OMPI_CC=/usr/bin/clang
-export OMPI_CXX=/usr/bin/clang++
+export MPI_CC=/usr/bin/clang
+export MPI_CXX=/usr/bin/clang++
 if command -v gfortran >/dev/null 2>&1; then
-    export OMPI_FC=gfortran
+    export MPI_FC=gfortran
 else
-    export OMPI_FC=$(basename $(ls ${GCC_PREFIX}/bin/gfortran-* | head -n1))
+    export MPI_FC=$(basename $(ls ${GCC_PREFIX}/bin/gfortran-* | head -n1))
 fi
 
 # MPI wrappers used by builds
@@ -170,8 +170,7 @@ rm -rf build install && mkdir build install && cd build
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=../install \
-    -DCMAKE_C_COMPILER=mpicc \
-    -DCMAKE_CXX_COMPILER=mpicxx
+    -DIGRAPH_WARNINGS_AS_ERRORS=OFF
 make install -j${nproc}
 
 ## Remaining C++ dependencies
