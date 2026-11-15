@@ -12,9 +12,20 @@
 class MultiGroupEnergyGrid; // forward declare to prevent compile dependency
 class MultiGroupCoefficient;
 
-// multigroup Sn sweep kernel: dense element-local DG solve for each ordinate and group
-// angular flux layout psi(g,a,dof) given by TransportVectorView
+// Multigroup Sn sweep kernel: dense element-local DG solve for each ordinate
+// and group.
+//
+// Solve(e, s, in) loops over the ordinates of angle set s and all groups,
+// assembles the local system from DGLocalMatrices (see dg_local_matrices.hpp),
+// adds the inflow from the upwind nodes in `in` to the source, solves with
+// mfem::LinearSolve and optionally applies the negative flux fixup. Angle sets
+// of one ordinate reproduce the original per-ordinate sweep; larger sets (e.g.
+// quadrants) give the same solution with fewer graph nodes.
+//
+// Data layout: psi and source use psi(g,a,dof) given by TransportVectorView;
 // face neighbor data is stored in psi_fnbr with index a + g*Nomega + Nomega*G*dof
+// (the layout of InverseAdvectionOperator's halo exchange). Messages contain
+// psi(g,a,dof) for the ordinates of the set, all groups and the element dofs.
 class DenseSnKernel : public SweepKernel
 {
 private:
@@ -49,9 +60,14 @@ public:
 	DenseSnKernel(mfem::ParFiniteElementSpace &fes, const AngularQuadrature &quad,
 		const DGLocalMatrices &mats, const SweepScheduler &sched);
 	// set the vectors used by the next sweep, source and psi may alias
+	// (each node reads its source before writing its solution)
+	// psi_fnbr must hold G*Nomega*GetFaceNbrVSize() entries, its content is
+	// overwritten by received messages and read as-is in lagged sweeps
 	void Bind(const mfem::Vector &source, mfem::Vector &psi, mfem::Vector &psi_fnbr);
 	// log and reset fixup counters
 	void LogFixup();
+
+	// SweepKernel interface, see sweep_scheduler.hpp
 
 	void Solve(int e, int set, std::span<const SweepEdge> in) override;
 	std::size_t PackSize(int e, int set) const override;
@@ -59,6 +75,11 @@ public:
 	void Unpack(int ghost_e, int set, const char *buf) override;
 };
 
+// Inverse of the upwind DG streaming + collision operator, psi = L^{-1} q, by
+// a transport sweep. Composes DGLocalMatrices, a SweepScheduler with one angle
+// set per ordinate, and a DenseSnKernel. Mult performs an exact parallel sweep,
+// or num_pbj_sweeps lagged sweeps when parallel block Jacobi is enabled.
+// Reflective boundaries are resolved exactly inside the sweep in both modes.
 class InverseAdvectionOperator : public mfem::Operator
 {
 protected:
@@ -97,7 +118,7 @@ protected:
 	bool pbj = false;
 	int num_pbj_sweeps = 1;
 
-	// halo exchange of psi into psi_fnbr
+	// halo exchange of psi into psi_fnbr (all ordinates and groups)
 	void ExchangeGhost(const mfem::Vector &psi) const;
 public:
 	InverseAdvectionOperator(mfem::ParFiniteElementSpace &_fes, const AngularQuadrature &_quad,
@@ -147,6 +168,7 @@ public:
 	// lumping type accessors
 	int GetLumpingType() const { return lump; }
 
+	// local matrices and graph, e.g. to drive other kernels on the same discretization
 	const DGLocalMatrices &GetLocalMatrices() const { return mats; }
 	const SweepScheduler &GetScheduler() const { return scheduler; }
 
@@ -164,6 +186,9 @@ void FormTransportSource(
 // apply the transport streaming and collision operator
 // performs a halo exchange of all angles, groups
 // uses assembled matrices from InverseAdvectionOperator
+// known issue: reflective boundary faces are treated like vacuum (the reflected
+// inflow term is missing in Mult, and ComputeBalance counts the outgoing
+// current on reflective faces as leakage); the sweep itself is correct
 class AdvectionOperator : public mfem::Operator
 {
 private:

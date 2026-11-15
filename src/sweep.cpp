@@ -33,6 +33,9 @@ void DenseSnKernel::LogFixup()
 	EventLog.Log("fixup failed", failed);
 }
 
+// solve all ordinates of `set` and all groups on element e
+// the gradient and outflow face terms depend only on the ordinate, so they are
+// assembled once per ordinate and reused for every group
 void DenseSnKernel::Solve(int e, int set, std::span<const SweepEdge> in)
 {
 	auto &[grad, A, lu, rhs, sol, psi2, nor, dofs, dofs2, fixup_success, fixup_failed] = scratch[omp_get_thread_num()];
@@ -127,6 +130,7 @@ void DenseSnKernel::Solve(int e, int set, std::span<const SweepEdge> in)
 	}
 }
 
+// message of node (e, set): psi(g,a,dof) for a in set, all g, element dofs
 std::size_t DenseSnKernel::PackSize(int e, int set) const
 {
 	return sizeof(double) * sched.AngleSet(set).size() * psi_ext.extent(0) * fes.GetFE(e)->GetDof();
@@ -147,6 +151,7 @@ void DenseSnKernel::Pack(int e, int set, char *buf) const
 	}
 }
 
+// inverse of Pack, writes into the face neighbor buffer psi_fnbr
 void DenseSnKernel::Unpack(int ghost_e, int set, const char *buf)
 {
 	mfem::Array<int> dofs;
@@ -207,6 +212,7 @@ void InverseAdvectionOperator::Mult(const mfem::Vector &source, mfem::Vector &ps
 	else Mult_Upwind(source, psi);
 }
 
+// pass the vectors and current options to the kernel before each sweep
 void InverseAdvectionOperator::SetupKernel(const mfem::Vector &source, mfem::Vector &psi) const
 {
 	assert(source.Size() == Width());
@@ -236,6 +242,7 @@ void InverseAdvectionOperator::Mult_BlockJacobi(const mfem::Vector &source, mfem
 	mfem::StopWatch timer;
 	timer.Start();
 	SetupKernel(source, psi);
+	// sweep with the lagged ghost data, then refresh it for the next PBJ sweep
 	scheduler.Sweep(kernel, true);
 	kernel.LogFixup();
 	ExchangeGhost(psi);

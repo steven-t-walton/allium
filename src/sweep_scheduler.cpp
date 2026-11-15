@@ -14,6 +14,7 @@ SweepScheduler::SweepScheduler(mfem::ParMesh &mesh, const AngularQuadrature &qua
 	Ne = mesh.GetNE(); // processor-local number of elements
 
 	// --- angle sets ---
+	// default: one set per ordinate (standard Sn sweep)
 	if (sets.empty()) {
 		sets.resize(Nomega);
 		for (int a=0; a<Nomega; a++) { sets[a] = {a}; }
@@ -226,6 +227,8 @@ SweepScheduler::SweepScheduler(mfem::ParMesh &mesh, const AngularQuadrature &qua
 	if (!is_dag) { MFEM_ABORT("graph is not a dag"); }
 
 	// --- adjacency in CSR format, ordered by edge id ---
+	// in edges are kept only for local nodes (ghost nodes are never solved here),
+	// out edges for all nodes so received ghost data can release local nodes
 	const int num_edges = edge_to_face_id.size();
 	const int num_local = Ne*S;
 	in_offsets.assign(num_local+1, 0);
@@ -245,6 +248,7 @@ SweepScheduler::SweepScheduler(mfem::ParMesh &mesh, const AngularQuadrature &qua
 		out_nodes[out_offsets[from] + out_count[from]++] = to;
 		if (to >= num_local) continue;
 
+		// classify the edge by where the upwind node lives
 		const auto f = edge_to_face_id[i];
 		const int e = to / S;
 		SweepEdge edge;
@@ -262,6 +266,7 @@ SweepScheduler::SweepScheduler(mfem::ParMesh &mesh, const AngularQuadrature &qua
 	}
 
 	// --- face neighbor processors each local node sends to ---
+	// a node with several ghost downwind nodes on the same processor is sent once
 	send_offsets.assign(num_local+1, 0);
 	for (int n=0; n<num_local; n++) {
 		std::vector<int> fns;
@@ -327,7 +332,9 @@ void SweepScheduler::Sweep(SweepKernel &kernel, bool lagged) const
 	// incremented at each message, used as message tag
 	int message_count = 0;
 
+	// one message per face neighbor processor and wave front
 	// message layout: [int count][int node x count][int64 size x count][payload x count]
+	// node ids are the sender's local node ids, the receiver maps them to ghost ids
 	auto SendWaveFront = [&]() {
 		for (auto fn=0; fn<num_face_nbrs; fn++) {
 			auto &nodes = send_lists[fn];
@@ -355,6 +362,7 @@ void SweepScheduler::Sweep(SweepKernel &kernel, bool lagged) const
 		}
 	};
 
+	// non-blocking: unpack every message that has arrived, then return
 	auto ReceiveMessages = [&]() {
 		while (true) {
 			int avail;
@@ -392,6 +400,10 @@ void SweepScheduler::Sweep(SweepKernel &kernel, bool lagged) const
 	};
 
 	// --- do sweep ---
+	// all threads run the loop below; the omp for solves the current wave front
+	// in parallel (implicit barrier at its end), then one thread advances the
+	// front and communicates while the others wait at the end of omp single.
+	// nsweep and local are only modified inside omp single.
 	// vertices traversed, only count owned elements
 	int nsweep = 0;
 	#pragma omp parallel

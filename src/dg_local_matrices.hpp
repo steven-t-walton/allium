@@ -5,11 +5,20 @@
 
 class MultiGroupCoefficient;
 
-// element- and face-local DG upwind transport matrices
-// shared by the sweep kernels and the advection operator
-// the angle-dependent local operator is assembled from these as
-// 	sum_d Omega_d Grad(d,e) + sum_{outflow f} (Omega.n) Face(f,i,i) + Mass(g,e) [+ sigma_t TimeMass(e)]
-// with inflow coupling -(Omega.n) Face(f,i,j)
+// Element- and face-local matrices of the upwind DG transport discretization,
+// shared by the sweep kernels and AdvectionOperator.
+//
+// For ordinate Omega and group g the element system on element e is
+// 	A = sum_d Omega_d Grad(d,e) + sum_{outflow f} (Omega.n) Face(f,i,i) + Mass(g,e) [+ tau TimeMass(e)]
+// where i is the side of face f that e is on, n is the unit normal out of e,
+// and tau is the time absorption (e.g. 1/(c dt)). Inflow from the upwind
+// element on side j enters the right hand side as -(Omega.n) Face(f,i,j) psi_j.
+// The matrices are independent of Omega, so a kernel can form A for any
+// ordinate (or batch of ordinates) without re-integration.
+//
+// Grad(d,e) is mfem's ConservativeConvectionIntegrator with velocity e_d, i.e.
+// -(psi, e_d . grad v)_e. Face(f,i,j) is the face mass matrix (v_i, u_j)_f.
+// Lumping follows the flags of lumping.hpp (mass, gradient and face lumping).
 class DGLocalMatrices
 {
 private:
@@ -28,6 +37,9 @@ private:
 	// empty until AssembleTimeMass is called
 	std::vector<mfem::DenseMatrix> time_mass;
 public:
+	// fes: L2 space (face neighbor data is exchanged here)
+	// total: total opacity, one component per group; evaluated in Assemble
+	// lump: lumping type of lumping.hpp, 0 = none
 	DGLocalMatrices(mfem::ParFiniteElementSpace &fes, MultiGroupCoefficient &total, int lump=0);
 
 	// (re-)assemble mass, gradient, and face matrices
@@ -40,9 +52,15 @@ public:
 
 	int NumGroups() const { return G; }
 	int GetLumpingType() const { return lump; }
+	// sigma_{t,g} weighted mass matrix of element e
 	const mfem::DenseMatrix &Mass(int g, int e) const { return mass[g*fes.GetNE() + e]; }
+	// convection matrix of element e for the unit direction e_d
 	const mfem::DenseMatrix &Grad(int d, int e) const { return grad[d*fes.GetNE() + e]; }
+	// face mass block (test functions of side i, trial functions of side j) on face f
+	// side 0 is element 1 of mfem's face information, side 1 element 2 (local or face neighbor)
+	// only Face(f,0,0) exists on boundary faces
 	const mfem::DenseMatrix &Face(int f, int i, int j) const { return face[4*f + 2*i + j]; }
+	// unweighted mass matrix of element e, requires AssembleTimeMass
 	const mfem::DenseMatrix &TimeMass(int e) const { return time_mass[e]; }
 };
 

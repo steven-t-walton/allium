@@ -11,7 +11,18 @@
 #include <unordered_map>
 #include <vector>
 
-// a dependency of sweep node (e, set) on an upwind node
+// A dependency of a sweep node on an upwind node, stored on the downwind node.
+//
+// A sweep node is a pair (element e, angle set s). The node can be solved once
+// the angular flux of every upwind node it depends on is known:
+// 	LOCAL:   flux of (elem, s) enters e through `face`, elem is owned by this processor
+// 	GHOST:   same, but elem is a face neighbor element owned by another processor;
+// 	         its data arrives through SweepKernel::Unpack
+// 	REFLECT: `face` is on a reflective boundary and the incoming flux of the
+// 	         ordinates in s is the outgoing flux of their reflections, which all
+// 	         belong to the set `set` on the same element e
+// The kernel uses `face` and `side` to select the face matrices and the outward
+// normal of e on that face (SweepScheduler::OutwardNormal(face, side, ...)).
 struct SweepEdge {
 	enum Kind {
 		LOCAL,  // upwind element is owned by this processor
@@ -25,9 +36,22 @@ struct SweepEdge {
 	int set;  // upwind angle set, differs from the downwind set only for REFLECT
 };
 
-// discretization-specific work done at each sweep node
-// the scheduler owns the traversal order and parallel communication,
-// the kernel owns the unknowns and the element-local solve
+// Discretization-specific work done at each sweep node.
+//
+// The scheduler owns the traversal order and the parallel communication; the
+// kernel owns the unknowns and the element-local solve. This split lets the
+// same scheduler sweep different payloads, e.g. dense multigroup Sn fluxes
+// (DenseSnKernel) or one compressed tensor per (element, angle set).
+//
+// Contract:
+// 	- Solve(e, s, in) is called exactly once per local node per sweep, after
+// 	  every LOCAL and REFLECT upwind node in `in` has been solved and, for a
+// 	  non-lagged sweep, after every GHOST upwind node has been unpacked;
+// 	- nodes of one wave front are solved concurrently from OpenMP threads, so
+// 	  Solve must only write data owned by (e, s) and use per-thread scratch;
+// 	- Pack/PackSize are called on the processor that owns e after Solve(e, s),
+// 	  Unpack is called on the receiving processor with the face neighbor
+// 	  (ghost) element id. Messages can have any size and need not be aligned.
 class SweepKernel
 {
 public:
@@ -43,13 +67,32 @@ public:
 	virtual void Unpack(int ghost_e, int set, const char *buf) = 0;
 };
 
-// directed acyclic graph over sweep nodes (element, angle set) and its parallel traversal
-// an angle set is a group of ordinates swept together through the mesh,
-// e.g. a single ordinate (standard Sn sweep) or all ordinates in a sector/octant
-// every ordinate in a set must have the same upwind direction on every face,
-// otherwise the constructor aborts
-// local node ids are e*NumSets() + s, face neighbor (ghost) nodes are
-// NE*NumSets() + ghost_e*NumSets() + s
+// Directed acyclic graph over sweep nodes (element, angle set) and its
+// parallel traversal.
+//
+// An angle set is a group of ordinates swept together through the mesh, e.g. a
+// single ordinate (standard Sn sweep, the default) or all ordinates of a
+// half range / quadrant / octant. Every ordinate in a set must have the same
+// upwind direction on every face, otherwise the constructor aborts. On
+// Cartesian meshes the sectors keyed by the signs of Omega satisfy this.
+//
+// Graph edges:
+// 	- interior and shared faces: upwind node -> downwind node for each set, the
+// 	  upwind side is the one Omega.n > 0 points out of. A set parallel to a
+// 	  shared face is oriented from the lower to the higher global element id so
+// 	  both processors agree;
+// 	- reflective boundary faces: (e, reflected set) -> (e, s) for each set s
+// 	  that enters through the face. Reflection is resolved within the sweep, so
+// 	  the graph must stay acyclic (e.g. opposing reflective faces are not
+// 	  supported, as before this refactor).
+//
+// Node numbering: local nodes are e*NumSets() + s, face neighbor (ghost) nodes
+// are NE*NumSets() + ghost_e*NumSets() + s.
+//
+// Traversal (Sweep): wave fronts of ready local nodes are solved with OpenMP;
+// after each front the outflow of nodes with ghost downwind neighbors is packed
+// into one message per face neighbor processor, and received messages release
+// the local nodes that depend on them.
 class SweepScheduler
 {
 private:
@@ -94,21 +137,32 @@ private:
 		return {send_fns.data() + send_offsets[node], send_fns.data() + send_offsets[node+1]};
 	}
 public:
-	// angle_sets partitions the angles of quad; empty => one set per angle
+	// mesh: parallel mesh, ExchangeFaceNbrData is called here
+	// quad: angular quadrature, ordinates are referenced by index
+	// bc_map: boundary condition of every boundary attribute; only REFLECTIVE
+	// 	faces add graph edges, all other boundary types are inflow data in the source
+	// angle_sets: partition of the ordinates of quad; empty => one set per ordinate
 	SweepScheduler(mfem::ParMesh &mesh, const AngularQuadrature &quad, const BoundaryConditionMap &bc_map,
 		std::vector<std::vector<int>> angle_sets = {});
 	~SweepScheduler();
 	SweepScheduler(const SweepScheduler&) = delete;
 	SweepScheduler &operator=(const SweepScheduler&) = delete;
 
-	// traverse all local nodes in upwind order calling kernel.Solve
-	// lagged = true: data on face neighbor elements is not communicated during the sweep,
-	// the kernel uses whatever ghost data it already has (parallel block Jacobi)
+	// Traverse all local nodes in upwind order calling kernel.Solve.
+	// lagged = false: exact parallel sweep, ghost data is communicated as soon
+	// 	as each wave front is done (collective, all processors must call)
+	// lagged = true: GHOST dependencies are ignored and nothing is communicated,
+	// 	the kernel uses whatever ghost data it already has (parallel block
+	// 	Jacobi). LOCAL and REFLECT dependencies are still exact.
 	void Sweep(SweepKernel &kernel, bool lagged=false) const;
 
+	// number of angle sets
 	int NumSets() const { return S; }
+	// ordinates of angle set s
 	const std::vector<int> &AngleSet(int s) const { return sets[s]; }
+	// angle set containing ordinate a
 	int SetOfAngle(int a) const { return set_of_angle[a]; }
+	// upwind dependencies of local node e*NumSets() + s
 	std::span<const SweepEdge> InEdges(int node) const {
 		return {in_edges.data() + in_offsets[node], in_edges.data() + in_offsets[node+1]};
 	}
@@ -121,6 +175,7 @@ public:
 	// unit normal of face f pointing out of the element on `side`
 	void OutwardNormal(int f, int side, mfem::Vector &nor) const;
 
+	// write the local graph (local node ids) to prefix.<rank>.dot
 	void WriteGraphToDot(std::string prefix) const;
 	// write graph with global node ids, attributes(out, e, s) writes the
 	// comma-separated dot attributes of local node (e, s)
