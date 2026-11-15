@@ -5,6 +5,8 @@ LIST(APPEND hdrs
 	${CMAKE_CURRENT_SOURCE_DIR}/angular_quadrature.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/comment_stream.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/sweep_scheduler.hpp
+	${CMAKE_CURRENT_SOURCE_DIR}/dg_local_matrices.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/transport_op.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_integrators.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_coef.hpp
@@ -42,6 +44,8 @@ LIST(APPEND srcs
 	${CMAKE_CURRENT_SOURCE_DIR}/tvector.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/angular_quadrature.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/sweep.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/sweep_scheduler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/dg_local_matrices.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/transport_op.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_integrators.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/smm_coef.cpp
